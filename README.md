@@ -366,45 +366,6 @@ Planned screenshots include:
 
 ---
 
-# Roadmap
-
-## Phase 1
-
-* Core download engine
-* Multi-connection downloading
-* SQLite persistence
-* Download queue
-* Resume support
-
----
-
-## Phase 2
-
-* GUI
-* Browser integration
-* Notifications
-* Configuration system
-
----
-
-## Phase 3
-
-* Download scheduler
-* Proxy support
-* Advanced settings
-* Performance optimization
-
----
-
-## Phase 4
-
-* Plugin support
-* Remote management
-* Additional protocols
-* Extended testing
-
----
-
 # Contributing
 
 Contributions are welcome from everyone, whether you're fixing a typo or implementing a major feature.
