@@ -114,7 +114,8 @@ void log_close(void) {
   dm_mutex_unlock(&g_log_mutex);
 }
 
-void log_write(LogLevel level, const char *file, int line, const char *fmt,
+void log_write(LogLevel level, const char *file, const char *function,
+               int line, const char *fmt,
                ...) {
   if (level < g_min_level)
     return;
@@ -137,12 +138,24 @@ void log_write(LogLevel level, const char *file, int line, const char *fmt,
   dm_mutex_lock(&g_log_mutex);
 
   FILE *target = g_log_fp ? g_log_fp : stderr;
+  unsigned long long pid = dm_current_process_id();
+  unsigned long long tid = dm_current_thread_id();
+  char message[2048];
 
-  fprintf(target, "%s [%s] %s:%d: ", timestamp, level_name(level), base, line);
+    fprintf(target, "%s [%s] pid=%llu tid=%llu %s:%d %s: ", timestamp,
+      level_name(level), pid, tid, base, line,
+      function ? function : "?");
   va_list args;
   va_start(args, fmt);
-  vfprintf(target, fmt, args);
+  vsnprintf(message, sizeof(message), fmt, args);
   va_end(args);
+
+  size_t len = strlen(message);
+  while (len > 0 && (message[len - 1] == '\n' || message[len - 1] == '\r')) {
+    message[--len] = '\0';
+  }
+
+  fputs(message, target);
   fprintf(target, "\n");
 
   if (g_log_fp) {

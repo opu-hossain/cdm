@@ -3,6 +3,8 @@
 
 #include "curl_client.h"
 
+#include "../utils/log.h"
+
 #include <curl/curl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,8 +40,10 @@ int curl_client_head(const char *url, const RequestContext *ctx,
   memset(out, 0, sizeof(*out));
 
   CURL *curl = curl_easy_init();
-  if (!curl)
+  if (!curl) {
+    LOG_ERROR("curl_easy_init failed for %s", url);
     return -1;
+  }
 
   curl_easy_setopt(curl, CURLOPT_URL, url);
   curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
@@ -69,6 +73,9 @@ int curl_client_head(const char *url, const RequestContext *ctx,
     curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
                       &content_length);
     out->total_size = (content_length > 0) ? (uint64_t)content_length : 0;
+  } else {
+    LOG_WARN("HEAD request failed for %s: %s", url,
+             curl_easy_strerror(res));
   }
 
   if (headers)

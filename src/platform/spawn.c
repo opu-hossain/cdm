@@ -3,6 +3,8 @@
 
 #include "spawn.h"
 
+#include "../utils/log.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -63,19 +65,23 @@ void get_self_exe_path(char *buf, size_t buf_size) {
 
 int spawn_daemon_detached(const char *exe_path) {
   pid_t pid = fork();
-  if (pid < 0)
+  if (pid < 0) {
+    LOG_ERROR("first fork failed for '%s'", exe_path);
     return -1;
+  }
 
   if (pid == 0) {
     setsid();
     pid_t pid2 = fork();
     if (pid2 == 0) {
       execl(exe_path, exe_path, "daemon", (char *)NULL);
+      LOG_ERROR("execl failed for '%s'", exe_path);
       _exit(127);
     }
     _exit(0);
   }
   waitpid(pid, NULL, 0);
+  LOG_INFO("launched '%s' as daemon", exe_path);
   return 0;
 }
 

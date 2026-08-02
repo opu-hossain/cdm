@@ -3,6 +3,7 @@
 
 #include "../platform/ipc_socket.h"
 #include "../utils/config.h"
+#include "../utils/log.h"
 #include "../vendor/cJSON.h"
 
 #include <stdio.h>
@@ -106,15 +107,23 @@ int main(void) {
 
   /* Read 4‑byte length (native byte order). */
   uint32_t msg_len = 0;
-  if (fread(&msg_len, sizeof(msg_len), 1, stdin) != 1)
+  if (fread(&msg_len, sizeof(msg_len), 1, stdin) != 1) {
+    LOG_WARN("failed to read message length from stdin");
     return 1;
-  if (msg_len > 1024 * 1024) /* sanity cap */
+  }
+  if (msg_len > 1024 * 1024) { /* sanity cap */
+    LOG_WARN("rejected oversized message (%u bytes)", msg_len);
     return 1;
+  }
 
   char *json = malloc(msg_len + 1);
-  if (!json)
+  if (!json) {
+    LOG_ERROR("out of memory allocating %u bytes", msg_len + 1);
     return 1;
+  }
   if (fread(json, 1, msg_len, stdin) != msg_len) {
+    LOG_WARN("short read from stdin (%u bytes expected)",
+             msg_len);
     free(json);
     return 1;
   }
@@ -122,12 +131,15 @@ int main(void) {
 
   cJSON *root = cJSON_Parse(json);
   free(json);
-  if (!root)
+  if (!root) {
+    LOG_WARN("failed to parse JSON payload");
     return 1;
+  }
 
   cJSON *url_item = cJSON_GetObjectItemCaseSensitive(root, "url");
   if (!cJSON_IsString(url_item) || !url_item->valuestring ||
       url_item->valuestring[0] == '\0') {
+    LOG_WARN("missing or empty url field");
     cJSON_Delete(root);
     return 1;
   }
@@ -166,6 +178,8 @@ int main(void) {
     bool has_options = cookie || referrer || extra_headers;
     ipc_send_add_download(sock, url, full_path, has_options ? &opts : NULL);
     ipc_client_disconnect(sock);
+  } else {
+    LOG_ERROR("could not connect to daemon socket");
   }
 
   cJSON_Delete(root);

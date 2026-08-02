@@ -23,6 +23,14 @@ typedef struct {
   float progress;
 } IpcDownloadRecord;
 
+typedef struct {
+  char cookie[1024];
+  char referrer[2048];
+  char extra_headers[4096];
+  char expected_sha256[65];
+  uint64_t speed_limit_bps;
+} IpcDownloadDetails;
+
 /* Options sent with an MSG_ADD_DOWNLOAD request */
 typedef struct {
   const char *cookie;
@@ -41,6 +49,7 @@ void ipc_server_stop(void);
 /* ---- Client side ---- */
 int ipc_client_connect(void);
 void ipc_client_disconnect(int sock);
+int ipc_client_connect_timeout(int timeout_ms);
 
 /* ---- High‑level request / response ---- */
 uint32_t ipc_send_add_download(int sock, const char *url, const char *dest_path,
@@ -49,6 +58,7 @@ int ipc_send_pause(int sock, uint32_t id);
 int ipc_send_resume(int sock, uint32_t id);
 int ipc_send_cancel(int sock, uint32_t id);
 int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max);
+int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out);
 void ipc_send_subscribe(int sock);
 
 /* ---- Low‑level I/O (exposed for external event listeners) ---- */

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="connection-banner">⚠ Connection to daemon lost — retrying…</div>
+
+    <div class="header-panel">
+        <div class="input-group">
+            <input type="text" id="url" placeholder="Download URL">
+            <button id="download-btn" onclick="startDownload()">DOWNLOAD</button>
+        </div>
+        <div class="input-group">
+            <input type="text" id="dest" placeholder="Save to Folder (leave blank for default)">
+            <button class="secondary" onclick="pickFolder()">Browse...</button>
+        </div>
+
+        <details class="advanced-options">
+            <summary>Advanced options</summary>
+            <div class="advanced-fields">
+                <div class="field-row">
+                    <label class="field-label" for="opt-cookie">Cookie</label>
+                    <input type="text" id="opt-cookie" placeholder="name=value; name2=value2">
+                </div>
+                <div class="field-row">
+                    <label class="field-label" for="opt-referrer">Referrer</label>
+                    <input type="text" id="opt-referrer" placeholder="https://example.com/page">
+                </div>
+                <div class="field-row">
+                    <label class="field-label" for="opt-headers">Extra Headers (one "Key: Value" per line)</label>
+                    <textarea id="opt-headers" placeholder="Authorization: Bearer ...&#10;X-Custom: value"></textarea>
+                </div>
+                <div class="field-row">
+                    <label class="field-label" for="opt-sha256">Expected SHA-256</label>
+                    <input type="text" id="opt-sha256" placeholder="64-character hex digest">
+                </div>
+                <div class="field-row">
+                    <label class="field-label" for="opt-speed-limit">Speed Limit (bytes/sec, 0 = unlimited)</label>
+                    <input type="number" id="opt-speed-limit" min="0" placeholder="0">
+                </div>
+            </div>
+        </details>
+    </div>
+
+    <h3>Active Downloads</h3>
+    <div id="downloads-container"></div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

@@ -1,19 +1,16 @@
 cmake_minimum_required(VERSION 3.20)
-project(downloadmgr LANGUAGES C)
+# FIX: Must include both C and CXX since this is a C project integrating a C++ library (webview)
+project(downloadmgr LANGUAGES C CXX)
 
 # ----- Global settings -----
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Less noise during FetchContent
-option(FETCHCONTENT_QUIET "Silence FetchContent output" ON)
-set(FETCHCONTENT_QUIET ${FETCHCONTENT_QUIET})
+# Make FetchContent verbose so you can see download progress and logs for debugging
+set(FETCHCONTENT_QUIET OFF)
 
 include(FetchContent)
-
-# ----- System package option (e.g. for packagers) -----
-option(USE_SYSTEM_RAYLIB "Use system-installed raylib" OFF)
 
 # ============================================================
 # System dependencies (pkg-config)
@@ -50,28 +47,14 @@ add_library(sqlite3 STATIC ${sqlite3_SOURCE_DIR}/sqlite3.c)
 target_include_directories(sqlite3 PUBLIC ${sqlite3_SOURCE_DIR})
 
 # ============================================================
-# raylib – optionally system, otherwise fetch
-# ============================================================
-if(USE_SYSTEM_RAYLIB)
-    find_package(raylib REQUIRED)
-else()
-    FetchContent_Declare(
-        raylib
-        GIT_REPOSITORY https://github.com/raysan5/raylib.git
-        GIT_TAG 6.0
-    )
-    FetchContent_MakeAvailable(raylib)
-endif()
-
-# ============================================================
-# raygui (header‑only) – fetched
+# Webview – fetched
 # ============================================================
 FetchContent_Declare(
-    raygui
-    GIT_REPOSITORY https://github.com/raysan5/raygui.git
-    GIT_TAG 5.0
+    webview
+    GIT_REPOSITORY https://github.com/webview/webview.git
+    GIT_TAG master
 )
-FetchContent_MakeAvailable(raygui)
+FetchContent_MakeAvailable(webview)
 
 # ============================================================
 # Vendor (third‑party) static library
@@ -82,8 +65,6 @@ add_library(downloadmgr_vendor STATIC
     src/vendor/tomlc17.c
 )
 target_include_directories(downloadmgr_vendor PUBLIC src/vendor)
-
-# Platform‑specific defines if any (none needed for these libs currently)
 
 # ============================================================
 # Project source groups
@@ -152,18 +133,23 @@ add_executable(downloadmgr
     src/main.c
     src/cli/cli.c
     src/gui/gui.c
+    src/gui/gui_client.c
+    src/gui/gui_model.c
+    src/gui/gui_worker.c
     src/daemon/daemon.c
 )
 
-target_include_directories(downloadmgr PRIVATE
-    src
-    ${raygui_SOURCE_DIR}
-    ${raygui_SOURCE_DIR}/src
-)
+target_include_directories(downloadmgr PRIVATE src)
 
 target_link_libraries(downloadmgr PRIVATE
     downloadmgr_core
-    raylib
+    webview::core_static
+)
+
+add_custom_command(TARGET downloadmgr POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${CMAKE_SOURCE_DIR}/src/gui/ui
+    $<TARGET_FILE_DIR:downloadmgr>/src/gui/ui
 )
 
 # ============================================================
@@ -174,15 +160,3 @@ add_executable(downloadmgr_native_host
 )
 
 target_link_libraries(downloadmgr_native_host PRIVATE downloadmgr_core)
-
-# ============================================================
-# Tests (disabled by default – enable with -DBUILD_TESTS=ON)
-# ============================================================
-# option(BUILD_TESTS "Build unit tests" OFF)
-# 
-# if(BUILD_TESTS)
-#     enable_testing()
-#     # Assuming you use Criterion (example)
-#     # find_package(Criterion REQUIRED)   # or your test framework
-#     add_subdirectory(tests)
-# endif()

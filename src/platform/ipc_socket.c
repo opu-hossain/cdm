@@ -10,12 +10,14 @@
 #include "thread.h"
 
 #include <errno.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 /* ------------------------------------------------------------------ */
@@ -97,6 +99,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     read_string(client_fd, url, sizeof(url));
     read_string(client_fd, dest, sizeof(dest));
     read_string(client_fd, options_json, sizeof(options_json));
+    LOG_INFO("MSG_ADD_DOWNLOAD received: url='%s' dest='%s'", url, dest);
 
     RequestOptions opts = {0};
     if (options_json[0] != '\0') {
@@ -127,6 +130,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     }
 
     uint32_t id = queue_manager_add(url, dest, &opts);
+    LOG_INFO("MSG_ADD_DOWNLOAD: queue_manager_add returned id=%u", id);
     if (id != 0)
       db_insert_download(id, url, dest, &opts);
 
@@ -153,7 +157,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     ipc_read_exact(client_fd, &id, sizeof(id));
     bool was_active = queue_manager_cancel(id);
     if (!was_active)
-      db_update_status(id, "ERROR");
+      db_update_status(id, "CANCELED");
     break;
   }
   case MSG_LIST: {
@@ -178,21 +182,50 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         strncpy(status_buf, status_to_string(live->status),
                 sizeof(status_buf) - 1);
         status_buf[sizeof(status_buf) - 1] = '\0';
-        if (live->status == DOWNLOAD_ACTIVE) {
-          uint64_t bd = atomic_load(&live->bytes_downloaded);
-          uint64_t ts = live->total_size;
-          progress = ts > 0 ? (float)((double)bd / (double)ts) : 0.0f;
+
+        uint64_t total = live->total_size;
+        if (total > 0) {
+          uint64_t done = 0;
+          if (live->status == DOWNLOAD_ACTIVE) {
+            done = atomic_load(&live->bytes_downloaded);
+          } else if (live->chunk_count > 0) {
+            for (int c = 0; c < live->chunk_count; c++)
+              done += live->chunks[c].bytes_done;
+          }
+          double frac = (double)done / (double)total;
+          progress = (float)(frac > 1.0 ? 1.0 : frac);
         }
       } else {
         strncpy(status_buf, rows[i].status, sizeof(status_buf) - 1);
         status_buf[sizeof(status_buf) - 1] = '\0';
       }
 
+      if (strcmp(status_buf, "DONE") == 0)
+        progress = 1.0f;
+
       ipc_write_exact(client_fd, &rows[i].id, sizeof(rows[i].id));
       write_string(client_fd, rows[i].url);
       write_string(client_fd, rows[i].dest_path);
       write_string(client_fd, status_buf);
       ipc_write_exact(client_fd, &progress, sizeof(progress));
+    }
+    break;
+  }
+  case MSG_GET_DETAILS: {
+    uint32_t id;
+    ipc_read_exact(client_fd, &id, sizeof(id));
+
+    IpcDownloadDetails details = {0};
+    uint8_t found = (db_get_download_details(id, &details) == 0) ? 1 : 0;
+
+    ipc_write_exact(client_fd, &found, sizeof(found));
+    if (found) {
+      write_string(client_fd, details.cookie);
+      write_string(client_fd, details.referrer);
+      write_string(client_fd, details.extra_headers);
+      write_string(client_fd, details.expected_sha256);
+      ipc_write_exact(client_fd, &details.speed_limit_bps,
+                      sizeof(details.speed_limit_bps));
     }
     break;
   }
@@ -428,33 +461,54 @@ uint32_t ipc_send_add_download(int sock, const char *url, const char *dest_path,
   return id;
 }
 
+int ipc_client_connect_timeout(int timeout_ms) {
+  int fd = ipc_client_connect();
+  if (fd < 0)
+    return -1;
+
+  struct timeval tv;
+  tv.tv_sec = timeout_ms / 1000;
+  tv.tv_usec = (timeout_ms % 1000) * 1000;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+  return fd;
+}
+
 int ipc_send_pause(int sock, uint32_t id) {
   MsgHeader hdr = {.length = sizeof(uint32_t), .type = MSG_PAUSE};
-  ipc_write_exact(sock, &hdr, sizeof(hdr));
-  ipc_write_exact(sock, &id, sizeof(id));
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0)
+    return -1;
+  if (ipc_write_exact(sock, &id, sizeof(id)) != 0)
+    return -1;
   return 0;
 }
 
 int ipc_send_resume(int sock, uint32_t id) {
   MsgHeader hdr = {.length = sizeof(uint32_t), .type = MSG_RESUME};
-  ipc_write_exact(sock, &hdr, sizeof(hdr));
-  ipc_write_exact(sock, &id, sizeof(id));
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0)
+    return -1;
+  if (ipc_write_exact(sock, &id, sizeof(id)) != 0)
+    return -1;
   return 0;
 }
 
 int ipc_send_cancel(int sock, uint32_t id) {
   MsgHeader hdr = {.length = sizeof(uint32_t), .type = MSG_CANCEL};
-  ipc_write_exact(sock, &hdr, sizeof(hdr));
-  ipc_write_exact(sock, &id, sizeof(id));
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0)
+    return -1;
+  if (ipc_write_exact(sock, &id, sizeof(id)) != 0)
+    return -1;
   return 0;
 }
 
 int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max) {
   MsgHeader hdr = {.length = 0, .type = MSG_LIST_ALL};
-  ipc_write_exact(sock, &hdr, sizeof(hdr));
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0)
+    return -1;
 
   uint32_t count = 0;
-  ipc_read_exact(sock, &count, sizeof(count));
+  if (ipc_read_exact(sock, &count, sizeof(count)) != 0)
+    return -1;
 
   int n = 0;
   for (uint32_t i = 0; i < count; i++) {
@@ -483,6 +537,27 @@ int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max) {
     }
   }
   return n;
+}
+
+int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out) {
+  MsgHeader hdr = {.length = sizeof(id), .type = MSG_GET_DETAILS};
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0)
+    return -1;
+  if (ipc_write_exact(sock, &id, sizeof(id)) != 0)
+    return -1;
+
+  uint8_t found = 0;
+  if (ipc_read_exact(sock, &found, sizeof(found)) != 0)
+    return -1;
+  if (!found)
+    return -1;
+
+  read_string(sock, out->cookie, sizeof(out->cookie));
+  read_string(sock, out->referrer, sizeof(out->referrer));
+  read_string(sock, out->extra_headers, sizeof(out->extra_headers));
+  read_string(sock, out->expected_sha256, sizeof(out->expected_sha256));
+  return ipc_read_exact(sock, &out->speed_limit_bps,
+                        sizeof(out->speed_limit_bps));
 }
 
 void ipc_send_subscribe(int sock) {

@@ -366,35 +366,6 @@ Planned screenshots include:
 
 ---
 
-# Contributing
-
-Contributions are welcome from everyone, whether you're fixing a typo or implementing a major feature.
-
-You can help by:
-
-* Reporting bugs
-* Improving documentation
-* Testing on different operating systems
-* Reviewing pull requests
-* Improving performance
-* Designing the GUI
-* Writing unit tests
-* Implementing new features
-
-If you're new to open source, look for issues labeled **good first issue**.
-
-Before submitting a pull request:
-
-1. Fork the repository.
-2. Create a feature branch.
-3. Write clear commit messages.
-4. Keep changes focused.
-5. Open a Pull Request.
-
-Please keep the code style consistent with the rest of the project.
-
----
-
 # Coding Principles
 
 CDM follows a few simple principles.

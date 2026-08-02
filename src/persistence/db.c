@@ -4,6 +4,7 @@
 #include "db.h"
 
 #include "../core/queue_manager.h"
+#include "../utils/log.h"
 #include "sqlite3.h"
 
 #include <stdio.h>
@@ -24,8 +25,7 @@ static sqlite3 *g_db = NULL;
 int db_init(const char *db_path) {
   int rc = sqlite3_open(db_path, &g_db);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "Cannot open database %s: %s\n", db_path,
-            sqlite3_errmsg(g_db));
+    LOG_ERROR("cannot open database %s: %s", db_path, sqlite3_errmsg(g_db));
     return -1;
   }
 
@@ -59,7 +59,7 @@ int db_init(const char *db_path) {
   char *err_msg = NULL;
   rc = sqlite3_exec(g_db, schema, NULL, NULL, &err_msg);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "Schema creation failed: %s\n", err_msg);
+    LOG_ERROR("schema creation failed: %s", err_msg);
     sqlite3_free(err_msg);
     return -1;
   }
@@ -78,6 +78,7 @@ int db_init(const char *db_path) {
     sqlite3_exec(g_db, sql, NULL, NULL, NULL);
   }
 
+  LOG_INFO("opened %s", db_path);
   return 0;
 }
 
@@ -101,8 +102,7 @@ int db_insert_download(uint32_t id, const char *url, const char *dest_path,
       "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?)";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-    fprintf(stderr, "db_insert_download: prepare failed: %s\n",
-            sqlite3_errmsg(g_db));
+    LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
     return -1;
   }
   sqlite3_bind_int(stmt, 1, (int)id);
@@ -120,6 +120,9 @@ int db_insert_download(uint32_t id, const char *url, const char *dest_path,
 
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    LOG_ERROR("insert failed for id=%u: %s", id, sqlite3_errmsg(g_db));
+  }
   return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
@@ -127,14 +130,16 @@ int db_update_status(uint32_t id, const char *status) {
   const char *sql = "UPDATE downloads SET status = ? WHERE id = ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-    fprintf(stderr, "db_update_status: prepare failed: %s\n",
-            sqlite3_errmsg(g_db));
+    LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
     return -1;
   }
   sqlite3_bind_text(stmt, 1, status, -1, SQLITE_STATIC);
   sqlite3_bind_int(stmt, 2, (int)id);
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    LOG_WARN("update failed for id=%u (%s)", id, status);
+  }
   return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
@@ -142,14 +147,16 @@ int db_update_total_size(uint32_t id, uint64_t total_size) {
   const char *sql = "UPDATE downloads SET total_size = ? WHERE id = ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-    fprintf(stderr, "db_update_total_size: prepare failed: %s\n",
-            sqlite3_errmsg(g_db));
+    LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
     return -1;
   }
   sqlite3_bind_int64(stmt, 1, (sqlite3_int64)total_size);
   sqlite3_bind_int(stmt, 2, (int)id);
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    LOG_WARN("update failed for id=%u", id);
+  }
   return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
@@ -164,8 +171,7 @@ int db_insert_chunk(uint32_t download_id, uint64_t range_start,
       "VALUES (?, ?, ?, 0)";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-    fprintf(stderr, "db_insert_chunk: prepare failed: %s\n",
-            sqlite3_errmsg(g_db));
+    LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
     return -1;
   }
   sqlite3_bind_int(stmt, 1, (int)download_id);
@@ -173,6 +179,9 @@ int db_insert_chunk(uint32_t download_id, uint64_t range_start,
   sqlite3_bind_int64(stmt, 3, (sqlite3_int64)range_end);
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    LOG_WARN("insert failed for download_id=%u", download_id);
+  }
   return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
@@ -182,8 +191,7 @@ int db_update_chunk_progress(uint32_t download_id, uint64_t range_start,
                     "WHERE download_id = ? AND range_start = ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-    fprintf(stderr, "db_update_chunk_progress: prepare failed: %s\n",
-            sqlite3_errmsg(g_db));
+    LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
     return -1;
   }
   sqlite3_bind_int64(stmt, 1, (sqlite3_int64)bytes_done);
@@ -191,6 +199,9 @@ int db_update_chunk_progress(uint32_t download_id, uint64_t range_start,
   sqlite3_bind_int64(stmt, 3, (sqlite3_int64)range_start);
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    LOG_WARN("update failed for download_id=%u", download_id);
+  }
   return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
@@ -200,8 +211,7 @@ int db_update_chunk_range(uint32_t download_id, uint64_t range_start,
                     "WHERE download_id = ? AND range_start = ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-    fprintf(stderr, "db_update_chunk_range: prepare failed: %s\n",
-            sqlite3_errmsg(g_db));
+    LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
     return -1;
   }
   sqlite3_bind_int64(stmt, 1, (sqlite3_int64)new_range_end);
@@ -209,6 +219,9 @@ int db_update_chunk_range(uint32_t download_id, uint64_t range_start,
   sqlite3_bind_int64(stmt, 3, (sqlite3_int64)range_start);
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    LOG_WARN("update failed for download_id=%u", download_id);
+  }
   return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
@@ -216,13 +229,15 @@ int db_delete_chunks(uint32_t download_id) {
   const char *sql = "DELETE FROM chunks WHERE download_id = ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-    fprintf(stderr, "db_delete_chunks: prepare failed: %s\n",
-            sqlite3_errmsg(g_db));
+    LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
     return -1;
   }
   sqlite3_bind_int(stmt, 1, (int)download_id);
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    LOG_WARN("delete failed for download_id=%u", download_id);
+  }
   return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
@@ -234,8 +249,11 @@ int db_load_chunks(uint32_t download_id, DbChunkRow *out, int max) {
   const char *sql = "SELECT range_start, range_end, bytes_done FROM chunks "
                     "WHERE download_id = ? ORDER BY range_start";
   sqlite3_stmt *stmt = NULL;
-  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    LOG_WARN("prepare failed for download_id=%u: %s", download_id,
+             sqlite3_errmsg(g_db));
     return 0;
+  }
   sqlite3_bind_int(stmt, 1, (int)download_id);
 
   int n = 0;
@@ -255,8 +273,7 @@ int db_list_all_downloads(DbDownloadRow *out, int max) {
       "ORDER BY id DESC LIMIT ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-    fprintf(stderr, "db_list_all_downloads: prepare failed: %s\n",
-            sqlite3_errmsg(g_db));
+    LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
     return 0;
   }
   sqlite3_bind_int(stmt, 1, max);
@@ -281,13 +298,46 @@ int db_list_all_downloads(DbDownloadRow *out, int max) {
   return n;
 }
 
+int db_get_download_details(uint32_t id, IpcDownloadDetails *out) {
+  const char *sql = "SELECT cookie, referrer, extra_headers, expected_sha256, "
+                    "speed_limit_bps FROM downloads WHERE id = ?";
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
+    return -1;
+  }
+  sqlite3_bind_int(stmt, 1, (int)id);
+
+  int rc = -1;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *cookie = (const char *)sqlite3_column_text(stmt, 0);
+    const char *referrer = (const char *)sqlite3_column_text(stmt, 1);
+    const char *headers = (const char *)sqlite3_column_text(stmt, 2);
+    const char *sha256 = (const char *)sqlite3_column_text(stmt, 3);
+    out->speed_limit_bps = (uint64_t)sqlite3_column_int64(stmt, 4);
+
+    strncpy(out->cookie, cookie ? cookie : "", sizeof(out->cookie) - 1);
+    out->cookie[sizeof(out->cookie) - 1] = '\0';
+    strncpy(out->referrer, referrer ? referrer : "", sizeof(out->referrer) - 1);
+    out->referrer[sizeof(out->referrer) - 1] = '\0';
+    strncpy(out->extra_headers, headers ? headers : "",
+            sizeof(out->extra_headers) - 1);
+    out->extra_headers[sizeof(out->extra_headers) - 1] = '\0';
+    strncpy(out->expected_sha256, sha256 ? sha256 : "",
+            sizeof(out->expected_sha256) - 1);
+    out->expected_sha256[sizeof(out->expected_sha256) - 1] = '\0';
+    rc = 0;
+  }
+  sqlite3_finalize(stmt);
+  return rc;
+}
+
 uint32_t db_get_max_id(void) {
   const char *sql = "SELECT MAX(id) FROM downloads";
   sqlite3_stmt *stmt = NULL;
   uint32_t max_id = 0;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-    fprintf(stderr, "db_get_max_id: prepare failed: %s\n",
-            sqlite3_errmsg(g_db));
+    LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
     return 0;
   }
   if (sqlite3_step(stmt) == SQLITE_ROW)
@@ -304,8 +354,7 @@ int db_restore_queue(void) {
 
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-    fprintf(stderr, "db_restore_queue: prepare failed: %s\n",
-            sqlite3_errmsg(g_db));
+    LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
     return -1;
   }
 
@@ -327,6 +376,11 @@ int db_restore_queue(void) {
     const char *headers = (const char *)sqlite3_column_text(stmt, 8);
     const char *sha256 = (const char *)sqlite3_column_text(stmt, 9);
     uint64_t speed_limit = (uint64_t)sqlite3_column_int64(stmt, 10);
+
+    if (stat && strcmp(stat, "CANCELED") == 0) {
+      free(d);
+      continue;
+    }
 
     strncpy(d->url, url ? url : "", sizeof(d->url) - 1);
     strncpy(d->dest_path, path ? path : "", sizeof(d->dest_path) - 1);
@@ -367,6 +421,6 @@ int db_restore_queue(void) {
   }
 
   sqlite3_finalize(stmt);
-  printf("Restored %d download(s) from database\n", restored);
+  LOG_INFO("restored %d download(s) from database", restored);
   return 0;
 }

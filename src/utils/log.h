@@ -35,16 +35,21 @@ void log_close(void);
  * The macros capture __FILE__ and __LINE__ automatically and avoid
  * evaluating arguments when the level is filtered out.
  */
-void log_write(LogLevel level, const char *file, int line, const char *fmt, ...)
+void log_write(LogLevel level, const char *file, const char *function,
+               int line, const char *fmt, ...)
 #if defined(__GNUC__) || defined(__clang__)
-    __attribute__((format(printf, 4, 5)))
+    __attribute__((format(printf, 5, 6)))
 #endif
     ;
 
-#define LOG_DEBUG(...) log_write(LOG_DEBUG, __FILE__, __LINE__, __VA_ARGS__)
-#define LOG_INFO(...) log_write(LOG_INFO, __FILE__, __LINE__, __VA_ARGS__)
-#define LOG_WARN(...) log_write(LOG_WARN, __FILE__, __LINE__, __VA_ARGS__)
-#define LOG_ERROR(...) log_write(LOG_ERROR, __FILE__, __LINE__, __VA_ARGS__)
+#define LOG_DEBUG(...)                                                         \
+  log_write(LOG_DEBUG, __FILE__, __func__, __LINE__, __VA_ARGS__)
+#define LOG_INFO(...)                                                          \
+  log_write(LOG_INFO, __FILE__, __func__, __LINE__, __VA_ARGS__)
+#define LOG_WARN(...)                                                          \
+  log_write(LOG_WARN, __FILE__, __func__, __LINE__, __VA_ARGS__)
+#define LOG_ERROR(...)                                                         \
+  log_write(LOG_ERROR, __FILE__, __func__, __LINE__, __VA_ARGS__)
 
 #ifdef __cplusplus
 }

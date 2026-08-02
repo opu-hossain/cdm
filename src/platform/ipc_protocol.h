@@ -21,6 +21,7 @@ typedef enum {
   MSG_PROGRESS_EVENT,
   MSG_SUBSCRIBE,
   MSG_LIST_ALL,
+  MSG_GET_DETAILS,
 } MsgType;
 
 /* Every message on the wire starts with this header. */

@@ -77,7 +77,7 @@ static int download_thread_fn(void *arg) {
 
   if (canceled) {
     LOG_INFO("Download %u canceled", dl->id);
-    db_update_status(dl->id, "ERROR");
+    db_update_status(dl->id, "CANCELED");
     db_delete_chunks(dl->id);
     ipc_broadcast_status(dl->id, "Canceled", 0.0f);
     queue_manager_remove(dl->id);
@@ -101,6 +101,20 @@ static int download_thread_fn(void *arg) {
     ipc_broadcast_status(dl->id, "Verification failed", dl->progress);
     LOG_WARN("Download %u failed verification – not retrying, file removed",
              dl->id);
+    dm_notify_send("Download Failed", basename_of(dl->dest_path),
+                   DM_NOTIFY_ERROR);
+    return rc;
+  }
+
+  if (rc == -3) {
+    dl->retry_count = 0;
+    dl->next_retry_at = 0;
+    queue_manager_update_status(dl->id, DOWNLOAD_ERROR);
+    db_update_status(dl->id, "ERROR");
+    ipc_broadcast_status(dl->id, "Error", dl->progress);
+    LOG_WARN("Download %u failed — destination file already exists, not "
+             "retrying: %s",
+             dl->id, dl->dest_path);
     dm_notify_send("Download Failed", basename_of(dl->dest_path),
                    DM_NOTIFY_ERROR);
     return rc;

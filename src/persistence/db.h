@@ -5,6 +5,7 @@
 #define PERSISTENCE_DB_H
 
 #include "../core/queue_manager.h"
+#include "../platform/ipc_socket.h" // for IpcDownloadDetails
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -23,6 +24,9 @@ typedef struct {
   uint64_t bytes_done;
 } DbChunkRow;
 
+/* Lightweight — mirrors IpcDownloadRecord. Deliberately does NOT carry
+   cookie/referrer/headers/sha256/speed-limit; use db_get_download_details()
+   for those, fetched one row at a time on demand. */
 typedef struct {
   uint32_t id;
   char url[2048];
@@ -35,7 +39,6 @@ typedef struct {
 /*  Lifecycle                                                         */
 /* ------------------------------------------------------------------ */
 
-/** Open (or create) the database at `db_path` and create schema. */
 int db_init(const char *db_path);
 void db_close(void);
 
@@ -67,6 +70,10 @@ int db_delete_chunks(uint32_t download_id);
 int db_load_chunks(uint32_t download_id, DbChunkRow *out, int max);
 int db_list_all_downloads(DbDownloadRow *out, int max);
 uint32_t db_get_max_id(void);
+
+/** Single-row fetch of the heavy request-options fields for one download.
+    Returns 0 on success (found), -1 if not found or on error. */
+int db_get_download_details(uint32_t id, IpcDownloadDetails *out);
 
 /** Restore interrupted downloads from the database into memory. */
 int db_restore_queue(void);

@@ -2,6 +2,9 @@
 // Copyright (c) 2026 Opu Hossain
 
 #include "file_io.h"
+#include "../utils/log.h"
+
+#include <errno.h>
 #include <stdint.h>
 
 /* ================================================================== */
@@ -10,42 +13,53 @@
 #ifndef _WIN32
 
 #include <fcntl.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 int file_preallocate(const char *path, uint64_t total_size) {
   /* Create the file exclusively; fail if it already exists or is a symlink. */
   int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
-  if (fd < 0)
-    return -1;
+  if (fd < 0) {
+    LOG_ERROR("file_preallocate: open('%s') failed: %s", path, strerror(errno));
+    return (errno == EEXIST) ? -2 : -1;
+  }
 
   if (total_size == 0) {
     close(fd);
+    LOG_DEBUG("created empty file '%s'", path);
     return 0;
   }
 
   /* Extend to total_size - 1, then write a zero byte to set the length. */
   if (lseek(fd, (off_t)(total_size - 1), SEEK_SET) == (off_t)-1) {
+    LOG_ERROR("lseek('%s', %llu) failed: %s", path,
+              (unsigned long long)(total_size - 1), strerror(errno));
     close(fd);
     return -1;
   }
   char zero = '\0';
   if (write(fd, &zero, 1) != 1) {
+    LOG_ERROR("write('%s') failed: %s", path, strerror(errno));
     close(fd);
     return -1;
   }
   close(fd);
+  LOG_INFO("reserved %llu bytes at '%s'", (unsigned long long)total_size, path);
   return 0;
 }
 
 FileHandle file_open_rw(const char *path) {
   int fd = open(path, O_WRONLY | O_NOFOLLOW, 0644);
-  if (fd < 0)
+  if (fd < 0) {
+    LOG_ERROR("open('%s') failed: %s", path, strerror(errno));
     return INVALID_FILE_HANDLE;
+  }
 
   /* Ensure it’s a regular file (not a symlink or device). */
   struct stat st;
   if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+    LOG_ERROR("'%s' is not a regular file", path);
     close(fd);
     return INVALID_FILE_HANDLE;
   }
@@ -54,15 +68,20 @@ FileHandle file_open_rw(const char *path) {
 
 int file_pwrite(FileHandle fd, const void *buf, size_t n, uint64_t offset) {
   ssize_t written = pwrite(fd, buf, n, (off_t)offset);
-  if (written < 0)
+  if (written < 0) {
+    LOG_ERROR("pwrite(fd=%d, offset=%llu, n=%zu) failed: %s", fd,
+              (unsigned long long)offset, n, strerror(errno));
     return -1;
+  }
   return ((size_t)written == n) ? 0 : -1;
 }
 
 uint64_t file_get_size(const char *path) {
   struct stat st;
-  if (stat(path, &st) != 0)
+  if (stat(path, &st) != 0) {
+    LOG_WARN("stat('%s') failed: %s", path, strerror(errno));
     return 0;
+  }
   return (uint64_t)st.st_size;
 }
 

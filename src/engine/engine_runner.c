@@ -191,7 +191,12 @@ int engine_run_download(struct Download *d) {
 
     LOG_INFO("Using %d worker(s)\n", n_ranges);
 
-    if (file_preallocate(d->dest_path, info.total_size) != 0) {
+    int prealloc_rc = file_preallocate(d->dest_path, info.total_size);
+    if (prealloc_rc == -2) {
+      LOG_ERROR("Destination already exists, not retrying: %s\n", d->dest_path);
+      return -3; // non-retryable, distinct from -2 (checksum/verification)
+    }
+    if (prealloc_rc != 0) {
       LOG_ERROR("Failed to create output file: %s\n", d->dest_path);
       return -1;
     }

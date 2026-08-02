@@ -19,8 +19,12 @@ struct Download;
  *
  * @param d  Pointer to a Download structure populated with url and
  *           dest_path (and optional RequestOptions).
- * @return   0 on success, -1 on retryable failure, -2 on non‑retryable
- *           failure (verification mismatch – partial file removed).
+ * @return 0 on success, -1 on failure (retryable)
+ *         -2 on verification failure (non-retryable — size or checksum
+ *          mismatch; the partial file has already been removed)
+ *         -3 on destination-already-exists (non-retryable — the target
+ *          file existed before this attempt started; nothing was created
+ *          or needs cleanup)
  */
 int engine_run_download(struct Download *d);
 

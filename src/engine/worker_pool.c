@@ -8,11 +8,14 @@
 #include "../platform/thread.h"
 
 #include <curl/curl.h>
+#include <errno.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "../utils/log.h"
 
 /* ------------------------------------------------------------------ */
 /*  RebalancePool – internal slot type                                */
@@ -46,8 +49,11 @@ RebalancePool *rebalance_pool_create(const Range *ranges, int n_ranges,
                                      RebalanceSplitFn on_split,
                                      void *userdata) {
   RebalancePool *pool = calloc(1, sizeof(RebalancePool));
-  if (!pool)
+  if (!pool) {
+    LOG_ERROR("out of memory for %d range(s)",
+              n_ranges);
     return NULL;
+  }
 
   dm_mutex_init(&pool->mutex);
   pool->min_steal_bytes = min_steal_bytes;
@@ -253,8 +259,10 @@ static void run_one_segment(WorkerContext *ctx) {
   atomic_store(&ctx->bytes_done, 0);
 
   CURL *curl = curl_easy_init();
-  if (!curl)
+  if (!curl) {
+    LOG_ERROR("curl_easy_init failed for %s", ctx->url);
     return;
+  }
 
   curl_easy_setopt(curl, CURLOPT_URL, ctx->url);
   if (!ctx->range.whole_file) {
@@ -312,6 +320,11 @@ static void run_one_segment(WorkerContext *ctx) {
   bool http_ok = (http_status == 206 || ok_200);
 
   ctx->succeeded = ctx->truncated || (res == CURLE_OK && http_ok);
+
+  if (!ctx->succeeded) {
+    LOG_WARN("segment request failed url='%s' http=%ld curl=%s",
+             ctx->url, http_status, curl_easy_strerror(res));
+  }
 
   if (headers)
     curl_slist_free_all(headers);

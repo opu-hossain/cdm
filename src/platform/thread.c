@@ -8,6 +8,14 @@
 #include <stdlib.h>
 #include <windows.h>
 
+unsigned long long dm_current_process_id(void) {
+  return (unsigned long long)GetCurrentProcessId();
+}
+
+unsigned long long dm_current_thread_id(void) {
+  return (unsigned long long)GetCurrentThreadId();
+}
+
 int dm_thread_create(dm_thread_t *thread, int (*fn)(void *), void *arg) {
   thread->handle =
       CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)fn, arg, 0, NULL);
@@ -56,8 +64,16 @@ int dm_mutex_destroy(dm_mutex_t *mutex) {
 
 #include <pthread.h>
 #include <stdint.h>
-#include <time.h>
 #include <unistd.h>
+#include <time.h>
+
+unsigned long long dm_current_process_id(void) {
+  return (unsigned long long)getpid();
+}
+
+unsigned long long dm_current_thread_id(void) {
+  return (unsigned long long)(uintptr_t)pthread_self();
+}
 
 int dm_thread_create(dm_thread_t *thread, int (*fn)(void *), void *arg) {
   return pthread_create(&thread->handle, NULL, (void *(*)(void *))fn, arg) == 0

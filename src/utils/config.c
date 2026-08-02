@@ -72,6 +72,24 @@ static void read_string(toml_datum_t tab, const char *key, char *out,
   }
 }
 
+static bool default_dir_is_usable(const char *path) {
+  if (!path || path[0] == '\0')
+    return false;
+
+  const char *home = getenv("HOME");
+  if (!home || home[0] == '\0')
+    return false;
+
+  size_t home_len = strlen(home);
+  if (strncmp(path, home, home_len) != 0)
+    return false;
+  if (path[home_len] != '\0' && path[home_len] != '/')
+    return false;
+
+  char resolved[1024];
+  return realpath(path, resolved) != NULL;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Public API                                                        */
 /* ------------------------------------------------------------------ */
@@ -110,8 +128,17 @@ void config_init(const char *path) {
 
   toml_datum_t downloads = toml_get(root, "downloads");
   read_int(downloads, "max_concurrent", &g_max_concurrent);
-  read_string(downloads, "default_directory", g_default_dir,
-              sizeof(g_default_dir));
+  char configured_default_dir[sizeof(g_default_dir)] = {0};
+  read_string(downloads, "default_directory", configured_default_dir,
+              sizeof(configured_default_dir));
+  if (configured_default_dir[0] != '\0' &&
+      default_dir_is_usable(configured_default_dir)) {
+    strncpy(g_default_dir, configured_default_dir, sizeof(g_default_dir) - 1);
+    g_default_dir[sizeof(g_default_dir) - 1] = '\0';
+  } else if (configured_default_dir[0] != '\0') {
+    LOG_WARN("Ignoring invalid default_directory '%s'; using '%s'",
+             configured_default_dir, g_default_dir);
+  }
 
   toml_datum_t retry = toml_get(root, "retry");
   read_int(retry, "max_attempts", &g_retry_max_attempts);

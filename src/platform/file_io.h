@@ -43,7 +43,9 @@ int file_pwrite(FileHandle fd, const void *buf, size_t n, uint64_t offset);
  * Creates a sparse file on supporting filesystems. Fails if the path
  * already exists (O_EXCL / CREATE_NEW semantics).
  *
- * @return 0 on success, -1 on failure.
+ * @return 0 on success, -1 on failure, -2 if the destination path already
+ * exists (non-retryable retrying will never succeed since O_EXCL always refuses
+ * it)
  */
 int file_preallocate(const char *path, uint64_t total_size);
 

@@ -54,6 +54,12 @@ int dm_thread_detach(dm_thread_t *thread);
 /** Sleep the calling thread for `ms` milliseconds. */
 void dm_thread_sleep_ms(unsigned int ms);
 
+/** Return the current process id. */
+unsigned long long dm_current_process_id(void);
+
+/** Return the current thread id in a printable form. */
+unsigned long long dm_current_thread_id(void);
+
 /** Initialize a mutex. Returns 0 on success, -1 on error. */
 int dm_mutex_init(dm_mutex_t *mutex);
 int dm_mutex_lock(dm_mutex_t *mutex);

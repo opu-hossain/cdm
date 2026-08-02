@@ -3,7 +3,9 @@
 
 #include "queue_manager.h"
 #include "../platform/thread.h"
+#include "../utils/log.h"
 
+#include <errno.h>
 #include <libgen.h>
 #include <limits.h>
 #include <stdint.h>
@@ -47,8 +49,10 @@ static const char *get_allowed_root(void) {
  * @return true if the destination is safe to write to
  */
 static bool is_safe_dest_path(const char *path) {
-  if (!path || path[0] == '\0' || strlen(path) >= 900)
+  if (!path || path[0] == '\0' || strlen(path) >= 900) {
+    LOG_WARN("is_safe_dest_path: rejected (null/empty/too long)");
     return false;
+  }
 
   char dir_buf[1024];
   strncpy(dir_buf, path, sizeof(dir_buf) - 1);
@@ -56,13 +60,20 @@ static bool is_safe_dest_path(const char *path) {
   char *dir = dirname(dir_buf);
 
   char resolved_dir[PATH_MAX];
-  if (realpath(dir, resolved_dir) == NULL)
+  if (realpath(dir, resolved_dir) == NULL) {
+    LOG_WARN("is_safe_dest_path: rejected — realpath('%s') failed: %s", dir,
+             strerror(errno));
     return false;
+  }
 
   const char *root = get_allowed_root();
   size_t root_len = strlen(root);
-  if (strncmp(resolved_dir, root, root_len) != 0)
+  if (strncmp(resolved_dir, root, root_len) != 0) {
+    LOG_WARN(
+        "is_safe_dest_path: rejected — '%s' outside allowed root '%s'", // NEW
+        resolved_dir, root);
     return false;
+  }
   if (resolved_dir[root_len] != '\0' && resolved_dir[root_len] != '/')
     return false;
 
