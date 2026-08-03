@@ -76,6 +76,19 @@ void gui_model_apply_optimistic(uint32_t id, const char *new_status) {
   LOG_DEBUG("id=%u status='%s'", id, new_status ? new_status : "");
 }
 
+void gui_model_for_each_row(void (*fn)(const GuiRow *row, void *ctx),
+                            void *ctx) {
+  if (!fn)
+    return;
+
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  for (int i = 0; i < g_row_count; i++) {
+    fn(&g_rows[i], ctx);
+  }
+  dm_mutex_unlock(&g_mutex);
+}
+
 int gui_model_snapshot_rows(GuiRow *out, int max) {
   ensure_mutex();
   dm_mutex_lock(&g_mutex);

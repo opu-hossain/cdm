@@ -49,20 +49,25 @@ static void join_path(const char *dir, const char *filename, char *out,
 // Not static anymore — called from gui_worker.c's dispatch_result() on the
 // UI thread. Declared in gui_worker.c via `extern`; kept here rather than
 // a shared header since it's a narrow, single-purpose seam.
-void gui_push_state_to_ui(webview_t w) {
-  GuiRow rows[GUI_MODEL_MAX_ROWS];
-  int count = gui_model_snapshot_rows(rows, GUI_MODEL_MAX_ROWS);
+typedef struct {
+  cJSON *array;
+} SnapshotJsonCtx;
 
+static void append_snapshot_row_json(const GuiRow *row, void *ctx) {
+  SnapshotJsonCtx *snapshot_ctx = (SnapshotJsonCtx *)ctx;
+  cJSON *item = cJSON_CreateObject();
+  cJSON_AddNumberToObject(item, "id", row->id);
+  cJSON_AddStringToObject(item, "url", row->url);
+  cJSON_AddStringToObject(item, "status", row->status);
+  cJSON_AddNumberToObject(item, "progress", row->progress);
+  cJSON_AddStringToObject(item, "dest_path", row->dest_path);
+  cJSON_AddItemToArray(snapshot_ctx->array, item);
+}
+
+void gui_push_state_to_ui(webview_t w) {
   cJSON *root = cJSON_CreateArray();
-  for (int i = 0; i < count; i++) {
-    cJSON *item = cJSON_CreateObject();
-    cJSON_AddNumberToObject(item, "id", rows[i].id);
-    cJSON_AddStringToObject(item, "url", rows[i].url);
-    cJSON_AddStringToObject(item, "status", rows[i].status);
-    cJSON_AddNumberToObject(item, "progress", rows[i].progress);
-    cJSON_AddStringToObject(item, "dest_path", rows[i].dest_path);
-    cJSON_AddItemToArray(root, item);
-  }
+  SnapshotJsonCtx snapshot_ctx = {.array = root};
+  gui_model_for_each_row(append_snapshot_row_json, &snapshot_ctx);
 
   char *json_str = cJSON_PrintUnformatted(root);
   size_t script_len = strlen(json_str) + 32;

@@ -168,7 +168,12 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     break;
   }
   case MSG_LIST_ALL: {
-    DbDownloadRow rows[IPC_LIST_ALL_MAX];
+    DbDownloadRow *rows = calloc(IPC_LIST_ALL_MAX, sizeof(DbDownloadRow));
+    if (!rows) {
+      uint32_t count = 0;
+      ipc_write_exact(client_fd, &count, sizeof(count));
+      break;
+    }
     int n = db_list_all_downloads(rows, IPC_LIST_ALL_MAX);
     uint32_t count = (uint32_t)n;
     ipc_write_exact(client_fd, &count, sizeof(count));
@@ -209,6 +214,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       write_string(client_fd, status_buf);
       ipc_write_exact(client_fd, &progress, sizeof(progress));
     }
+    free(rows);
     break;
   }
   case MSG_GET_DETAILS: {

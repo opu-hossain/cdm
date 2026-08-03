@@ -91,6 +91,18 @@ static void normalize_status(const char *raw, char *out, size_t out_size) {
   out[i] = '\0';
 }
 
+static int read_string_local(int fd, char *out, size_t max_len) {
+  uint32_t len = 0;
+  if (ipc_read_exact(fd, &len, sizeof(len)) != 0)
+    return -1;
+  if (len >= max_len)
+    len = (uint32_t)(max_len - 1);
+  if (len > 0 && ipc_read_exact(fd, out, len) != 0)
+    return -1;
+  out[len] = '\0';
+  return 0;
+}
+
 static int listener_thread_fn(void *arg) {
   (void)arg;
   while (atomic_load(&g_running)) {
@@ -264,13 +276,27 @@ bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count) {
     note_restored();
   }
 
-  IpcDownloadRecord raw[GUI_LIST_ALL_FETCH_CAP];
-  int n = ipc_send_list_all(g_cmd_fd, raw, GUI_LIST_ALL_FETCH_CAP);
-  if (n < 0) {
+  MsgHeader hdr = {.length = 0, .type = MSG_LIST_ALL};
+  if (ipc_write_exact(g_cmd_fd, &hdr, sizeof(hdr)) != 0) {
     ipc_client_disconnect(g_cmd_fd);
     g_cmd_fd = -1;
     note_lost();
     return false;
+  }
+
+  uint32_t count = 0;
+  if (ipc_read_exact(g_cmd_fd, &count, sizeof(count)) != 0) {
+    ipc_client_disconnect(g_cmd_fd);
+    g_cmd_fd = -1;
+    note_lost();
+    return false;
+  }
+
+  int n = (int)count;
+  if (n == 0) {
+    *out_records = NULL;
+    *out_count = 0;
+    return true;
   }
 
   GuiDownloadRecord *out = calloc((size_t)n, sizeof(GuiDownloadRecord));
@@ -278,14 +304,32 @@ bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count) {
     return false;
 
   for (int i = 0; i < n; i++) {
-    out[i].id = raw[i].id;
-    strncpy(out[i].url, raw[i].url, sizeof(out[i].url) - 1);
+    uint32_t id;
+    char url[IPC_MAX_URL_LEN];
+    char dest_path[IPC_MAX_PATH_LEN];
+    char status[16];
+    float progress;
+
+    if (ipc_read_exact(g_cmd_fd, &id, sizeof(id)) != 0 ||
+      read_string_local(g_cmd_fd, url, sizeof(url)) != 0 ||
+      read_string_local(g_cmd_fd, dest_path, sizeof(dest_path)) != 0 ||
+      read_string_local(g_cmd_fd, status, sizeof(status)) != 0 ||
+      ipc_read_exact(g_cmd_fd, &progress, sizeof(progress)) != 0) {
+      free(out);
+      ipc_client_disconnect(g_cmd_fd);
+      g_cmd_fd = -1;
+      note_lost();
+      return false;
+    }
+
+    out[i].id = id;
+    strncpy(out[i].url, url, sizeof(out[i].url) - 1);
     out[i].url[sizeof(out[i].url) - 1] = '\0';
-    strncpy(out[i].dest_path, raw[i].dest_path, sizeof(out[i].dest_path) - 1);
+    strncpy(out[i].dest_path, dest_path, sizeof(out[i].dest_path) - 1);
     out[i].dest_path[sizeof(out[i].dest_path) - 1] = '\0';
-    strncpy(out[i].status, raw[i].status, sizeof(out[i].status) - 1);
+    strncpy(out[i].status, status, sizeof(out[i].status) - 1);
     out[i].status[sizeof(out[i].status) - 1] = '\0';
-    out[i].progress = raw[i].progress;
+    out[i].progress = progress;
   }
 
   *out_records = out;

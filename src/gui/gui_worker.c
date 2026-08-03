@@ -22,16 +22,20 @@ typedef enum {
 } GuiCmdType;
 
 typedef struct {
+  char url[IPC_MAX_URL_LEN];
+  char dest_path[IPC_MAX_PATH_LEN];
+  char cookie[1024];
+  char referrer[2048];
+  char extra_headers[4096];
+  char expected_sha256[65];
+  uint64_t speed_limit_bps;
+} AddDownloadPayload;
+
+typedef struct {
   GuiCmdType type;
   char seq[GUI_WORKER_SEQ_MAX];
-  uint32_t id;                      // pause/resume/cancel/get_details
-  char url[IPC_MAX_URL_LEN];        // add
-  char dest_path[IPC_MAX_PATH_LEN]; // add
-  char cookie[1024];                // add
-  char referrer[2048];              // add
-  char extra_headers[4096];         // add
-  char expected_sha256[65];         // add
-  uint64_t speed_limit_bps;         // add
+  uint32_t id; // pause/resume/cancel/get_details
+  void *payload;
 } GuiCommand;
 
 // Bundled onto the heap and handed to webview_dispatch — freed by the
@@ -101,29 +105,47 @@ static void copy_seq(char *out, const char *seq) {
   out[GUI_WORKER_SEQ_MAX - 1] = '\0';
 }
 
+static void free_command_payload(GuiCommand *cmd) {
+  if (cmd && cmd->type == GUI_CMD_ADD_DOWNLOAD && cmd->payload) {
+    free(cmd->payload);
+    cmd->payload = NULL;
+  }
+}
+
 void gui_worker_enqueue_add_download(const char *seq, const char *url,
                                      const char *dest_path, const char *cookie,
                                      const char *referrer,
                                      const char *extra_headers,
                                      const char *expected_sha256,
                                      uint64_t speed_limit_bps) {
+  AddDownloadPayload *payload = calloc(1, sizeof(AddDownloadPayload));
+  if (!payload) {
+    if (seq)
+      webview_return(g_webview, seq, 0, "{\"ok\":false}");
+    return;
+  }
+
+  strncpy(payload->url, url, sizeof(payload->url) - 1);
+  strncpy(payload->dest_path, dest_path, sizeof(payload->dest_path) - 1);
+  if (cookie)
+    strncpy(payload->cookie, cookie, sizeof(payload->cookie) - 1);
+  if (referrer)
+    strncpy(payload->referrer, referrer, sizeof(payload->referrer) - 1);
+  if (extra_headers)
+    strncpy(payload->extra_headers, extra_headers,
+            sizeof(payload->extra_headers) - 1);
+  if (expected_sha256)
+    strncpy(payload->expected_sha256, expected_sha256,
+            sizeof(payload->expected_sha256) - 1);
+  payload->speed_limit_bps = speed_limit_bps;
+
   GuiCommand cmd = {0};
   cmd.type = GUI_CMD_ADD_DOWNLOAD;
   copy_seq(cmd.seq, seq);
-  strncpy(cmd.url, url, sizeof(cmd.url) - 1);
-  strncpy(cmd.dest_path, dest_path, sizeof(cmd.dest_path) - 1);
-  if (cookie)
-    strncpy(cmd.cookie, cookie, sizeof(cmd.cookie) - 1);
-  if (referrer)
-    strncpy(cmd.referrer, referrer, sizeof(cmd.referrer) - 1);
-  if (extra_headers)
-    strncpy(cmd.extra_headers, extra_headers, sizeof(cmd.extra_headers) - 1);
-  if (expected_sha256)
-    strncpy(cmd.expected_sha256, expected_sha256,
-            sizeof(cmd.expected_sha256) - 1);
-  cmd.speed_limit_bps = speed_limit_bps;
+  cmd.payload = payload;
 
   if (!enqueue(cmd) && seq) {
+    free_command_payload(&cmd);
     webview_return(g_webview, seq, 0, "{\"ok\":false}");
   }
 }
@@ -214,27 +236,34 @@ static void process_command(const GuiCommand *cmd) {
 
   switch (cmd->type) {
   case GUI_CMD_ADD_DOWNLOAD: {
-    LOG_INFO("gui_worker: processing add_download url='%s' dest='%s'", cmd->url,
-             cmd->dest_path);
+    const AddDownloadPayload *payload = (const AddDownloadPayload *)cmd->payload;
+    if (!payload) {
+      LOG_WARN("gui_worker: add_download missing payload");
+      schedule_dispatch(has_seq, cmd->seq, false, /*refresh_ui=*/false);
+      return;
+    }
+
+    LOG_INFO("gui_worker: processing add_download url='%s' dest='%s'",
+             payload->url, payload->dest_path);
 
     IpcDownloadOptions opts = {
-        .cookie = cmd->cookie[0] ? cmd->cookie : NULL,
-        .referrer = cmd->referrer[0] ? cmd->referrer : NULL,
-        .extra_headers = cmd->extra_headers[0] ? cmd->extra_headers : NULL,
+        .cookie = payload->cookie[0] ? payload->cookie : NULL,
+        .referrer = payload->referrer[0] ? payload->referrer : NULL,
+        .extra_headers = payload->extra_headers[0] ? payload->extra_headers : NULL,
         .expected_sha256 =
-            cmd->expected_sha256[0] ? cmd->expected_sha256 : NULL,
-        .speed_limit_bps = cmd->speed_limit_bps,
+            payload->expected_sha256[0] ? payload->expected_sha256 : NULL,
+        .speed_limit_bps = payload->speed_limit_bps,
     };
     bool has_options = opts.cookie || opts.referrer || opts.extra_headers ||
                        opts.expected_sha256 || opts.speed_limit_bps > 0;
 
     uint32_t id = 0;
-    ok = gui_client_add_download(cmd->url, cmd->dest_path,
+    ok = gui_client_add_download(payload->url, payload->dest_path,
                                  has_options ? &opts : NULL, &id) &&
          id > 0;
     LOG_INFO("gui_worker: add_download result ok=%d id=%u", ok, id);
     if (ok)
-      gui_model_add_local_row(id, cmd->url);
+      gui_model_add_local_row(id, payload->url);
     schedule_dispatch(has_seq, cmd->seq, ok, /*refresh_ui=*/true);
     return;
   }
@@ -311,6 +340,7 @@ static int worker_thread_fn(void *arg) {
     GuiCommand cmd;
     while (dequeue(&cmd)) {
       process_command(&cmd);
+      free_command_payload(&cmd);
     }
 
     dm_thread_sleep_ms(GUI_WORKER_TICK_MS);
