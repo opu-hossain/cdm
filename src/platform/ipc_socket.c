@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
@@ -23,9 +24,36 @@
 /* ------------------------------------------------------------------ */
 /*  Constants                                                         */
 /* ------------------------------------------------------------------ */
-#define SOCKET_PATH "/tmp/downloadmgr.sock"
 #define MAX_CLIENTS 16
 #define IPC_POLL_TIMEOUT_US 20000 /* 20 ms */
+
+/** Get user-isolated IPC socket path (XDG_RUNTIME_DIR, ~/.local/share/downloadmgr, or /tmp/downloadmgr_UID.sock). */
+static void get_socket_path(char *out, size_t out_size) {
+  static char cached_path[1024] = {0};
+  if (cached_path[0] != '\0') {
+    strncpy(out, cached_path, out_size - 1);
+    out[out_size - 1] = '\0';
+    return;
+  }
+
+  const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
+  if (runtime_dir && runtime_dir[0] != '\0') {
+    snprintf(cached_path, sizeof(cached_path), "%s/downloadmgr.sock", runtime_dir);
+  } else {
+    const char *home = getenv("HOME");
+    if (home && home[0] != '\0') {
+      char dir[1024];
+      snprintf(dir, sizeof(dir), "%s/.local/share/downloadmgr", home);
+      mkdir(dir, 0755);
+      snprintf(cached_path, sizeof(cached_path), "%s/ipc.sock", dir);
+    } else {
+      snprintf(cached_path, sizeof(cached_path), "/tmp/downloadmgr_%u.sock", (unsigned int)getuid());
+    }
+  }
+
+  strncpy(out, cached_path, out_size - 1);
+  out[out_size - 1] = '\0';
+}
 
 /* ------------------------------------------------------------------ */
 /*  Server state                                                      */
@@ -66,15 +94,46 @@ static void write_string(int fd, const char *s) {
     ipc_write_exact(fd, s, len);
 }
 
-/** Receive a length‑prefixed string (max `max_len` bytes including NUL). */
-static void read_string(int fd, char *out, size_t max_len) {
+/**
+ * Receive a length‑prefixed string (max `max_len` bytes including NUL).
+ *
+ * If the incoming string length exceeds `max_len - 1`, the string is truncated
+ * to fit in `out` and all excess bytes are drained from the wire so that
+ * subsequent messages on the IPC socket stream remain synchronized.
+ *
+ * @return 0 on success, -1 on read error or connection closed.
+ */
+static int read_string(int fd, char *out, size_t max_len) {
+  if (!out || max_len == 0)
+    return -1;
+
   uint32_t len = 0;
-  ipc_read_exact(fd, &len, sizeof(len));
-  if (len >= max_len)
-    len = (uint32_t)(max_len - 1);
-  if (len > 0)
-    ipc_read_exact(fd, out, len);
-  out[len] = '\0';
+  if (ipc_read_exact(fd, &len, sizeof(len)) != 0) {
+    out[0] = '\0';
+    return -1;
+  }
+
+  size_t to_read = (len >= max_len) ? (max_len - 1) : (size_t)len;
+  if (to_read > 0) {
+    if (ipc_read_exact(fd, out, to_read) != 0) {
+      out[0] = '\0';
+      return -1;
+    }
+  }
+  out[to_read] = '\0';
+
+  if ((size_t)len >= max_len) {
+    size_t excess = (size_t)len - to_read;
+    char dummy[256];
+    while (excess > 0) {
+      size_t chunk = (excess < sizeof(dummy)) ? excess : sizeof(dummy);
+      if (ipc_read_exact(fd, dummy, chunk) != 0)
+        return -1;
+      excess -= chunk;
+    }
+  }
+
+  return 0;
 }
 
 /** Remove a client from the array and compact. */
@@ -261,10 +320,13 @@ bool ipc_server_is_running(void) {
   if (fd < 0)
     return false;
 
+  char socket_path[1024];
+  get_socket_path(socket_path, sizeof(socket_path));
+
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
+  strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
 
   bool running = (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
   close(fd);
@@ -277,7 +339,10 @@ int ipc_server_start(void) {
     return -1;
   }
 
-  unlink(SOCKET_PATH);
+  char socket_path[1024];
+  get_socket_path(socket_path, sizeof(socket_path));
+
+  unlink(socket_path);
 
   g_listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (g_listen_fd < 0) {
@@ -288,7 +353,7 @@ int ipc_server_start(void) {
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
+  strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
 
   if (bind(g_listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     perror("IPC server: bind() failed");
@@ -300,7 +365,7 @@ int ipc_server_start(void) {
   if (listen(g_listen_fd, 5) < 0) {
     LOG_ERROR("IPC server: listen() failed: %s", strerror(errno));
     close(g_listen_fd);
-    unlink(SOCKET_PATH);
+    unlink(socket_path);
     g_listen_fd = -1;
     return -1;
   }
@@ -316,7 +381,7 @@ int ipc_server_start(void) {
     g_client_mutex_ready = true;
   }
 
-  LOG_DEBUG("IPC server: Listening on %s\n", SOCKET_PATH);
+  LOG_DEBUG("IPC server: Listening on %s\n", socket_path);
   return 0;
 }
 
@@ -393,7 +458,10 @@ void ipc_server_stop(void) {
     close(g_client_fds[i]);
   if (g_listen_fd >= 0)
     close(g_listen_fd);
-  unlink(SOCKET_PATH);
+
+  char socket_path[1024];
+  get_socket_path(socket_path, sizeof(socket_path));
+  unlink(socket_path);
 }
 
 /* ------------------------------------------------------------------ */
@@ -405,10 +473,13 @@ int ipc_client_connect(void) {
   if (fd < 0)
     return -1;
 
+  char socket_path[1024];
+  get_socket_path(socket_path, sizeof(socket_path));
+
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
+  strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
 
   if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     close(fd);
@@ -597,7 +668,11 @@ int ipc_write_exact(int fd, const void *buf, size_t len) {
   size_t remaining = len;
   const char *ptr = (const char *)buf;
   while (remaining > 0) {
+#if defined(MSG_NOSIGNAL)
+    ssize_t n = send(fd, ptr, remaining, MSG_NOSIGNAL);
+#else
     ssize_t n = write(fd, ptr, remaining);
+#endif
     if (n < 0) {
       if (errno == EINTR)
         continue;

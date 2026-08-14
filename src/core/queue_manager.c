@@ -59,11 +59,28 @@ static bool is_safe_dest_path(const char *path) {
   dir_buf[sizeof(dir_buf) - 1] = '\0';
   char *dir = dirname(dir_buf);
 
+  char temp_dir[1024];
+  strncpy(temp_dir, dir, sizeof(temp_dir) - 1);
+  temp_dir[sizeof(temp_dir) - 1] = '\0';
+
   char resolved_dir[PATH_MAX];
-  if (realpath(dir, resolved_dir) == NULL) {
-    LOG_WARN("is_safe_dest_path: rejected — realpath('%s') failed: %s", dir,
-             strerror(errno));
-    return false;
+  while (realpath(temp_dir, resolved_dir) == NULL) {
+    if (errno != ENOENT) {
+      LOG_WARN("is_safe_dest_path: rejected — realpath('%s') failed: %s",
+               temp_dir, strerror(errno));
+      return false;
+    }
+    char *parent = dirname(temp_dir);
+    if (!parent || strcmp(parent, temp_dir) == 0 || strcmp(parent, ".") == 0 ||
+        strcmp(parent, "/") == 0) {
+      LOG_WARN("is_safe_dest_path: rejected — no valid existing parent directory for '%s'", dir);
+      return false;
+    }
+    char parent_copy[1024];
+    strncpy(parent_copy, parent, sizeof(parent_copy) - 1);
+    parent_copy[sizeof(parent_copy) - 1] = '\0';
+    strncpy(temp_dir, parent_copy, sizeof(temp_dir) - 1);
+    temp_dir[sizeof(temp_dir) - 1] = '\0';
   }
 
   const char *root = get_allowed_root();

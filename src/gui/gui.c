@@ -1,3 +1,4 @@
+#include "../platform/spawn.h"
 #include "../platform/thread.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
@@ -279,6 +280,64 @@ static void js_pick_folder(const char *seq, const char *req, void *arg) {
   webview_return(w, seq, 0, result);
 }
 
+static bool check_file_readable(const char *path) {
+  FILE *f = fopen(path, "rb");
+  if (f) {
+    fclose(f);
+    return true;
+  }
+  return false;
+}
+
+static void get_ui_file_url(char *out_url, size_t max_len) {
+  char exe_path[1024] = {0};
+  get_self_exe_path(exe_path, sizeof(exe_path));
+
+  char exe_dir[1024] = {0};
+  if (exe_path[0] != '\0') {
+    strncpy(exe_dir, exe_path, sizeof(exe_dir) - 1);
+    char *slash = strrchr(exe_dir, '/');
+#ifdef _WIN32
+    char *bslash = strrchr(exe_dir, '\\');
+    if (bslash && (!slash || bslash > slash))
+      slash = bslash;
+#endif
+    if (slash)
+      *slash = '\0';
+  }
+
+  char candidate[1024];
+
+  /* 1. Next to binary (e.g., <exe_dir>/src/gui/ui/index.html via post-build copy) */
+  if (exe_dir[0] != '\0') {
+    snprintf(candidate, sizeof(candidate), "%s/src/gui/ui/index.html", exe_dir);
+    if (check_file_readable(candidate)) {
+      snprintf(out_url, max_len, "file://%s", candidate);
+      return;
+    }
+
+    /* 2. <exe_dir>/ui/index.html (installed binary layout) */
+    snprintf(candidate, sizeof(candidate), "%s/ui/index.html", exe_dir);
+    if (check_file_readable(candidate)) {
+      snprintf(out_url, max_len, "file://%s", candidate);
+      return;
+    }
+  }
+
+  /* 3. PWD fallback (source repository directory) */
+  const char *pwd = getenv("PWD");
+  if (pwd && pwd[0] != '\0') {
+    snprintf(candidate, sizeof(candidate), "%s/src/gui/ui/index.html", pwd);
+    if (check_file_readable(candidate)) {
+      snprintf(out_url, max_len, "file://%s", candidate);
+      return;
+    }
+  }
+
+  /* 4. Relative fallback */
+  snprintf(out_url, max_len, "file://./src/gui/ui/index.html");
+}
+
 // ==========================================
 // Main Entry
 // ==========================================
@@ -306,13 +365,9 @@ int run_gui(void) {
   webview_bind(w, "c_ready", js_ready, w);
   webview_bind(w, "c_get_details", js_get_details, w);
 
-  char file_url[512];
-  const char *pwd = getenv("PWD");
-  if (!pwd) {
-    LOG_WARN("PWD not set, falling back to relative path");
-    pwd = ".";
-  }
-  snprintf(file_url, sizeof(file_url), "file://%s/src/gui/ui/index.html", pwd);
+  char file_url[1024];
+  get_ui_file_url(file_url, sizeof(file_url));
+  LOG_INFO("GUI loading UI from: %s", file_url);
   webview_navigate(w, file_url);
 
   gui_worker_start(w);

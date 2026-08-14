@@ -147,6 +147,9 @@ int run_daemon(void) {
 
   signal(SIGINT, cleanup_and_exit);
   signal(SIGTERM, cleanup_and_exit);
+#ifndef _WIN32
+  signal(SIGPIPE, SIG_IGN);
+#endif
 
   LOG_INFO("Daemon started, listening on socket, logging to %s", log_path);
 

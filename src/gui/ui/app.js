@@ -1,8 +1,33 @@
+window.addEventListener("contextmenu", (e) => e.preventDefault());
+window.addEventListener(
+  "wheel",
+  (e) => {
+    if (e.ctrlKey) e.preventDefault();
+  },
+  { passive: false },
+);
+window.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && ["+", "-", "=", "0"].includes(e.key))
+    e.preventDefault();
+});
+window.addEventListener("dragstart", (e) => e.preventDefault());
+window.addEventListener("keydown", (e) => {
+  if (
+    e.key === "Backspace" &&
+    !["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)
+  ) {
+    e.preventDefault();
+  }
+});
 window.addEventListener("DOMContentLoaded", () => {
   if (window.c_ready) window.c_ready();
 });
 
 const downloadsContainer = document.getElementById("downloads-container");
+const metricTotal = document.getElementById("metric-total");
+const metricActive = document.getElementById("metric-active");
+const metricQueued = document.getElementById("metric-queued");
+const metricDone = document.getElementById("metric-done");
 
 async function pickFolder() {
   const folder = await window.c_pick_folder();
@@ -51,15 +76,14 @@ async function startDownload() {
     document.getElementById("opt-speed-limit").value = "";
   } finally {
     btn.disabled = false;
-    btn.textContent = "DOWNLOAD";
+    btn.textContent = "Download";
   }
 }
 
 function actionBtn(action, id) {
   if (action === "cancel") {
-    if (!confirm("Cancel this download? The partial file will be deleted.")) {
+    if (!confirm("Cancel this download? The partial file will be deleted."))
       return;
-    }
   }
   window.c_action_download(action, id);
 }
@@ -70,9 +94,10 @@ window.setConnectionState = function (connected) {
     : "block";
 };
 
-const rowElements = new Map(); // id -> refs, lives for the page's lifetime
+const rowElements = new Map();
 const expandedRows = new Set();
 const loadingDetails = new Set();
+const detailsCache = new Map();
 
 function renderButtons(status, id) {
   const isActivelike = status === "ACTIVE" || status === "QUEUED";
@@ -89,38 +114,15 @@ function renderButtons(status, id) {
   return html;
 }
 
-function detailLine(key, value, masked) {
-  if (!value) {
-    return `<div class="detail-line"><span class="detail-key">${key}</span><span class="detail-empty">not set</span></div>`;
-  }
-  if (masked) {
-    return `<div class="detail-line">
-            <span class="detail-key">${key}</span>
-            <span class="detail-val" data-masked="true">••••••••</span>
-            <button class="reveal-btn" onclick="toggleReveal(this, '${escapeAttr(value)}')">show</button>
-        </div>`;
-  }
-  return `<div class="detail-line"><span class="detail-key">${key}</span><span class="detail-val">${escapeHtml(value)}</span></div>`;
-}
-
 function escapeHtml(s) {
   const d = document.createElement("div");
   d.textContent = s;
   return d.innerHTML;
 }
+
 function escapeAttr(s) {
   return s.replace(/'/g, "\\'").replace(/\n/g, "\\n");
 }
-
-function toggleReveal(btn, value) {
-  const span = btn.previousElementSibling;
-  const revealed = span.dataset.masked === "false";
-  span.textContent = revealed ? "••••••••" : value;
-  span.dataset.masked = revealed ? "true" : "false";
-  btn.textContent = revealed ? "show" : "hide";
-}
-
-const detailsCache = new Map(); // id -> { cookie, referrer, extra_headers, expected_sha256, speed_limit_bps }
 
 function detailLine(key, value, masked) {
   if (!value) {
@@ -134,15 +136,6 @@ function detailLine(key, value, masked) {
         </div>`;
   }
   return `<div class="detail-line"><span class="detail-key">${key}</span><span class="detail-val">${escapeHtml(value)}</span></div>`;
-}
-
-function escapeHtml(s) {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
-}
-function escapeAttr(s) {
-  return s.replace(/'/g, "\\'").replace(/\n/g, "\\n");
 }
 
 function toggleReveal(btn, value) {
@@ -179,15 +172,10 @@ async function toggleDetails(id) {
     loadingDetails.delete(id);
   }
   refs.detailsEl.classList.toggle("open", refs.detailsOpen);
-  refs.toggleEl.textContent = refs.detailsOpen
-    ? "Hide details ▴"
-    : "Show details ▾";
+  refs.toggleEl.textContent = refs.detailsOpen ? "Hide details" : "Details";
 
-  if (!refs.detailsOpen) return; // collapsing needs no fetch
+  if (!refs.detailsOpen) return;
 
-  // Lazy fetch — only hits the daemon the first time a row is opened,
-  // then serves from detailsCache on subsequent opens. This is the
-  // memory/bandwidth win: nothing heavy is fetched until the user asks.
   if (detailsCache.has(id)) {
     refs.detailsEl.innerHTML = renderDetailsContent(detailsCache.get(id));
     return;
@@ -205,11 +193,8 @@ async function toggleDetails(id) {
     ]);
     const result =
       typeof resultJson === "string" ? JSON.parse(resultJson) : resultJson;
-    if (!result || !result.ok) {
-      throw new Error("details request rejected");
-    }
+    if (!result || !result.ok) throw new Error("details request rejected");
     detailsCache.set(id, result);
-    // Re-check in case the panel was closed while the fetch was in flight.
     if (refs.detailsOpen) {
       refs.detailsEl.innerHTML = renderDetailsContent(result);
     }
@@ -227,18 +212,19 @@ function createRow(dl) {
   const el = document.createElement("div");
   el.className = "download-item";
   el.innerHTML = `
-        <div class="dl-header">
-            <span class="dl-title">ID: ${dl.id} | ${dl.url}</span>
+        <div class="row-top">
+            <div>
+                <span class="row-id">#${dl.id}</span><span class="row-title">${escapeHtml(dl.url)}</span>
+                <div class="row-path">${dl.dest_path ? escapeHtml(dl.dest_path) : "Default download folder"}</div>
+            </div>
             <span class="status-badge status-${dl.status}">${dl.status}</span>
         </div>
-        <div class="progress-bar">
-            <div class="progress-fill"></div>
-        </div>
-        <div class="dl-controls">
-            <span class="status-text"></span>
+        <div class="row-main">
+            <div class="progress-track"><div class="progress-fill"></div></div>
+            <span class="row-percent status-text"></span>
             <div class="btn-group"></div>
         </div>
-        <button class="row-details-toggle" onclick="toggleDetails(${dl.id})">Show details ▾</button>
+        <button class="row-details-toggle" onclick="toggleDetails(${dl.id})">Details</button>
         <div class="row-details" id="details-${dl.id}"></div>
     `;
   return {
@@ -260,20 +246,36 @@ function updateRow(refs, dl) {
   refs.pctEl.textContent = pct + "%";
 
   if (refs.lastStatus !== dl.status) {
+    refs.el.dataset.status = dl.status;
     refs.badgeEl.textContent = dl.status;
     refs.badgeEl.className = `status-badge status-${dl.status}`;
     refs.btnGroupEl.innerHTML = renderButtons(dl.status, dl.id);
     refs.lastStatus = dl.status;
   }
-  // No details rendering here at all now — purely lazy, driven by
-  // toggleDetails() on click.
+}
+
+function updateMetrics(downloads) {
+  let active = 0,
+    queued = 0,
+    done = 0;
+  for (const dl of downloads) {
+    if (dl.status === "ACTIVE") active++;
+    else if (dl.status === "QUEUED") queued++;
+    else if (dl.status === "DONE") done++;
+  }
+  metricTotal.textContent = String(downloads.length);
+  metricActive.textContent = String(active);
+  metricQueued.textContent = String(queued);
+  metricDone.textContent = String(done);
 }
 
 window.updateState = function (downloads) {
+  const list = Array.isArray(downloads) ? downloads : [];
+  updateMetrics(list);
   const seen = new Set();
   const fragment = document.createDocumentFragment();
 
-  for (const dl of Array.isArray(downloads) ? downloads : []) {
+  for (const dl of list) {
     seen.add(dl.id);
     let refs = rowElements.get(dl.id);
     if (!refs) {
@@ -285,9 +287,11 @@ window.updateState = function (downloads) {
     if (expandedRows.has(dl.id)) {
       refs.detailsOpen = true;
       refs.detailsEl.classList.add("open");
-      refs.toggleEl.textContent = "Hide details ▴";
+      refs.toggleEl.textContent = "Hide details";
       if (detailsCache.has(dl.id)) {
-        refs.detailsEl.innerHTML = renderDetailsContent(detailsCache.get(dl.id));
+        refs.detailsEl.innerHTML = renderDetailsContent(
+          detailsCache.get(dl.id),
+        );
       } else if (loadingDetails.has(dl.id)) {
         refs.detailsEl.innerHTML =
           '<div class="detail-line"><span class="detail-empty">Loading…</span></div>';
@@ -302,9 +306,7 @@ window.updateState = function (downloads) {
       rowElements.delete(id);
       expandedRows.delete(id);
       loadingDetails.delete(id);
-      if (refs.el.parentNode) {
-        refs.el.parentNode.removeChild(refs.el);
-      }
+      if (refs.el.parentNode) refs.el.parentNode.removeChild(refs.el);
     }
   }
 
@@ -312,6 +314,7 @@ window.updateState = function (downloads) {
   downloadsContainer.appendChild(fragment);
 
   if (rowElements.size === 0) {
-    downloadsContainer.innerHTML = '<div class="empty-state">No downloads yet.</div>';
+    downloadsContainer.innerHTML =
+      '<div class="empty-state">No downloads yet — paste a URL above to get started.</div>';
   }
 };

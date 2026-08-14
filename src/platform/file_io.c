@@ -13,11 +13,35 @@
 #ifndef _WIN32
 
 #include <fcntl.h>
+#include <libgen.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+static void ensure_parent_dirs_exist(const char *path) {
+  char temp[1024];
+  strncpy(temp, path, sizeof(temp) - 1);
+  temp[sizeof(temp) - 1] = '\0';
+
+  char *dir = dirname(temp);
+  if (!dir || strcmp(dir, ".") == 0 || strcmp(dir, "/") == 0)
+    return;
+
+  char p[1024];
+  size_t len = strlen(dir);
+  for (size_t i = 1; i < len; i++) {
+    if (dir[i] == '/') {
+      dir[i] = '\0';
+      mkdir(dir, 0755);
+      dir[i] = '/';
+    }
+  }
+  mkdir(dir, 0755);
+}
+
 int file_preallocate(const char *path, uint64_t total_size) {
+  ensure_parent_dirs_exist(path);
+
   /* Create the file exclusively; fail if it already exists or is a symlink. */
   int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
   if (fd < 0) {
@@ -117,8 +141,10 @@ int file_pwrite(FileHandle fd, const void *buf, size_t n, uint64_t offset) {
 int file_preallocate(const char *path, uint64_t total_size) {
   HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW,
                          FILE_ATTRIBUTE_NORMAL, NULL);
-  if (h == INVALID_HANDLE_VALUE)
-    return -1;
+  if (h == INVALID_HANDLE_VALUE) {
+    DWORD err = GetLastError();
+    return (err == ERROR_FILE_EXISTS || err == ERROR_ALREADY_EXISTS) ? -2 : -1;
+  }
 
   if (total_size == 0) {
     CloseHandle(h);
