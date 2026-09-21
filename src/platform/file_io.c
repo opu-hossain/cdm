@@ -27,7 +27,6 @@ static void ensure_parent_dirs_exist(const char *path) {
   if (!dir || strcmp(dir, ".") == 0 || strcmp(dir, "/") == 0)
     return;
 
-  char p[1024];
   size_t len = strlen(dir);
   for (size_t i = 1; i < len; i++) {
     if (dir[i] == '/') {

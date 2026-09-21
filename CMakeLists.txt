@@ -7,6 +7,20 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(DOWNLOADMGR_ENABLE_WARNINGS "Enable warnings for project targets" ON)
+
+function(downloadmgr_enable_warnings target)
+    if(NOT DOWNLOADMGR_ENABLE_WARNINGS)
+        return()
+    endif()
+
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
+
 include(CTest)
 
 # Make FetchContent verbose so you can see download progress and logs for debugging
@@ -46,6 +60,7 @@ FetchContent_MakeAvailable(curl)
 FetchContent_Declare(
     sqlite3
     URL https://sqlite.org/2024/sqlite-amalgamation-3460000.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(sqlite3)
 
@@ -58,7 +73,7 @@ target_include_directories(sqlite3 PUBLIC ${sqlite3_SOURCE_DIR})
 FetchContent_Declare(
     webview
     GIT_REPOSITORY https://github.com/webview/webview.git
-    GIT_TAG master
+    GIT_TAG cbbdee44afff22867de9fd88a9fc8350d9bdd399
 )
 FetchContent_MakeAvailable(webview)
 
@@ -117,6 +132,7 @@ add_library(downloadmgr_core STATIC
     ${CORE_SOURCES}
     ${PERSISTENCE_SOURCES}
 )
+downloadmgr_enable_warnings(downloadmgr_core)
 
 target_include_directories(downloadmgr_core PRIVATE src)
 target_link_libraries(downloadmgr_core PUBLIC
@@ -144,6 +160,7 @@ add_executable(downloadmgr
     src/gui/gui_worker.c
     src/daemon/daemon.c
 )
+downloadmgr_enable_warnings(downloadmgr)
 
 target_include_directories(downloadmgr PRIVATE src)
 
@@ -164,6 +181,7 @@ add_custom_command(TARGET downloadmgr POST_BUILD
 add_executable(downloadmgr_native_host
     src/native_host/main_host.c
 )
+downloadmgr_enable_warnings(downloadmgr_native_host)
 
 target_link_libraries(downloadmgr_native_host PRIVATE downloadmgr_core)
 

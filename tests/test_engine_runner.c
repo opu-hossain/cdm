@@ -12,6 +12,7 @@
 
 // --- Mocks for external dependencies ---
 int curl_client_head(const char *url, const RequestContext *ctx, FileInfo *out) {
+  (void)url;
   (void)ctx;
   out->total_size = 1000;
   out->supports_ranges = true;
@@ -27,6 +28,13 @@ WorkerPoolResult worker_pool_run(const char *url, const Range *ranges,
                                  uint64_t total_speed_limit_bps,
                                  const RequestContext *ctx_in,
                                  RebalancePool *rebalance) {
+  (void)url;
+  (void)ranges;
+  (void)total_bytes_downloaded;
+  (void)cancel_flag;
+  (void)pause_flag;
+  (void)chunk_progress_slots;
+  (void)total_speed_limit_bps;
   (void)ctx_in;
   (void)rebalance;
   WorkerPoolResult res = {.all_succeeded = true,
