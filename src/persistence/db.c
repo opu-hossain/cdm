@@ -18,16 +18,27 @@
 
 static sqlite3 *g_db = NULL;
 
+static bool db_ready(void) { return g_db != NULL; }
+
 /* ------------------------------------------------------------------ */
 /*  Lifecycle                                                         */
 /* ------------------------------------------------------------------ */
 
 int db_init(const char *db_path) {
-  int rc = sqlite3_open(db_path, &g_db);
+  if (!db_path || db_path[0] == '\0')
+    return -1;
+
+  db_close();
+  sqlite3 *opened_db = NULL;
+  int rc = sqlite3_open(db_path, &opened_db);
   if (rc != SQLITE_OK) {
-    LOG_ERROR("cannot open database %s: %s", db_path, sqlite3_errmsg(g_db));
+    LOG_ERROR("cannot open database %s: %s", db_path,
+              opened_db ? sqlite3_errmsg(opened_db) : "unknown error");
+    if (opened_db)
+      sqlite3_close(opened_db);
     return -1;
   }
+  g_db = opened_db;
 
   /* Enable WAL for better concurrent read performance. */
   sqlite3_exec(g_db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
@@ -61,6 +72,7 @@ int db_init(const char *db_path) {
   if (rc != SQLITE_OK) {
     LOG_ERROR("schema creation failed: %s", err_msg);
     sqlite3_free(err_msg);
+    db_close();
     return -1;
   }
 
@@ -75,7 +87,18 @@ int db_init(const char *db_path) {
     char sql[256];
     snprintf(sql, sizeof(sql), "ALTER TABLE downloads ADD COLUMN %s",
              new_columns[i]);
-    sqlite3_exec(g_db, sql, NULL, NULL, NULL);
+    char *migration_error = NULL;
+    rc = sqlite3_exec(g_db, sql, NULL, NULL, &migration_error);
+    if (rc != SQLITE_OK &&
+        (!migration_error ||
+         strstr(migration_error, "duplicate column name") == NULL)) {
+      LOG_ERROR("migration failed for '%s': %s", sql,
+                migration_error ? migration_error : "unknown error");
+      sqlite3_free(migration_error);
+      db_close();
+      return -1;
+    }
+    sqlite3_free(migration_error);
   }
 
   LOG_INFO("opened %s", db_path);
@@ -95,6 +118,8 @@ void db_close(void) {
 
 int db_insert_download(uint32_t id, const char *url, const char *dest_path,
                        const RequestOptions *opts) {
+  if (!db_ready() || !url || !dest_path)
+    return -1;
   const char *sql =
       "INSERT OR REPLACE INTO downloads "
       "(id, url, dest_path, status, created_at, cookie, referrer, "
@@ -127,6 +152,8 @@ int db_insert_download(uint32_t id, const char *url, const char *dest_path,
 }
 
 int db_update_status(uint32_t id, const char *status) {
+  if (!db_ready() || !status)
+    return -1;
   const char *sql = "UPDATE downloads SET status = ? WHERE id = ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
@@ -144,6 +171,8 @@ int db_update_status(uint32_t id, const char *status) {
 }
 
 int db_update_total_size(uint32_t id, uint64_t total_size) {
+  if (!db_ready())
+    return -1;
   const char *sql = "UPDATE downloads SET total_size = ? WHERE id = ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
@@ -166,6 +195,8 @@ int db_update_total_size(uint32_t id, uint64_t total_size) {
 
 int db_insert_chunk(uint32_t download_id, uint64_t range_start,
                     uint64_t range_end) {
+  if (!db_ready())
+    return -1;
   const char *sql =
       "INSERT INTO chunks (download_id, range_start, range_end, bytes_done) "
       "VALUES (?, ?, ?, 0)";
@@ -187,6 +218,8 @@ int db_insert_chunk(uint32_t download_id, uint64_t range_start,
 
 int db_update_chunk_progress(uint32_t download_id, uint64_t range_start,
                              uint64_t bytes_done) {
+  if (!db_ready())
+    return -1;
   const char *sql = "UPDATE chunks SET bytes_done = ? "
                     "WHERE download_id = ? AND range_start = ?";
   sqlite3_stmt *stmt = NULL;
@@ -207,6 +240,8 @@ int db_update_chunk_progress(uint32_t download_id, uint64_t range_start,
 
 int db_update_chunk_range(uint32_t download_id, uint64_t range_start,
                           uint64_t new_range_end) {
+  if (!db_ready())
+    return -1;
   const char *sql = "UPDATE chunks SET range_end = ? "
                     "WHERE download_id = ? AND range_start = ?";
   sqlite3_stmt *stmt = NULL;
@@ -226,6 +261,8 @@ int db_update_chunk_range(uint32_t download_id, uint64_t range_start,
 }
 
 int db_delete_chunks(uint32_t download_id) {
+  if (!db_ready())
+    return -1;
   const char *sql = "DELETE FROM chunks WHERE download_id = ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
@@ -246,6 +283,8 @@ int db_delete_chunks(uint32_t download_id) {
 /* ------------------------------------------------------------------ */
 
 int db_load_chunks(uint32_t download_id, DbChunkRow *out, int max) {
+  if (!db_ready() || !out || max <= 0)
+    return 0;
   const char *sql = "SELECT range_start, range_end, bytes_done FROM chunks "
                     "WHERE download_id = ? ORDER BY range_start";
   sqlite3_stmt *stmt = NULL;
@@ -268,6 +307,8 @@ int db_load_chunks(uint32_t download_id, DbChunkRow *out, int max) {
 }
 
 int db_list_all_downloads(DbDownloadRow *out, int max) {
+  if (!db_ready() || !out || max <= 0)
+    return 0;
   const char *sql =
       "SELECT id, url, dest_path, status FROM downloads "
       "ORDER BY id DESC LIMIT ?";
@@ -298,6 +339,8 @@ int db_list_all_downloads(DbDownloadRow *out, int max) {
 }
 
 int db_count_downloads(int max) {
+  if (!db_ready() || max < 0)
+    return -1;
   const char *sql = "SELECT COUNT(*) FROM downloads";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
@@ -313,7 +356,7 @@ int db_count_downloads(int max) {
 }
 
 int db_visit_downloads(DbDownloadVisitor visitor, void *ctx, int max) {
-  if (!visitor || max <= 0)
+  if (!db_ready() || !visitor || max <= 0)
     return -1;
 
   const char *sql =
@@ -345,6 +388,8 @@ int db_visit_downloads(DbDownloadVisitor visitor, void *ctx, int max) {
 }
 
 int db_get_download_details(uint32_t id, IpcDownloadDetails *out) {
+  if (!db_ready() || !out)
+    return -1;
   const char *sql = "SELECT cookie, referrer, extra_headers, expected_sha256, "
                     "speed_limit_bps FROM downloads WHERE id = ?";
   sqlite3_stmt *stmt = NULL;
@@ -379,6 +424,8 @@ int db_get_download_details(uint32_t id, IpcDownloadDetails *out) {
 }
 
 uint32_t db_get_max_id(void) {
+  if (!db_ready())
+    return 0;
   const char *sql = "SELECT MAX(id) FROM downloads";
   sqlite3_stmt *stmt = NULL;
   uint32_t max_id = 0;
@@ -393,6 +440,8 @@ uint32_t db_get_max_id(void) {
 }
 
 int db_restore_queue(void) {
+  if (!db_ready())
+    return -1;
   const char *sql = "SELECT id, url, dest_path, total_size, status, priority, "
                     "cookie, referrer, extra_headers, expected_sha256, "
                     "speed_limit_bps "

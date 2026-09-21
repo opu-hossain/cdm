@@ -59,3 +59,23 @@ Test(db, get_max_id) {
   max = db_get_max_id();
   cr_assert_eq(max, 5);
 }
+
+Test(db, operations_fail_cleanly_when_closed) {
+  db_close();
+
+  cr_assert_eq(db_insert_download(1, "http://closed", "/tmp/closed", NULL),
+               -1);
+  cr_assert_eq(db_update_status(1, "ERROR"), -1);
+  cr_assert_eq(db_update_total_size(1, 1), -1);
+  cr_assert_eq(db_insert_chunk(1, 0, 1), -1);
+  cr_assert_eq(db_update_chunk_progress(1, 0, 1), -1);
+  cr_assert_eq(db_update_chunk_range(1, 0, 2), -1);
+  cr_assert_eq(db_delete_chunks(1), -1);
+
+  DbChunkRow chunks[1];
+  cr_assert_eq(db_load_chunks(1, chunks, 1), 0);
+  cr_assert_eq(db_list_all_downloads(NULL, 1), 0);
+  cr_assert_eq(db_count_downloads(1), -1);
+  cr_assert_eq(db_get_max_id(), 0);
+  cr_assert_eq(db_restore_queue(), -1);
+}
