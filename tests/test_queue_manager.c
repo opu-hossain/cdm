@@ -14,7 +14,7 @@ static void teardown(void) {
 TestSuite(queue_manager, .init = setup, .fini = teardown);
 
 Test(queue_manager, add_and_find) {
-  uint32_t id = queue_manager_add("http://example.com/file", "/tmp/file");
+  uint32_t id = queue_manager_add("http://example.com/file", "/tmp/file", NULL);
   cr_assert_neq(id, 0);
   Download *d = queue_manager_find_by_id(id);
   cr_assert_not_null(d);
@@ -25,7 +25,7 @@ Test(queue_manager, add_and_find) {
 }
 
 Test(queue_manager, update_status) {
-  uint32_t id = queue_manager_add("http://example.com", "/tmp/file");
+  uint32_t id = queue_manager_add("http://example.com", "/tmp/file", NULL);
   cr_assert_neq(id, 0); // ensure add succeeded
   queue_manager_update_status(id, DOWNLOAD_ACTIVE);
   Download *d = queue_manager_find_by_id(id);
@@ -35,8 +35,8 @@ Test(queue_manager, update_status) {
 }
 
 Test(queue_manager, count_by_status) {
-  uint32_t id1 = queue_manager_add("http://a", "/tmp/a");
-  uint32_t id2 = queue_manager_add("http://b", "/tmp/b");
+  uint32_t id1 = queue_manager_add("http://a", "/tmp/a", NULL);
+  uint32_t id2 = queue_manager_add("http://b", "/tmp/b", NULL);
   cr_assert_neq(id1, 0);
   cr_assert_neq(id2, 0);
   queue_manager_update_status(id1, DOWNLOAD_ACTIVE);
@@ -49,16 +49,54 @@ Test(queue_manager, count_by_status) {
 }
 
 Test(queue_manager, remove) {
-  uint32_t id = queue_manager_add("http://example.com", "/tmp/file");
+  uint32_t id = queue_manager_add("http://example.com", "/tmp/file", NULL);
   cr_assert_neq(id, 0);
   queue_manager_remove(id);
   Download *d = queue_manager_find_by_id(id);
   cr_assert_null(d);
 }
 
+Test(queue_manager, remove_active_requests_cancel_without_freeing) {
+  uint32_t id = queue_manager_add("http://example.com", "/tmp/file", NULL);
+  cr_assert_neq(id, 0);
+  queue_manager_update_status(id, DOWNLOAD_ACTIVE);
+
+  queue_manager_remove(id);
+
+  Download *d = queue_manager_find_by_id(id);
+  cr_assert_not_null(d);
+  cr_assert(atomic_load(&d->cancel_requested));
+
+  queue_manager_update_status(id, DOWNLOAD_ERROR);
+  queue_manager_remove(id);
+  cr_assert_null(queue_manager_find_by_id(id));
+}
+
+Test(queue_manager, request_options_are_optional_and_owned) {
+  RequestOptions empty = {0};
+  uint32_t empty_id =
+      queue_manager_add("http://example.com/empty", "/tmp/empty", &empty);
+  cr_assert_neq(empty_id, 0);
+  cr_assert_null(queue_manager_find_by_id(empty_id)->request);
+
+  RequestOptions options = {0};
+  strcpy(options.cookie, "session=abc");
+  uint32_t id =
+      queue_manager_add("http://example.com/options", "/tmp/options", &options);
+  cr_assert_neq(id, 0);
+  options.cookie[0] = '\0';
+
+  Download *download = queue_manager_find_by_id(id);
+  cr_assert_not_null(download->request);
+  cr_assert_str_eq(download->request->cookie, "session=abc");
+
+  queue_manager_remove(empty_id);
+  queue_manager_remove(id);
+}
+
 Test(queue_manager, snapshot_active_progress) {
-  uint32_t id1 = queue_manager_add("http://a", "/tmp/a");
-  uint32_t id2 = queue_manager_add("http://b", "/tmp/b");
+  uint32_t id1 = queue_manager_add("http://a", "/tmp/a", NULL);
+  uint32_t id2 = queue_manager_add("http://b", "/tmp/b", NULL);
   cr_assert_neq(id1, 0);
   cr_assert_neq(id2, 0);
   queue_manager_update_status(id1, DOWNLOAD_ACTIVE);

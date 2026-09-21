@@ -32,9 +32,10 @@ Test(curl_client, header_callback_ignores_other_headers) {
 }
 
 Test(curl_client, head_failure_on_invalid_url) {
-  FileInfo info;
+  FileInfo info = {0};
+  RequestContext ctx = {0};
   int rc = curl_client_head("http://this-domain-does-not-exist-1234567890.com/",
-                            &info);
+                            &ctx, &info);
   cr_assert_eq(rc, -1);
   cr_assert_eq(info.total_size, 0);
 }

@@ -88,11 +88,13 @@ static void clear_resume_state(struct Download *d, bool also_delete_file) {
 /* ------------------------------------------------------------------ */
 
 int engine_run_download(struct Download *d) {
+  const RequestOptions *request = d->request;
+
   LOG_INFO("Starting download: %s\n", d->url);
 
-  if (d->request.expected_sha256[0])
+  if (request && request->expected_sha256[0])
     LOG_INFO("Download %u will verify SHA-256: %s\n", d->id,
-             d->request.expected_sha256);
+             request->expected_sha256);
 
   if (!is_valid_url(d->url)) {
     LOG_ERROR("Invalid URL scheme (only http/https allowed): %s\n", d->url);
@@ -100,10 +102,11 @@ int engine_run_download(struct Download *d) {
   }
 
   RequestContext req_ctx = {
-      .cookie = d->request.cookie[0] ? d->request.cookie : NULL,
-      .referrer = d->request.referrer[0] ? d->request.referrer : NULL,
-      .extra_headers =
-          d->request.extra_headers[0] ? d->request.extra_headers : NULL,
+      .cookie = request && request->cookie[0] ? request->cookie : NULL,
+      .referrer = request && request->referrer[0] ? request->referrer : NULL,
+      .extra_headers = request && request->extra_headers[0]
+                 ? request->extra_headers
+                 : NULL,
   };
 
   FileInfo info;
@@ -167,7 +170,7 @@ int engine_run_download(struct Download *d) {
 
     if (n_ranges == 0) {
       if (engine_finalize(d->dest_path, info.total_size,
-                          d->request.expected_sha256) != 0) {
+                          request ? request->expected_sha256 : NULL) != 0) {
         clear_resume_state(d, true);
         return -2;
       }
@@ -220,7 +223,7 @@ int engine_run_download(struct Download *d) {
   for (int i = 0; i < n_ranges; i++)
     chunk_progress_slots[i] = &d->chunk_live_bytes[chunk_slot_for_range[i]];
 
-  uint64_t speed_limit = d->request.speed_limit_bps;
+  uint64_t speed_limit = request ? request->speed_limit_bps : 0;
 
   SplitCallbackCtx split_ctx = {.d = d};
   RebalancePool *pool = NULL;
@@ -277,7 +280,7 @@ int engine_run_download(struct Download *d) {
            (unsigned long long)result.total_bytes_downloaded);
 
   if (engine_finalize(d->dest_path, info.total_size,
-                      d->request.expected_sha256) != 0) {
+                      request ? request->expected_sha256 : NULL) != 0) {
     clear_resume_state(d, true);
     return -2;
   }

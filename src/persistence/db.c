@@ -384,15 +384,26 @@ int db_restore_queue(void) {
 
     strncpy(d->url, url ? url : "", sizeof(d->url) - 1);
     strncpy(d->dest_path, path ? path : "", sizeof(d->dest_path) - 1);
-    strncpy(d->request.cookie, cookie ? cookie : "",
-            sizeof(d->request.cookie) - 1);
-    strncpy(d->request.referrer, referrer ? referrer : "",
-            sizeof(d->request.referrer) - 1);
-    strncpy(d->request.extra_headers, headers ? headers : "",
-            sizeof(d->request.extra_headers) - 1);
-    strncpy(d->request.expected_sha256, sha256 ? sha256 : "",
-            sizeof(d->request.expected_sha256) - 1);
-    d->request.speed_limit_bps = speed_limit;
+        RequestOptions options = {0};
+        strncpy(options.cookie, cookie ? cookie : "", sizeof(options.cookie) - 1);
+        strncpy(options.referrer, referrer ? referrer : "",
+          sizeof(options.referrer) - 1);
+        strncpy(options.extra_headers, headers ? headers : "",
+          sizeof(options.extra_headers) - 1);
+        strncpy(options.expected_sha256, sha256 ? sha256 : "",
+          sizeof(options.expected_sha256) - 1);
+        options.speed_limit_bps = speed_limit;
+
+        if (options.cookie[0] != '\0' || options.referrer[0] != '\0' ||
+      options.extra_headers[0] != '\0' ||
+      options.expected_sha256[0] != '\0' || options.speed_limit_bps != 0) {
+          d->request = malloc(sizeof(*d->request));
+          if (!d->request) {
+      free(d);
+      continue;
+          }
+          *d->request = options;
+        }
 
     /* Map status string to enum. */
     if (strcmp(stat, "QUEUED") == 0)

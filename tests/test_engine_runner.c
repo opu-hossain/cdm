@@ -11,7 +11,8 @@
 #include <unistd.h>
 
 // --- Mocks for external dependencies ---
-int curl_client_head(const char *url, FileInfo *out) {
+int curl_client_head(const char *url, const RequestContext *ctx, FileInfo *out) {
+  (void)ctx;
   out->total_size = 1000;
   out->supports_ranges = true;
   return 0;
@@ -23,7 +24,11 @@ WorkerPoolResult worker_pool_run(const char *url, const Range *ranges,
                                  _Atomic bool *cancel_flag,
                                  _Atomic bool *pause_flag,
                                  _Atomic uint64_t **chunk_progress_slots,
-                                 uint64_t total_speed_limit_bps) {
+                                 uint64_t total_speed_limit_bps,
+                                 const RequestContext *ctx_in,
+                                 RebalancePool *rebalance) {
+  (void)ctx_in;
+  (void)rebalance;
   WorkerPoolResult res = {.all_succeeded = true,
                           .total_bytes_downloaded = 1000};
   for (int i = 0; i < n_workers; i++) {
@@ -32,6 +37,21 @@ WorkerPoolResult worker_pool_run(const char *url, const Range *ranges,
   file_preallocate(dest_path, 1000);
   return res;
 }
+
+RebalancePool *rebalance_pool_create(const Range *ranges, int n_ranges,
+                                     _Atomic uint64_t **progress_slots,
+                                     uint64_t min_steal_bytes,
+                                     RebalanceSplitFn on_split, void *userdata) {
+  (void)ranges;
+  (void)n_ranges;
+  (void)progress_slots;
+  (void)min_steal_bytes;
+  (void)on_split;
+  (void)userdata;
+  return NULL;
+}
+
+void rebalance_pool_destroy(RebalancePool *pool) { (void)pool; }
 
 // --- Setup / teardown ---
 static void setup_engine_test(void) {

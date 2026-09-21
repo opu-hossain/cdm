@@ -7,6 +7,8 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+include(CTest)
+
 # Make FetchContent verbose so you can see download progress and logs for debugging
 set(FETCHCONTENT_QUIET OFF)
 
@@ -17,6 +19,10 @@ include(FetchContent)
 # ============================================================
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBNOTIFY REQUIRED IMPORTED_TARGET libnotify)
+
+if(BUILD_TESTING)
+    pkg_check_modules(CRITERION REQUIRED IMPORTED_TARGET criterion)
+endif()
 
 # ============================================================
 # libcurl – always fetched (can be changed to system later)
@@ -160,3 +166,7 @@ add_executable(downloadmgr_native_host
 )
 
 target_link_libraries(downloadmgr_native_host PRIVATE downloadmgr_core)
+
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()

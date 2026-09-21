@@ -1,5 +1,5 @@
 #include "../src/platform/ipc_socket.h"
-#include "../src/platform/log.h"
+#include "../src/utils/log.h"
 #include <criterion/criterion.h>
 #include <unistd.h>
 
@@ -34,7 +34,8 @@ Test(ipc, client_connect_send_receive, .disabled = true) {
   int client_fd = ipc_client_connect();
   cr_assert_gt(client_fd, 0);
 
-  uint32_t id = ipc_send_add_download(client_fd, "http://test", "/tmp/test");
+  uint32_t id =
+      ipc_send_add_download(client_fd, "http://test", "/tmp/test", NULL);
   cr_assert_neq(id, 0);
 
   ipc_client_disconnect(client_fd);

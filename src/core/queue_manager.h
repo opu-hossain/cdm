@@ -69,7 +69,7 @@ typedef struct Download {
   int retry_count;
   time_t next_retry_at;
 
-  RequestOptions request;
+  RequestOptions *request;
 } Download;
 
 /* ------------------------------------------------------------------ */

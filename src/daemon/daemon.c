@@ -26,19 +26,11 @@
 /*  Internal helpers                                                  */
 /* ------------------------------------------------------------------ */
 
-/**
- * Signal handler – stops the IPC server, closes the database, and
- * cleans up global state before exiting.
- */
-static void cleanup_and_exit(int sig) {
+static volatile sig_atomic_t g_shutdown_requested = 0;
+
+static void request_shutdown(int sig) {
   (void)sig;
-  LOG_INFO("Received shutdown signal, cleaning up");
-  ipc_server_stop();
-  db_close();
-  curl_global_cleanup();
-  dm_notify_shutdown();
-  log_close();
-  exit(0);
+  g_shutdown_requested = 1;
 }
 
 /** Create a directory if it doesn't already exist. */
@@ -145,8 +137,8 @@ int run_daemon(void) {
     return 1;
   }
 
-  signal(SIGINT, cleanup_and_exit);
-  signal(SIGTERM, cleanup_and_exit);
+  signal(SIGINT, request_shutdown);
+  signal(SIGTERM, request_shutdown);
 #ifndef _WIN32
   signal(SIGPIPE, SIG_IGN);
 #endif
@@ -155,7 +147,7 @@ int run_daemon(void) {
 
   /* Main event loop (tick ≈ 200 ms). */
   int iteration = 0;
-  for (;;) {
+  while (!g_shutdown_requested) {
     if (iteration % 25 == 0) /* roughly every 5 seconds */
       LOG_DEBUG("Daemon heartbeat: iter %d", iteration);
     iteration++;
@@ -167,6 +159,12 @@ int run_daemon(void) {
     dm_thread_sleep_ms(200);
   }
 
-  /* Unreachable – cleanup_and_exit() calls exit(0). */
+  LOG_INFO("Received shutdown signal, cleaning up");
+  ipc_server_stop();
+  scheduler_shutdown();
+  db_close();
+  curl_global_cleanup();
+  dm_notify_shutdown();
+  log_close();
   return 0;
 }

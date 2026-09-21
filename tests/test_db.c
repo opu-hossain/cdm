@@ -11,7 +11,7 @@ TestSuite(db, .init = setup_db, .fini = close_db);
 
 Test(db, insert_download_and_chunks) {
   uint32_t id = 1;
-  int rc = db_insert_download(id, "http://test", "/tmp/test");
+  int rc = db_insert_download(id, "http://test", "/tmp/test", NULL);
   cr_assert_eq(rc, 0);
 
   rc = db_insert_chunk(id, 0, 100);
@@ -41,7 +41,7 @@ Test(db, insert_download_and_chunks) {
 
 Test(db, update_status_and_total_size) {
   uint32_t id = 2;
-  db_insert_download(id, "http://test2", "/tmp/test2");
+  db_insert_download(id, "http://test2", "/tmp/test2", NULL);
   db_update_status(id, "ACTIVE");
   db_update_total_size(id, 1024);
 
@@ -55,7 +55,7 @@ Test(db, get_max_id) {
   uint32_t max = db_get_max_id();
   cr_assert_eq(max, 0); // empty table
 
-  db_insert_download(5, "http://x", "/tmp/x");
+  db_insert_download(5, "http://x", "/tmp/x", NULL);
   max = db_get_max_id();
   cr_assert_eq(max, 5);
 }

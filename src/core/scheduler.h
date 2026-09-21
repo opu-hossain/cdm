@@ -16,6 +16,9 @@ extern "C" {
  */
 void scheduler_tick(void);
 
+/** Cancel and join all scheduler workers before shared teardown. */
+void scheduler_shutdown(void);
+
 /**
  * Report the current progress of all active downloads to connected IPC
  * clients and persist chunk progress to the database.

@@ -2,18 +2,30 @@
 #include "../src/core/scheduler.h"
 #include "../src/engine/engine_runner.h"
 #include "../src/persistence/db.h"
-#include "../src/platform/config.h"
+#include "../src/platform/thread.h"
+#include "../src/utils/config.h"
 #include <criterion/criterion.h>
 #include <stdio.h>  // for sprintf
 #include <stdlib.h> // for setenv
+#include <stdatomic.h>
 
 // --- Mock engine_run_download (overrides the real one) ---
+static _Atomic int active_workers;
+static _Atomic bool hold_workers;
+
 int engine_run_download(struct Download *d) {
-  return 0; // always success
+  (void)d;
+  atomic_fetch_add(&active_workers, 1);
+  while (atomic_load(&hold_workers))
+    dm_thread_sleep_ms(1);
+  atomic_fetch_sub(&active_workers, 1);
+  return 0;
 }
 
 static void setup_scheduler(void) {
   setenv("DOWNLOADMGR_ROOT", "/tmp", 1);
+  atomic_store(&active_workers, 0);
+  atomic_store(&hold_workers, false);
   db_init(":memory:");
 }
 
@@ -22,9 +34,10 @@ static void teardown_scheduler(void) { db_close(); }
 TestSuite(scheduler, .init = setup_scheduler, .fini = teardown_scheduler);
 
 Test(scheduler, tick_starts_download) {
-  uint32_t id = queue_manager_add("http://example.com", "/tmp/file");
+  uint32_t id = queue_manager_add("http://example.com", "/tmp/file", NULL);
   cr_assert_neq(id, 0);
 
+  atomic_store(&hold_workers, false);
   scheduler_tick();
 
   Download *d = queue_manager_find_by_id(id);
@@ -35,11 +48,12 @@ Test(scheduler, tick_starts_download) {
 }
 
 Test(scheduler, respects_max_active) {
+  atomic_store(&hold_workers, true);
   uint32_t ids[5];
   for (int i = 0; i < 5; i++) {
     char url[100];
     sprintf(url, "http://test%d", i);
-    ids[i] = queue_manager_add(url, "/tmp/file");
+    ids[i] = queue_manager_add(url, "/tmp/file", NULL);
     cr_assert_neq(ids[i], 0);
   }
 
@@ -48,6 +62,11 @@ Test(scheduler, respects_max_active) {
     scheduler_tick();
   }
 
+  for (int i = 0; i < 1000 && atomic_load(&active_workers) <
+                                  config_get_max_concurrent_downloads();
+       i++)
+    dm_thread_sleep_ms(1);
+
   int started = 0;
   for (int i = 0; i < 5; i++) {
     Download *d = queue_manager_find_by_id(ids[i]);
@@ -55,4 +74,9 @@ Test(scheduler, respects_max_active) {
       started++;
   }
   cr_assert_leq(started, config_get_max_concurrent_downloads());
+
+  atomic_store(&hold_workers, false);
+  for (int i = 0; i < 1000 && atomic_load(&active_workers) != 0; i++)
+    dm_thread_sleep_ms(1);
+  cr_assert_eq(atomic_load(&active_workers), 0);
 }

@@ -3,28 +3,32 @@
 #include <criterion/criterion.h>
 #include <unistd.h>
 
-#define TEST_FILE "/tmp/test_finalize.tmp"
+#define CORRECT_SIZE_FILE "/tmp/test_finalize_correct.tmp"
+#define WRONG_SIZE_FILE "/tmp/test_finalize_wrong.tmp"
+#define UNKNOWN_SIZE_FILE "/tmp/test_finalize_unknown.tmp"
 
-static void setup_file(void) {
-  unlink(TEST_FILE);
-  file_preallocate(TEST_FILE, 100);
-}
-
-static void teardown_file(void) { unlink(TEST_FILE); }
-
-TestSuite(finalize, .init = setup_file, .fini = teardown_file);
+TestSuite(finalize);
 
 Test(finalize, correct_size) {
-  int ret = engine_finalize(TEST_FILE, 100, "abc");
+  unlink(CORRECT_SIZE_FILE);
+  file_preallocate(CORRECT_SIZE_FILE, 100);
+  int ret = engine_finalize(CORRECT_SIZE_FILE, 100, NULL);
   cr_assert_eq(ret, 0);
+  unlink(CORRECT_SIZE_FILE);
 }
 
 Test(finalize, wrong_size) {
-  int ret = engine_finalize(TEST_FILE, 200, "abc");
+  unlink(WRONG_SIZE_FILE);
+  file_preallocate(WRONG_SIZE_FILE, 100);
+  int ret = engine_finalize(WRONG_SIZE_FILE, 200, NULL);
   cr_assert_neq(ret, 0);
+  unlink(WRONG_SIZE_FILE);
 }
 
 Test(finalize, unknown_size) {
-  int ret = engine_finalize(TEST_FILE, 0, "abc");
+  unlink(UNKNOWN_SIZE_FILE);
+  file_preallocate(UNKNOWN_SIZE_FILE, 100);
+  int ret = engine_finalize(UNKNOWN_SIZE_FILE, 0, NULL);
   cr_assert_eq(ret, 0);
+  unlink(UNKNOWN_SIZE_FILE);
 }

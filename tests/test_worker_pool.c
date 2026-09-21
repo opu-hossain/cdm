@@ -19,7 +19,7 @@ Test(worker_pool, single_worker_failure) {
   // Use a non‑routable address to force failure.
   WorkerPoolResult res =
       worker_pool_run("http://127.0.0.1:1/", ranges, 1, test_file, &total_bytes,
-                      &cancel, &pause, slots, 1024);
+                      &cancel, &pause, slots, 1024, NULL, NULL);
   cr_assert(!res.all_succeeded);
   unlink(test_file);
 }

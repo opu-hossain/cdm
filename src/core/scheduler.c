@@ -12,7 +12,20 @@
 #include "../utils/log.h"
 #include "../utils/notify.h"
 
+#include <stdatomic.h>
 #include <string.h>
+
+#define SCHEDULER_MAX_WORKERS 64
+
+typedef struct {
+  dm_thread_t thread;
+  Download *download;
+  uint32_t download_id;
+  _Atomic bool done;
+  bool in_use;
+} SchedulerWorker;
+
+static SchedulerWorker g_workers[SCHEDULER_MAX_WORKERS];
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
@@ -80,6 +93,7 @@ static int download_thread_fn(void *arg) {
     db_update_status(dl->id, "CANCELED");
     db_delete_chunks(dl->id);
     ipc_broadcast_status(dl->id, "Canceled", 0.0f);
+    queue_manager_update_status(dl->id, DOWNLOAD_ERROR);
     queue_manager_remove(dl->id);
     return rc;
   }
@@ -145,11 +159,32 @@ static int download_thread_fn(void *arg) {
   return rc;
 }
 
+static int scheduler_worker_fn(void *arg) {
+  SchedulerWorker *worker = (SchedulerWorker *)arg;
+  int result = download_thread_fn(worker->download);
+  atomic_store(&worker->done, true);
+  return result;
+}
+
+static void reap_finished_workers(void) {
+  for (int i = 0; i < SCHEDULER_MAX_WORKERS; i++) {
+    SchedulerWorker *worker = &g_workers[i];
+    if (!worker->in_use || !atomic_load(&worker->done))
+      continue;
+    dm_thread_join(&worker->thread, NULL);
+    worker->download = NULL;
+    worker->download_id = 0;
+    worker->in_use = false;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Public API                                                        */
 /* ------------------------------------------------------------------ */
 
 void scheduler_tick(void) {
+  reap_finished_workers();
+
   dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
 
   dm_mutex_lock(mutex);
@@ -169,15 +204,56 @@ void scheduler_tick(void) {
   dm_mutex_unlock(mutex);
 
   if (next_dl != NULL) {
-    dm_thread_t t;
-    if (dm_thread_create(&t, download_thread_fn, next_dl) == 0) {
-      dm_thread_detach(&t);
-    } else {
+    SchedulerWorker *worker = NULL;
+    for (int i = 0; i < SCHEDULER_MAX_WORKERS; i++) {
+      if (!g_workers[i].in_use) {
+        worker = &g_workers[i];
+        break;
+      }
+    }
+
+    if (worker != NULL) {
+      worker->download = next_dl;
+      worker->download_id = next_dl->id;
+      atomic_store(&worker->done, false);
+      worker->in_use = true;
+    }
+
+    if (worker != NULL &&
+        dm_thread_create(&worker->thread, scheduler_worker_fn, worker) == 0) {
+      return;
+    }
+
+    if (worker != NULL) {
+      worker->download = NULL;
+      worker->download_id = 0;
+      worker->in_use = false;
+    }
+
+    {
       /* rollback on thread creation failure */
       dm_mutex_lock(mutex);
       next_dl->status = DOWNLOAD_QUEUED;
       dm_mutex_unlock(mutex);
     }
+  }
+}
+
+void scheduler_shutdown(void) {
+  for (int i = 0; i < SCHEDULER_MAX_WORKERS; i++) {
+    SchedulerWorker *worker = &g_workers[i];
+    if (worker->in_use)
+      queue_manager_cancel(worker->download_id);
+  }
+
+  for (int i = 0; i < SCHEDULER_MAX_WORKERS; i++) {
+    SchedulerWorker *worker = &g_workers[i];
+    if (!worker->in_use)
+      continue;
+    dm_thread_join(&worker->thread, NULL);
+    worker->download = NULL;
+    worker->download_id = 0;
+    worker->in_use = false;
   }
 }
 

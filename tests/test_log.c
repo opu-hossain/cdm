@@ -1,4 +1,4 @@
-#include "../src/platform/log.h"
+#include "../src/utils/log.h"
 #include <criterion/criterion.h>
 #include <stdio.h>
 #include <unistd.h>

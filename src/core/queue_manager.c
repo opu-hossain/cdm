@@ -21,6 +21,18 @@ static uint32_t g_next_id = 1;
 static dm_mutex_t g_mutex;
 static bool g_mutex_ready = false;
 
+static bool request_options_present(const RequestOptions *opts) {
+  return opts && (opts->cookie[0] != '\0' || opts->referrer[0] != '\0' ||
+                  opts->extra_headers[0] != '\0' ||
+                  opts->expected_sha256[0] != '\0' ||
+                  opts->speed_limit_bps != 0);
+}
+
+static void free_download(Download *download) {
+  free(download->request);
+  free(download);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Static helpers                                                    */
 /* ------------------------------------------------------------------ */
@@ -135,8 +147,14 @@ uint32_t queue_manager_add(const char *url, const char *dest_path,
   strncpy(d->dest_path, dest_path, sizeof(d->dest_path) - 1);
   d->dest_path[sizeof(d->dest_path) - 1] = '\0';
 
-  if (opts)
-    d->request = *opts;
+  if (request_options_present(opts)) {
+    d->request = malloc(sizeof(*d->request));
+    if (!d->request) {
+      free(d);
+      return 0;
+    }
+    *d->request = *opts;
+  }
 
   d->status = DOWNLOAD_QUEUED;
   d->priority = 0;
@@ -177,10 +195,15 @@ void queue_manager_remove(uint32_t id) {
   while (*prev_ptr != NULL) {
     Download *cur = *prev_ptr;
     if (cur->id == id) {
+      if (cur->status == DOWNLOAD_ACTIVE) {
+        atomic_store(&cur->cancel_requested, true);
+        dm_mutex_unlock(&g_mutex);
+        return;
+      }
       *prev_ptr = cur->next;
       if (cur->dest_path[0] != '\0')
         unlink(cur->dest_path);
-      free(cur);
+      free_download(cur);
       break;
     }
     prev_ptr = &cur->next;
@@ -314,7 +337,7 @@ bool queue_manager_cancel(uint32_t id) {
         *prev_ptr = cur->next;
         if (cur->dest_path[0] != '\0')
           unlink(cur->dest_path);
-        free(cur);
+        free_download(cur);
       }
       break;
     }

@@ -19,11 +19,15 @@ set(TEST_SOURCES
 foreach(TEST_SOURCE ${TEST_SOURCES})
     get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
     add_executable(${TEST_NAME} ${TEST_SOURCE})
+    if(TEST_NAME STREQUAL test_engine_runner)
+        target_sources(${TEST_NAME} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/engine/engine_runner.c
+        )
+    endif()
     target_link_libraries(${TEST_NAME}
         PRIVATE
         downloadmgr_core
-        ${CRITERION_LIBRARIES}
+        PkgConfig::CRITERION
     )
-    target_include_directories(${TEST_NAME} PRIVATE ${CRITERION_INCLUDE_DIRS})
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
 endforeach()
