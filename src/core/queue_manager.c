@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <threads.h>
 #include <unistd.h>
 
 /* ------------------------------------------------------------------ */
@@ -19,7 +20,7 @@
 static Download *g_head = NULL;
 static uint32_t g_next_id = 1;
 static dm_mutex_t g_mutex;
-static bool g_mutex_ready = false;
+static once_flag g_mutex_once = ONCE_FLAG_INIT;
 
 static bool request_options_present(const RequestOptions *opts) {
   return opts && (opts->cookie[0] != '\0' || opts->referrer[0] != '\0' ||
@@ -120,12 +121,9 @@ static bool is_safe_dest_path(const char *path) {
 /**
  * One‑time initialisation of the global mutex.
  */
-static void ensure_mutex(void) {
-  if (!g_mutex_ready) {
-    dm_mutex_init(&g_mutex);
-    g_mutex_ready = true;
-  }
-}
+static void initialize_mutex(void) { dm_mutex_init(&g_mutex); }
+
+static void ensure_mutex(void) { call_once(&g_mutex_once, initialize_mutex); }
 
 /* ------------------------------------------------------------------ */
 /*  Lifecycle                                                         */

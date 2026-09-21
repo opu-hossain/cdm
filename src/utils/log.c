@@ -7,6 +7,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <threads.h>
 #include <time.h>
 
 /* ------------------------------------------------------------------ */
@@ -21,7 +22,9 @@ static FILE *g_log_fp = NULL;
 static char g_log_path[1024] = {0};
 static LogLevel g_min_level = LOG_INFO;
 static dm_mutex_t g_log_mutex;
-static bool g_mutex_ready = false;
+static once_flag g_mutex_once = ONCE_FLAG_INIT;
+
+static void initialize_mutex(void) { dm_mutex_init(&g_log_mutex); }
 
 /* ------------------------------------------------------------------ */
 /*  Internal helpers                                                   */
@@ -73,10 +76,7 @@ static void rotate_if_needed(void) {
 /* ------------------------------------------------------------------ */
 
 bool log_init(const char *log_path, LogLevel min_level) {
-  if (!g_mutex_ready) {
-    dm_mutex_init(&g_log_mutex);
-    g_mutex_ready = true;
-  }
+  call_once(&g_mutex_once, initialize_mutex);
 
   dm_mutex_lock(&g_log_mutex);
 
@@ -104,8 +104,7 @@ bool log_init(const char *log_path, LogLevel min_level) {
 }
 
 void log_close(void) {
-  if (!g_mutex_ready)
-    return;
+  call_once(&g_mutex_once, initialize_mutex);
   dm_mutex_lock(&g_log_mutex);
   if (g_log_fp) {
     fclose(g_log_fp);
@@ -120,10 +119,7 @@ void log_write(LogLevel level, const char *file, const char *function,
   if (level < g_min_level)
     return;
 
-  if (!g_mutex_ready) {
-    dm_mutex_init(&g_log_mutex);
-    g_mutex_ready = true;
-  }
+  call_once(&g_mutex_once, initialize_mutex);
 
   /* Keep only the filename for readability. */
   const char *base = strrchr(file, '/');

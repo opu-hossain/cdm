@@ -2,18 +2,16 @@
 #include "../platform/thread.h"
 #include "../utils/log.h"
 #include <string.h>
+#include <threads.h>
 
 static GuiRow g_rows[GUI_MODEL_MAX_ROWS];
 static int g_row_count = 0;
 static dm_mutex_t g_mutex;
-static bool g_mutex_ready = false;
+static once_flag g_mutex_once = ONCE_FLAG_INIT;
 
-static void ensure_mutex(void) {
-  if (!g_mutex_ready) {
-    dm_mutex_init(&g_mutex);
-    g_mutex_ready = true;
-  }
-}
+static void initialize_mutex(void) { dm_mutex_init(&g_mutex); }
+
+static void ensure_mutex(void) { call_once(&g_mutex_once, initialize_mutex); }
 
 void gui_model_init(void) {
   ensure_mutex();

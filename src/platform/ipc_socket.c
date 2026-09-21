@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <threads.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -65,7 +66,9 @@ static bool g_client_subscribed[MAX_CLIENTS];
 static unsigned char g_client_header[ MAX_CLIENTS ][sizeof(MsgHeader)];
 static size_t g_client_header_bytes[MAX_CLIENTS];
 static dm_mutex_t g_client_mutex;
-static bool g_client_mutex_ready = false;
+static once_flag g_client_mutex_once = ONCE_FLAG_INIT;
+
+static void initialize_client_mutex(void) { dm_mutex_init(&g_client_mutex); }
 
 /* ------------------------------------------------------------------ */
 /*  Internal helpers                                                   */
@@ -408,10 +411,7 @@ int ipc_server_start(void) {
   }
   g_client_count = 0;
 
-  if (!g_client_mutex_ready) {
-    dm_mutex_init(&g_client_mutex);
-    g_client_mutex_ready = true;
-  }
+  call_once(&g_client_mutex_once, initialize_client_mutex);
 
   LOG_DEBUG("IPC server: Listening on %s\n", socket_path);
   return 0;

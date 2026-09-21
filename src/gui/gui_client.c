@@ -5,6 +5,7 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#include <threads.h>
 
 #define GUI_CMD_TIMEOUT_MS 5000
 #define GUI_EVENT_QUEUE_CAP 512
@@ -19,13 +20,12 @@ static _Atomic bool g_was_connected = true;
 static GuiClientEvent g_queue[GUI_EVENT_QUEUE_CAP];
 static int g_queue_head = 0, g_queue_tail = 0, g_queue_count = 0;
 static dm_mutex_t g_queue_mutex;
-static bool g_queue_mutex_ready = false;
+static once_flag g_queue_mutex_once = ONCE_FLAG_INIT;
+
+static void initialize_queue_mutex(void) { dm_mutex_init(&g_queue_mutex); }
 
 static void ensure_queue_mutex(void) {
-  if (!g_queue_mutex_ready) {
-    dm_mutex_init(&g_queue_mutex);
-    g_queue_mutex_ready = true;
-  }
+  call_once(&g_queue_mutex_once, initialize_queue_mutex);
 }
 
 static void push_event(GuiClientEvent evt) {

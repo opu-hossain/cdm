@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <threads.h>
 
 #define GUI_WORKER_CMD_QUEUE_CAP 64
 #define GUI_WORKER_SEQ_MAX 64
@@ -59,14 +60,11 @@ static _Atomic bool g_running = false;
 static GuiCommand g_queue[GUI_WORKER_CMD_QUEUE_CAP];
 static int g_q_head = 0, g_q_tail = 0, g_q_count = 0;
 static dm_mutex_t g_q_mutex;
-static bool g_q_mutex_ready = false;
+static once_flag g_q_mutex_once = ONCE_FLAG_INIT;
 
-static void ensure_q_mutex(void) {
-  if (!g_q_mutex_ready) {
-    dm_mutex_init(&g_q_mutex);
-    g_q_mutex_ready = true;
-  }
-}
+static void initialize_q_mutex(void) { dm_mutex_init(&g_q_mutex); }
+
+static void ensure_q_mutex(void) { call_once(&g_q_mutex_once, initialize_q_mutex); }
 
 static bool enqueue(GuiCommand cmd) {
   ensure_q_mutex();
