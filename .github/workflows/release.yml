@@ -24,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DEBIAN_FRONTEND: noninteractive
+      COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+      COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
 
     steps:
       - name: Checkout source
@@ -76,25 +78,28 @@ jobs:
         env:
           INPUT_CHANNEL: ${{ github.event.inputs.channel || '' }}
 
-      - name: Skip if publishing is disabled
+      - name: Announce skip if publishing is disabled
         if: ${{ steps.meta.outputs.publish != 'true' }}
         run: |
-          echo "Release publishing is disabled in .release.toml. Skipping release."
-          exit 0
+          echo "Release publishing is disabled in .release.toml. Skipping remaining steps."
 
       - name: Configure build
+        if: ${{ steps.meta.outputs.publish == 'true' }}
         run: cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
 
       - name: Build and test
+        if: ${{ steps.meta.outputs.publish == 'true' }}
         run: |
           cmake --build build -j"$(nproc)"
           ctest --test-dir build --output-on-failure
 
       - name: Build Debian package
+        if: ${{ steps.meta.outputs.publish == 'true' }}
         run: |
           cpack --config build/CPackConfig.cmake -G DEB
 
       - name: Rename package to kernel-style naming
+        if: ${{ steps.meta.outputs.publish == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -105,15 +110,17 @@ jobs:
           echo "PACKAGE_PATH=$NEW_PATH" >> "$GITHUB_ENV"
 
       - name: Generate checksum
+        if: ${{ steps.meta.outputs.publish == 'true' }}
         run: |
           set -e
           sha256sum "$PACKAGE_PATH" > SHA256SUMS.txt
 
+      - name: Install cosign
+        if: ${{ steps.meta.outputs.publish == 'true' && env.COSIGN_PRIVATE_KEY != '' && env.COSIGN_PASSWORD != '' }}
+        uses: sigstore/cosign-installer@v3
+
       - name: Sign checksums
-        if: ${{ secrets.COSIGN_PRIVATE_KEY != '' && secrets.COSIGN_PASSWORD != '' }}
-        env:
-          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        if: ${{ steps.meta.outputs.publish == 'true' && env.COSIGN_PRIVATE_KEY != '' && env.COSIGN_PASSWORD != '' }}
         run: |
           echo "$COSIGN_PRIVATE_KEY" > cosign.key
           chmod 600 cosign.key
@@ -121,6 +128,7 @@ jobs:
           rm -f cosign.key
 
       - name: Publish GitHub release
+        if: ${{ steps.meta.outputs.publish == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.release_tag }}
