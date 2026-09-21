@@ -134,24 +134,30 @@ jobs:
           cosign sign-blob --yes --key cosign.key --output-signature SHA256SUMS.txt.sig SHA256SUMS.txt
           rm -f cosign.key
 
-      - name: Collect release assets
+      - name: Publish GitHub release
         if: ${{ steps.meta.outputs.publish == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
         shell: bash
         run: |
           set -euo pipefail
-          {
-            echo "PACKAGE_PATH=$PACKAGE_PATH"
-            echo "SHA256SUMS.txt"
-            if [ -f SHA256SUMS.txt.sig ]; then echo "SHA256SUMS.txt.sig"; fi
-          } > /tmp/assets.txt
-          echo "ASSETS<<EOF" >> "$GITHUB_ENV"
-          cat /tmp/assets.txt >> "$GITHUB_ENV"
-          echo "EOF" >> "$GITHUB_ENV"
 
-      - name: Publish GitHub release
-        if: ${{ steps.meta.outputs.publish == 'true' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.meta.outputs.release_tag }}
-          generate_release_notes: true
-          files: ${{ env.ASSETS }}
+          ASSETS=("$PACKAGE_PATH" "SHA256SUMS.txt")
+          if [ -f SHA256SUMS.txt.sig ]; then
+            ASSETS+=("SHA256SUMS.txt.sig")
+          fi
+
+          printf 'Release tag: %s\n' "$RELEASE_TAG"
+          printf 'Assets:\n'
+          printf '  %s\n' "${ASSETS[@]}"
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; uploading assets."
+            gh release upload "$RELEASE_TAG" "${ASSETS[@]}" --clobber
+          else
+            echo "Creating release $RELEASE_TAG."
+            gh release create "$RELEASE_TAG" "${ASSETS[@]}" \
+              --title "$RELEASE_TAG" \
+              --generate-notes
+          fi
