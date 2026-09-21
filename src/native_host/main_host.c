@@ -16,35 +16,6 @@
 /* ------------------------------------------------------------------ */
 
 /**
- * Extract the first "url" field from a JSON object.
- *
- * Looks for the pattern `"url":"..."`. Writes the value (without quotes)
- * into `out`, truncated to `out_size - 1`. If not found, `out` is set to
- * an empty string.
- */
-static void extract_url(const char *json, char *out, size_t out_size) {
-  const char *key = "\"url\":\"";
-  const char *start = strstr(json, key);
-  if (!start) {
-    out[0] = '\0';
-    return;
-  }
-  start += strlen(key);
-
-  const char *end = strchr(start, '"');
-  if (!end) {
-    out[0] = '\0';
-    return;
-  }
-
-  size_t len = (size_t)(end - start);
-  if (len >= out_size)
-    len = out_size - 1;
-  memcpy(out, start, len);
-  out[len] = '\0';
-}
-
-/**
  * Derive a filename from the last path segment of a URL, stripping any
  * query string. Falls back to "download.bin" if the URL ends with a
  * slash.
