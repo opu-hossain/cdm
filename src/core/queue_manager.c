@@ -269,6 +269,46 @@ int queue_manager_count_by_status_locked(DownloadStatus s) {
   return count;
 }
 
+bool queue_manager_get_status(uint32_t id, DownloadStatus *out_status) {
+  if (!out_status)
+    return false;
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  for (Download *cur = g_head; cur != NULL; cur = cur->next) {
+    if (cur->id == id) {
+      *out_status = cur->status;
+      dm_mutex_unlock(&g_mutex);
+      return true;
+    }
+  }
+  dm_mutex_unlock(&g_mutex);
+  return false;
+}
+
+bool queue_manager_get_runtime_snapshot(uint32_t id,
+                                        DownloadRuntimeSnapshot *out) {
+  if (!out)
+    return false;
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  for (Download *cur = g_head; cur != NULL; cur = cur->next) {
+    if (cur->id == id) {
+      out->status = cur->status;
+      out->total_size = cur->total_size;
+      out->bytes_downloaded = atomic_load(&cur->bytes_downloaded);
+      out->chunk_count = cur->chunk_count;
+      if (out->chunk_count > QM_MAX_CHUNKS)
+        out->chunk_count = QM_MAX_CHUNKS;
+      memcpy(out->chunks, cur->chunks,
+             (size_t)out->chunk_count * sizeof(out->chunks[0]));
+      dm_mutex_unlock(&g_mutex);
+      return true;
+    }
+  }
+  dm_mutex_unlock(&g_mutex);
+  return false;
+}
+
 int queue_manager_snapshot_active_progress(DownloadProgressSnapshot *out,
                                            int max) {
   ensure_mutex();

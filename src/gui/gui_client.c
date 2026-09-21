@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
+#include <sys/socket.h>
 
 #define GUI_CMD_TIMEOUT_MS 5000
 #define GUI_EVENT_QUEUE_CAP 512
@@ -14,6 +15,7 @@
 static int g_cmd_fd = -1;
 static int g_listener_fd = -1;
 static dm_thread_t g_listener_thread;
+static bool g_listener_started = false;
 static _Atomic bool g_running = false;
 static _Atomic bool g_was_connected = true;
 
@@ -111,6 +113,8 @@ static int listener_thread_fn(void *arg) {
       if (atomic_exchange(&g_was_connected, false)) {
         push_event((GuiClientEvent){.type = GUI_EVT_CONNECTION_LOST});
       }
+      if (!atomic_load(&g_running))
+        break;
       dm_thread_sleep_ms(1000);
       if (g_listener_fd >= 0)
         ipc_client_disconnect(g_listener_fd);
@@ -180,13 +184,26 @@ bool gui_client_connect(void) {
 
   atomic_store(&g_running, true);
   atomic_store(&g_was_connected, true);
-  dm_thread_create(&g_listener_thread, listener_thread_fn, NULL);
-  dm_thread_detach(&g_listener_thread);
+  if (dm_thread_create(&g_listener_thread, listener_thread_fn, NULL) != 0) {
+    ipc_client_disconnect(g_listener_fd);
+    ipc_client_disconnect(g_cmd_fd);
+    g_listener_fd = -1;
+    g_cmd_fd = -1;
+    atomic_store(&g_running, false);
+    return false;
+  }
+  g_listener_started = true;
   return true;
 }
 
 void gui_client_disconnect(void) {
   atomic_store(&g_running, false);
+  if (g_listener_fd >= 0)
+    shutdown(g_listener_fd, SHUT_RDWR);
+  if (g_listener_started) {
+    dm_thread_join(&g_listener_thread, NULL);
+    g_listener_started = false;
+  }
   if (g_cmd_fd >= 0) {
     ipc_client_disconnect(g_cmd_fd);
     g_cmd_fd = -1;
@@ -195,9 +212,6 @@ void gui_client_disconnect(void) {
     ipc_client_disconnect(g_listener_fd);
     g_listener_fd = -1;
   }
-  // Listener thread is detached and will exit on process teardown — matches
-  // this project's existing pattern (no cross-thread cancellation mechanism
-  // exists in thread.h), same as the original gui.c's listener thread.
 }
 
 static void note_lost(void) {

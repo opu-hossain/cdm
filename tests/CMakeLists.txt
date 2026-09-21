@@ -33,3 +33,16 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     )
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
 endforeach()
+
+if(UNIX AND NOT WIN32)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_executable(test_curl_http_integration test_curl_http_integration.c)
+        downloadmgr_enable_warnings(test_curl_http_integration)
+        downloadmgr_enable_sanitizer(test_curl_http_integration)
+        target_link_libraries(test_curl_http_integration
+            PRIVATE downloadmgr_core PkgConfig::CRITERION)
+        add_test(NAME test_curl_http_integration
+                 COMMAND test_curl_http_integration)
+    endif()
+endif()

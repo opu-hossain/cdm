@@ -16,9 +16,12 @@ static _Atomic bool hold_workers;
 int engine_run_download(struct Download *d) {
   (void)d;
   atomic_fetch_add(&active_workers, 1);
-  while (atomic_load(&hold_workers))
+  while (atomic_load(&hold_workers) &&
+         !atomic_load(&d->pause_requested))
     dm_thread_sleep_ms(1);
   atomic_fetch_sub(&active_workers, 1);
+  if (atomic_load(&d->pause_requested))
+    return -1;
   return 0;
 }
 
@@ -79,4 +82,26 @@ Test(scheduler, respects_max_active) {
   for (int i = 0; i < 1000 && atomic_load(&active_workers) != 0; i++)
     dm_thread_sleep_ms(1);
   cr_assert_eq(atomic_load(&active_workers), 0);
+}
+
+Test(scheduler, shutdown_preserves_active_download_for_resume) {
+  atomic_store(&hold_workers, true);
+  uint32_t id =
+      queue_manager_add("http://example.com/shutdown", "/tmp/shutdown", NULL);
+  cr_assert_neq(id, 0);
+
+  scheduler_tick();
+  for (int i = 0; i < 1000 && atomic_load(&active_workers) == 0; i++)
+    dm_thread_sleep_ms(1);
+  cr_assert_eq(atomic_load(&active_workers), 1);
+
+  scheduler_shutdown();
+
+  DownloadStatus status = DOWNLOAD_ERROR;
+  cr_assert(queue_manager_get_status(id, &status));
+  cr_assert_eq(status, DOWNLOAD_PAUSED);
+  cr_assert_eq(atomic_load(&active_workers), 0);
+
+  queue_manager_remove(id);
+  atomic_store(&hold_workers, false);
 }

@@ -54,6 +54,7 @@ int curl_client_head(const char *url, const RequestContext *ctx,
   curl_easy_setopt(curl, CURLOPT_USERAGENT, "downloadmgr/0.1");
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
 
   struct curl_slist *headers = NULL;
   if (ctx) {
@@ -68,20 +69,26 @@ int curl_client_head(const char *url, const RequestContext *ctx,
 
   CURLcode res = curl_easy_perform(curl);
 
-  if (res == CURLE_OK) {
+  long http_status = 0;
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
+
+  if (res == CURLE_OK && http_status >= 200 && http_status < 300) {
     curl_off_t content_length = -1;
     curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
                       &content_length);
     out->total_size = (content_length > 0) ? (uint64_t)content_length : 0;
-  } else {
+  } else if (res != CURLE_OK) {
     LOG_WARN("HEAD request failed for %s: %s", url,
              curl_easy_strerror(res));
+  } else {
+    LOG_WARN("HEAD request returned HTTP %ld for %s", http_status, url);
   }
 
   if (headers)
     curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
-  return (res == CURLE_OK) ? 0 : -1;
+  return (res == CURLE_OK && http_status >= 200 && http_status < 300) ? 0
+                                                                        : -1;
 }
 
 struct curl_slist *curl_client_build_headers(const char *extra_headers) {

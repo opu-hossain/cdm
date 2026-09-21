@@ -1,6 +1,8 @@
 #include "../src/persistence/db.h"
+#include <sqlite3.h>
 #include <criterion/criterion.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 // Use in-memory DB for tests
 static void setup_db(void) { db_init(":memory:"); }
@@ -78,4 +80,37 @@ Test(db, operations_fail_cleanly_when_closed) {
   cr_assert_eq(db_count_downloads(1), -1);
   cr_assert_eq(db_get_max_id(), 0);
   cr_assert_eq(db_restore_queue(), -1);
+}
+
+Test(db, foreign_keys_reject_orphan_chunks) {
+  cr_assert_eq(db_insert_chunk(999, 0, 1), -1);
+}
+
+Test(db, legacy_schema_migrates_transactionally) {
+  const char *path = "/tmp/cdm_legacy_migration.db";
+  unlink(path);
+  db_close();
+
+  sqlite3 *legacy = NULL;
+  cr_assert_eq(sqlite3_open(path, &legacy), SQLITE_OK);
+  cr_assert_eq(sqlite3_exec(
+                   legacy,
+                   "CREATE TABLE downloads (id INTEGER PRIMARY KEY, "
+                   "url TEXT NOT NULL, dest_path TEXT NOT NULL, "
+                   "total_size INTEGER DEFAULT 0, status TEXT DEFAULT 'QUEUED', "
+                   "priority INTEGER DEFAULT 0, created_at INTEGER);"
+                   "CREATE TABLE chunks (download_id INTEGER, range_start "
+                   "INTEGER, range_end INTEGER, bytes_done INTEGER);",
+                   NULL, NULL, NULL),
+               SQLITE_OK);
+  sqlite3_close(legacy);
+
+  cr_assert_eq(db_init(path), 0);
+  RequestOptions options = {0};
+  options.speed_limit_bps = 10;
+  cr_assert_eq(db_insert_download(1, "http://legacy", "/tmp/legacy",
+                                  &options),
+               0);
+  db_close();
+  unlink(path);
 }

@@ -87,6 +87,14 @@ typedef struct {
   uint64_t bytes_done;
 } ChunkProgressSnapshot;
 
+typedef struct {
+  DownloadStatus status;
+  uint64_t total_size;
+  uint64_t bytes_downloaded;
+  int chunk_count;
+  DownloadChunk chunks[QM_MAX_CHUNKS];
+} DownloadRuntimeSnapshot;
+
 /* ------------------------------------------------------------------ */
 /*  Lifecycle                                                         */
 /* ------------------------------------------------------------------ */
@@ -119,6 +127,11 @@ int queue_manager_count_by_status(DownloadStatus s);
 
 /** Same as above, but caller must hold the queue mutex. */
 int queue_manager_count_by_status_locked(DownloadStatus s);
+
+/** Read a download status without exposing the queue entry pointer. */
+bool queue_manager_get_status(uint32_t id, DownloadStatus *out_status);
+bool queue_manager_get_runtime_snapshot(uint32_t id,
+                                        DownloadRuntimeSnapshot *out);
 
 /** Fill `out` with up to `max` active download progress snapshots. */
 int queue_manager_snapshot_active_progress(DownloadProgressSnapshot *out,

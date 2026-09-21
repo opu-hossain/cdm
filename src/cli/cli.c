@@ -7,6 +7,9 @@
 #include "../utils/log.h"
 
 #include <stdio.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -20,8 +23,29 @@
  *
  * @return true if any option was present (so opts_out is meaningful)
  */
+static bool parse_u64(const char *text, uint64_t *out) {
+  if (!text || text[0] == '\0' || text[0] == '-')
+    return false;
+  errno = 0;
+  char *end = NULL;
+  unsigned long long value = strtoull(text, &end, 10);
+  if (errno == ERANGE || end == text || *end != '\0')
+    return false;
+  *out = (uint64_t)value;
+  return true;
+}
+
+static bool parse_id(const char *text, uint32_t *out) {
+  uint64_t value = 0;
+  if (!parse_u64(text, &value) || value == 0 || value > UINT32_MAX)
+    return false;
+  *out = (uint32_t)value;
+  return true;
+}
+
 static bool parse_add_options(int argc, char **argv, int first_opt_index,
-                              IpcDownloadOptions *opts_out) {
+                              IpcDownloadOptions *opts_out,
+                              bool *valid_out) {
   const char *cookie = NULL;
   const char *referrer = NULL;
   const char *sha256 = NULL;
@@ -29,6 +53,7 @@ static bool parse_add_options(int argc, char **argv, int first_opt_index,
   char headers_buf[4096] = {0};
 
   bool has_options = false;
+  bool valid = (argc - first_opt_index) % 2 == 0;
 
   for (int i = first_opt_index; i + 1 < argc; i += 2) {
     if (strcmp(argv[i], "--cookie") == 0) {
@@ -41,17 +66,27 @@ static bool parse_add_options(int argc, char **argv, int first_opt_index,
       sha256 = argv[i + 1];
       has_options = true;
     } else if (strcmp(argv[i], "--limit") == 0) {
-      speed_limit = (uint64_t)strtoull(argv[i + 1], NULL, 10);
+      if (!parse_u64(argv[i + 1], &speed_limit)) {
+        LOG_WARN("Invalid speed limit: %s", argv[i + 1]);
+        valid = false;
+      }
       has_options = true;
     } else if (strcmp(argv[i], "--header") == 0) {
-      if (headers_buf[0])
-        strncat(headers_buf, "\n",
-                sizeof(headers_buf) - strlen(headers_buf) - 1);
-      strncat(headers_buf, argv[i + 1],
-              sizeof(headers_buf) - strlen(headers_buf) - 1);
+      size_t current_len = strlen(headers_buf);
+      size_t value_len = strlen(argv[i + 1]);
+      size_t separator_len = headers_buf[0] ? 1 : 0;
+      if (current_len + separator_len + value_len >= sizeof(headers_buf)) {
+        LOG_WARN("Header is too long");
+        valid = false;
+      } else {
+        if (separator_len)
+          headers_buf[current_len++] = '\n';
+        memcpy(headers_buf + current_len, argv[i + 1], value_len + 1);
+      }
       has_options = true;
     } else {
       LOG_WARN("Unknown flag: %s", argv[i]);
+      valid = false;
     }
   }
 
@@ -63,6 +98,7 @@ static bool parse_add_options(int argc, char **argv, int first_opt_index,
       .speed_limit_bps = speed_limit,
   };
 
+  *valid_out = valid;
   return has_options;
 }
 
@@ -99,7 +135,13 @@ int run_cli(int argc, char **argv) {
   /* ---------- dispatch ---------- */
   if (strcmp(cmd, "add") == 0 && argc >= 4) {
     IpcDownloadOptions opts;
-    bool has_opts = parse_add_options(argc, argv, 4, &opts);
+    bool valid_opts = false;
+    bool has_opts = parse_add_options(argc, argv, 4, &opts, &valid_opts);
+    if (!valid_opts) {
+      fprintf(stderr, "Invalid add options\n");
+      ipc_client_disconnect(sock);
+      return 1;
+    }
 
     uint32_t id =
         ipc_send_add_download(sock, argv[2], argv[3], has_opts ? &opts : NULL);
@@ -110,19 +152,46 @@ int run_cli(int argc, char **argv) {
     printf("Download added (ID: %u)\n", id);
 
   } else if (strcmp(cmd, "pause") == 0 && argc >= 3) {
-    uint32_t id = (uint32_t)atoi(argv[2]);
-    ipc_send_pause(sock, id);
-    printf("Paused download %u\n", id);
+    uint32_t id = 0;
+    if (!parse_id(argv[2], &id)) {
+      fprintf(stderr, "Invalid download ID: %s\n", argv[2]);
+      ipc_client_disconnect(sock);
+      return 1;
+    }
+    if (ipc_send_pause(sock, id) == 0)
+      printf("Paused download %u\n", id);
+    else {
+      fprintf(stderr, "Could not pause download %u\n", id);
+      ret = 1;
+    }
 
   } else if (strcmp(cmd, "resume") == 0 && argc >= 3) {
-    uint32_t id = (uint32_t)atoi(argv[2]);
-    ipc_send_resume(sock, id);
-    printf("Resumed download %u\n", id);
+    uint32_t id = 0;
+    if (!parse_id(argv[2], &id)) {
+      fprintf(stderr, "Invalid download ID: %s\n", argv[2]);
+      ipc_client_disconnect(sock);
+      return 1;
+    }
+    if (ipc_send_resume(sock, id) == 0)
+      printf("Resumed download %u\n", id);
+    else {
+      fprintf(stderr, "Could not resume download %u\n", id);
+      ret = 1;
+    }
 
   } else if (strcmp(cmd, "cancel") == 0 && argc >= 3) {
-    uint32_t id = (uint32_t)atoi(argv[2]);
-    ipc_send_cancel(sock, id);
-    printf("Cancelled download %u\n", id);
+    uint32_t id = 0;
+    if (!parse_id(argv[2], &id)) {
+      fprintf(stderr, "Invalid download ID: %s\n", argv[2]);
+      ipc_client_disconnect(sock);
+      return 1;
+    }
+    if (ipc_send_cancel(sock, id) == 0)
+      printf("Cancelled download %u\n", id);
+    else {
+      fprintf(stderr, "Could not cancel download %u\n", id);
+      ret = 1;
+    }
 
   } else {
     LOG_WARN("Unknown command: %s", cmd);

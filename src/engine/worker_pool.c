@@ -37,6 +37,7 @@ struct RebalancePool {
   uint64_t min_steal_bytes;
   RebalanceSplitFn on_split;
   void *userdata;
+  _Atomic uint64_t **progress_slots;
 };
 
 /* ------------------------------------------------------------------ */
@@ -59,6 +60,7 @@ RebalancePool *rebalance_pool_create(const Range *ranges, int n_ranges,
   pool->min_steal_bytes = min_steal_bytes;
   pool->on_split = on_split;
   pool->userdata = userdata;
+  pool->progress_slots = progress_slots;
   pool->slot_count = (n_ranges > MAX_WORKERS) ? MAX_WORKERS : n_ranges;
 
   for (int i = 0; i < pool->slot_count; i++) {
@@ -150,10 +152,12 @@ static int rebalance_pool_acquire(RebalancePool *pool, Range *out_range,
   atomic_init(&pool->slots[new_idx].live_end, le);
   atomic_init(&pool->slots[new_idx].claimed, true);
   atomic_init(&pool->slots[new_idx].exhausted, false);
-  pool->slots[new_idx].progress_slot = pool->slots[victim].progress_slot;
+  pool->slots[new_idx].progress_slot = NULL;
 
   if (pool->on_split)
     pool->on_split(pool->userdata, pool->slots[victim].start, split, le);
+  if (pool->progress_slots)
+    pool->slots[new_idx].progress_slot = pool->progress_slots[new_idx];
 
   out_range->start = split;
   out_range->end = le - 1;
@@ -314,12 +318,24 @@ static void run_one_segment(WorkerContext *ctx) {
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
 
   uint64_t intended_write_offset = ctx->range.start + ctx->range.resume_offset;
+  uint64_t expected_bytes = ctx->range.end >= intended_write_offset
+                                ? ctx->range.end - intended_write_offset + 1
+                                : 0;
+  if (ctx->pool && ctx->slot_index >= 0) {
+    uint64_t live_end =
+        atomic_load(&ctx->pool->slots[ctx->slot_index].live_end);
+    expected_bytes = live_end > intended_write_offset
+                         ? live_end - intended_write_offset
+                         : 0;
+  }
   bool ok_200 = (http_status == 200) &&
                 (ctx->range.whole_file ||
                  (ctx->total_workers == 1 && intended_write_offset == 0));
   bool http_ok = (http_status == 206 || ok_200);
+  bool exact_bytes = atomic_load(&ctx->bytes_done) == expected_bytes;
 
-  ctx->succeeded = ctx->truncated || (res == CURLE_OK && http_ok);
+  ctx->succeeded = http_ok && exact_bytes &&
+                   (res == CURLE_OK || ctx->truncated);
 
   if (!ctx->succeeded) {
     LOG_WARN("segment request failed url='%s' http=%ld curl=%s",
@@ -392,10 +408,12 @@ worker_pool_run(const char *url, const Range *ranges, int n_workers,
 
   WorkerContext *contexts = calloc((size_t)n_workers, sizeof(WorkerContext));
   dm_thread_t *threads = calloc((size_t)n_workers, sizeof(dm_thread_t));
-  if (!contexts || !threads) {
+  bool *thread_started = calloc((size_t)n_workers, sizeof(bool));
+  if (!contexts || !threads || !thread_started) {
     file_close(fd);
     free(contexts);
     free(threads);
+    free(thread_started);
     result.all_succeeded = false;
     return result;
   }
@@ -421,10 +439,20 @@ worker_pool_run(const char *url, const Range *ranges, int n_workers,
     contexts[i].request_ctx = ctx_in;
     contexts[i].pool = rebalance;
     contexts[i].slot_index = i;
-    dm_thread_create(&threads[i], worker_thread_function, &contexts[i]);
+    if (dm_thread_create(&threads[i], worker_thread_function, &contexts[i]) !=
+        0) {
+      LOG_ERROR("failed to create worker thread %d", i);
+      if (cancel_flag)
+        atomic_store(cancel_flag, true);
+      result.all_succeeded = false;
+      break;
+    }
+    thread_started[i] = true;
   }
 
   for (int i = 0; i < n_workers; i++) {
+    if (!thread_started[i])
+      continue;
     int thread_result;
     dm_thread_join(&threads[i], &thread_result);
     if (!contexts[i].succeeded) {
@@ -443,5 +471,6 @@ worker_pool_run(const char *url, const Range *ranges, int n_workers,
   file_close(fd);
   free(contexts);
   free(threads);
+  free(thread_started);
   return result;
 }

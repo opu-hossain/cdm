@@ -72,6 +72,41 @@ Test(queue_manager, remove_active_requests_cancel_without_freeing) {
   cr_assert_null(queue_manager_find_by_id(id));
 }
 
+Test(queue_manager, status_query_does_not_expose_queue_memory) {
+  uint32_t id = queue_manager_add("http://example.com/status", "/tmp/status",
+                                  NULL);
+  cr_assert_neq(id, 0);
+
+  DownloadStatus status = DOWNLOAD_ERROR;
+  cr_assert(queue_manager_get_status(id, &status));
+  cr_assert_eq(status, DOWNLOAD_QUEUED);
+
+  queue_manager_remove(id);
+  cr_assert_not(queue_manager_get_status(id, &status));
+}
+
+Test(queue_manager, runtime_snapshot_is_a_value_copy) {
+  uint32_t id = queue_manager_add("http://example.com/snapshot",
+                                  "/tmp/snapshot", NULL);
+  cr_assert_neq(id, 0);
+  Download *download = queue_manager_find_by_id(id);
+  cr_assert_not_null(download);
+  download->total_size = 100;
+  download->chunk_count = 1;
+  download->chunks[0] = (DownloadChunk){0, 99, 25};
+
+  DownloadRuntimeSnapshot snapshot = {0};
+  cr_assert(queue_manager_get_runtime_snapshot(id, &snapshot));
+  cr_assert_eq(snapshot.status, DOWNLOAD_QUEUED);
+  cr_assert_eq(snapshot.total_size, 100);
+  cr_assert_eq(snapshot.chunk_count, 1);
+  cr_assert_eq(snapshot.chunks[0].bytes_done, 25);
+
+  queue_manager_remove(id);
+  cr_assert_eq(snapshot.total_size, 100);
+  cr_assert_eq(snapshot.chunks[0].bytes_done, 25);
+}
+
 Test(queue_manager, request_options_are_optional_and_owned) {
   RequestOptions empty = {0};
   uint32_t empty_id =

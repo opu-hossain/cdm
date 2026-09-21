@@ -30,6 +30,13 @@ typedef struct {
   MsgType type;
 } MsgHeader;
 
+typedef enum {
+  IPC_RESULT_OK = 0,
+  IPC_RESULT_NOT_FOUND = 1,
+  IPC_RESULT_REJECTED = 2,
+  IPC_RESULT_ERROR = 3,
+} IpcResult;
+
 #define IPC_MAX_URL_LEN 2048
 #define IPC_MAX_PATH_LEN 1024
 #define IPC_MAX_FRAME_SIZE 16384

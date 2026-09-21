@@ -20,6 +20,25 @@ static sqlite3 *g_db = NULL;
 
 static bool db_ready(void) { return g_db != NULL; }
 
+static bool db_column_exists(const char *table, const char *column) {
+  char sql[128];
+  snprintf(sql, sizeof(sql), "PRAGMA table_info(%s)", table);
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    return false;
+
+  bool found = false;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *name = (const char *)sqlite3_column_text(stmt, 1);
+    if (name && strcmp(name, column) == 0) {
+      found = true;
+      break;
+    }
+  }
+  sqlite3_finalize(stmt);
+  return found;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Lifecycle                                                         */
 /* ------------------------------------------------------------------ */
@@ -39,6 +58,18 @@ int db_init(const char *db_path) {
     return -1;
   }
   g_db = opened_db;
+
+  char *pragma_error = NULL;
+  rc = sqlite3_exec(g_db, "PRAGMA foreign_keys = ON;", NULL, NULL,
+                    &pragma_error);
+  if (rc != SQLITE_OK) {
+    LOG_ERROR("failed to enable SQLite foreign keys: %s",
+              pragma_error ? pragma_error : "unknown error");
+    sqlite3_free(pragma_error);
+    db_close();
+    return -1;
+  }
+  sqlite3_free(pragma_error);
 
   /* Enable WAL for better concurrent read performance. */
   sqlite3_exec(g_db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
@@ -76,30 +107,54 @@ int db_init(const char *db_path) {
     return -1;
   }
 
-  /* Migrate older databases that lack request‑option columns.
-     Silently ignore errors — the column already exists if the error
-     is "duplicate column". */
-  static const char *new_columns[] = {
-      "cookie TEXT DEFAULT ''", "referrer TEXT DEFAULT ''",
-      "extra_headers TEXT DEFAULT ''", "expected_sha256 TEXT DEFAULT ''",
-      "speed_limit_bps INTEGER DEFAULT 0"};
-  for (size_t i = 0; i < sizeof(new_columns) / sizeof(new_columns[0]); i++) {
+  static const char *migration_names[] = {
+      "cookie", "referrer", "extra_headers", "expected_sha256",
+      "speed_limit_bps"};
+  static const char *migration_types[] = {
+      "TEXT DEFAULT ''", "TEXT DEFAULT ''", "TEXT DEFAULT ''",
+      "TEXT DEFAULT ''", "INTEGER DEFAULT 0"};
+
+  char *migration_error = NULL;
+  rc = sqlite3_exec(g_db, "BEGIN;", NULL, NULL, &migration_error);
+  if (rc != SQLITE_OK) {
+    LOG_ERROR("could not begin database migration: %s",
+              migration_error ? migration_error : "unknown error");
+    sqlite3_free(migration_error);
+    db_close();
+    return -1;
+  }
+  sqlite3_free(migration_error);
+
+  for (size_t i = 0; i < sizeof(migration_names) / sizeof(migration_names[0]);
+       i++) {
+    if (db_column_exists("downloads", migration_names[i]))
+      continue;
     char sql[256];
-    snprintf(sql, sizeof(sql), "ALTER TABLE downloads ADD COLUMN %s",
-             new_columns[i]);
-    char *migration_error = NULL;
+    snprintf(sql, sizeof(sql), "ALTER TABLE downloads ADD COLUMN %s %s",
+             migration_names[i], migration_types[i]);
     rc = sqlite3_exec(g_db, sql, NULL, NULL, &migration_error);
-    if (rc != SQLITE_OK &&
-        (!migration_error ||
-         strstr(migration_error, "duplicate column name") == NULL)) {
+    if (rc != SQLITE_OK) {
       LOG_ERROR("migration failed for '%s': %s", sql,
                 migration_error ? migration_error : "unknown error");
       sqlite3_free(migration_error);
+      sqlite3_exec(g_db, "ROLLBACK;", NULL, NULL, NULL);
       db_close();
       return -1;
     }
     sqlite3_free(migration_error);
   }
+
+  rc = sqlite3_exec(g_db, "PRAGMA user_version = 1; COMMIT;", NULL, NULL,
+                    &migration_error);
+  if (rc != SQLITE_OK) {
+    LOG_ERROR("could not commit database migration: %s",
+              migration_error ? migration_error : "unknown error");
+    sqlite3_free(migration_error);
+    sqlite3_exec(g_db, "ROLLBACK;", NULL, NULL, NULL);
+    db_close();
+    return -1;
+  }
+  sqlite3_free(migration_error);
 
   LOG_INFO("opened %s", db_path);
   return 0;

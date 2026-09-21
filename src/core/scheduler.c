@@ -243,7 +243,7 @@ void scheduler_shutdown(void) {
   for (int i = 0; i < SCHEDULER_MAX_WORKERS; i++) {
     SchedulerWorker *worker = &g_workers[i];
     if (worker->in_use)
-      queue_manager_cancel(worker->download_id);
+      queue_manager_pause(worker->download_id);
   }
 
   for (int i = 0; i < SCHEDULER_MAX_WORKERS; i++) {

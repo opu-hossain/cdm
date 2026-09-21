@@ -1,6 +1,7 @@
 #include "../src/platform/file_io.h"
 #include <criterion/criterion.h>
 #include <string.h>
+#include <stdio.h>
 #include <unistd.h>
 
 #define PREALLOC_FILE "/tmp/test_file_io_preallocate.tmp"
@@ -41,4 +42,25 @@ Test(file_io, preallocate_zero_size) {
   uint64_t size = file_get_size(ZERO_FILE);
   cr_assert_eq(size, 0);
   unlink(ZERO_FILE);
+}
+
+Test(file_io, ensure_directory_creates_missing_parents) {
+  char root[128];
+  char nested[160];
+  snprintf(root, sizeof(root), "/tmp/cdm_file_io_%ld", (long)getpid());
+  snprintf(nested, sizeof(nested), "%s/one/two", root);
+  rmdir(nested);
+  rmdir("/tmp/cdm_file_io_unused");
+  rmdir(root);
+
+  cr_assert_eq(file_ensure_directory(nested), 0);
+  cr_assert_eq(access(nested, F_OK), 0);
+
+  rmdir(nested);
+  {
+    char parent[144];
+    snprintf(parent, sizeof(parent), "%s/one", root);
+    rmdir(parent);
+  }
+  rmdir(root);
 }

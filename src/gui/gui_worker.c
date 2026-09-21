@@ -55,6 +55,7 @@ typedef struct {
 
 static webview_t g_webview = NULL;
 static dm_thread_t g_thread;
+static bool g_thread_started = false;
 static _Atomic bool g_running = false;
 
 static GuiCommand g_queue[GUI_WORKER_CMD_QUEUE_CAP];
@@ -349,8 +350,17 @@ static int worker_thread_fn(void *arg) {
 void gui_worker_start(webview_t w) {
   g_webview = w;
   atomic_store(&g_running, true);
-  dm_thread_create(&g_thread, worker_thread_fn, NULL);
-  dm_thread_detach(&g_thread);
+  if (dm_thread_create(&g_thread, worker_thread_fn, NULL) == 0)
+    g_thread_started = true;
+  else
+    atomic_store(&g_running, false);
 }
 
-void gui_worker_stop(void) { atomic_store(&g_running, false); }
+void gui_worker_stop(void) {
+  atomic_store(&g_running, false);
+  if (g_thread_started) {
+    dm_thread_join(&g_thread, NULL);
+    g_thread_started = false;
+  }
+  g_webview = NULL;
+}

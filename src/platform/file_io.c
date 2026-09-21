@@ -18,24 +18,35 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static void ensure_parent_dirs_exist(const char *path) {
+int file_ensure_directory(const char *path) {
+  if (!path || path[0] == '\0')
+    return -1;
+
   char temp[1024];
   strncpy(temp, path, sizeof(temp) - 1);
   temp[sizeof(temp) - 1] = '\0';
 
-  char *dir = dirname(temp);
-  if (!dir || strcmp(dir, ".") == 0 || strcmp(dir, "/") == 0)
-    return;
-
-  size_t len = strlen(dir);
+  size_t len = strlen(temp);
   for (size_t i = 1; i < len; i++) {
-    if (dir[i] == '/') {
-      dir[i] = '\0';
-      mkdir(dir, 0755);
-      dir[i] = '/';
+    if (temp[i] == '/') {
+      temp[i] = '\0';
+      if (mkdir(temp, 0755) != 0 && errno != EEXIST)
+        return -1;
+      temp[i] = '/';
     }
   }
-  mkdir(dir, 0755);
+  if (mkdir(temp, 0755) != 0 && errno != EEXIST)
+    return -1;
+  return 0;
+}
+
+static void ensure_parent_dirs_exist(const char *path) {
+  char temp[1024];
+  strncpy(temp, path, sizeof(temp) - 1);
+  temp[sizeof(temp) - 1] = '\0';
+  char *dir = dirname(temp);
+  if (dir && strcmp(dir, ".") != 0 && strcmp(dir, "/") != 0)
+    file_ensure_directory(dir);
 }
 
 int file_preallocate(const char *path, uint64_t total_size) {

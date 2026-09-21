@@ -5,6 +5,7 @@
 
 #include "../core/queue_manager.h"
 #include "../persistence/db.h"
+#include "file_io.h"
 #include "../utils/log.h"
 #include "../vendor/cJSON.h"
 #include "thread.h"
@@ -59,7 +60,7 @@ static void get_socket_path(char *out, size_t out_size) {
       char dir[1024];
       if (join_path(dir, sizeof(dir), home, "/.local/share/downloadmgr") &&
           join_path(cached_path, sizeof(cached_path), dir, "/ipc.sock")) {
-        mkdir(dir, 0755);
+        file_ensure_directory(dir);
       } else {
         cached_path[0] = '\0';
       }
@@ -198,28 +199,32 @@ typedef struct {
   int client_fd;
 } ListResponseContext;
 
+static float snapshot_progress(const DownloadRuntimeSnapshot *snapshot) {
+  if (snapshot->total_size == 0)
+    return 0.0f;
+
+  uint64_t done = snapshot->status == DOWNLOAD_ACTIVE
+                      ? snapshot->bytes_downloaded
+                      : 0;
+  if (snapshot->status != DOWNLOAD_ACTIVE) {
+    for (int i = 0; i < snapshot->chunk_count; i++)
+      done += snapshot->chunks[i].bytes_done;
+  }
+  double fraction = (double)done / (double)snapshot->total_size;
+  return (float)(fraction > 1.0 ? 1.0 : fraction);
+}
+
 static int send_download_row(const DbDownloadRow *row, void *ctx) {
   ListResponseContext *response = (ListResponseContext *)ctx;
   char status[16];
   float progress = 0.0f;
-  Download *live = queue_manager_find_by_id(row->id);
+  DownloadRuntimeSnapshot snapshot;
+  bool live = queue_manager_get_runtime_snapshot(row->id, &snapshot);
 
   if (live) {
-    strncpy(status, status_to_string(live->status), sizeof(status) - 1);
+    strncpy(status, status_to_string(snapshot.status), sizeof(status) - 1);
     status[sizeof(status) - 1] = '\0';
-
-    uint64_t total = live->total_size;
-    if (total > 0) {
-      uint64_t done = 0;
-      if (live->status == DOWNLOAD_ACTIVE) {
-        done = atomic_load(&live->bytes_downloaded);
-      } else if (live->chunk_count > 0) {
-        for (int c = 0; c < live->chunk_count; c++)
-          done += live->chunks[c].bytes_done;
-      }
-      double fraction = (double)done / (double)total;
-      progress = (float)(fraction > 1.0 ? 1.0 : fraction);
-    }
+    progress = snapshot_progress(&snapshot);
   } else {
     strncpy(status, row->status, sizeof(status) - 1);
     status[sizeof(status) - 1] = '\0';
@@ -234,6 +239,11 @@ static int send_download_row(const DbDownloadRow *row, void *ctx) {
   write_string(response->client_fd, row->dest_path);
   write_string(response->client_fd, status);
   return ipc_write_exact(response->client_fd, &progress, sizeof(progress));
+}
+
+static void send_command_result(int client_fd, IpcResult result) {
+  uint8_t wire_result = (uint8_t)result;
+  ipc_write_exact(client_fd, &wire_result, sizeof(wire_result));
 }
 
 /** Dispatch an incoming message. */
@@ -279,33 +289,68 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
 
     uint32_t id = queue_manager_add(url, dest, &opts);
     LOG_INFO("MSG_ADD_DOWNLOAD: queue_manager_add returned id=%u", id);
-    if (id != 0)
-      db_insert_download(id, url, dest, &opts);
+    if (id != 0 && db_insert_download(id, url, dest, &opts) != 0) {
+      LOG_ERROR("MSG_ADD_DOWNLOAD: persistence failed for id=%u", id);
+      queue_manager_remove(id);
+      id = 0;
+    }
 
     ipc_write_exact(client_fd, &id, sizeof(id));
     break;
   }
   case MSG_PAUSE: {
     uint32_t id;
-    ipc_read_exact(client_fd, &id, sizeof(id));
+    if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0)
+      return;
+    DownloadStatus before;
+    if (!queue_manager_get_status(id, &before)) {
+      send_command_result(client_fd, IPC_RESULT_NOT_FOUND);
+      break;
+    }
+    if (before != DOWNLOAD_ACTIVE && before != DOWNLOAD_QUEUED) {
+      send_command_result(client_fd, IPC_RESULT_REJECTED);
+      break;
+    }
     bool was_active = queue_manager_pause(id);
     if (!was_active)
       db_update_status(id, "PAUSED");
+    send_command_result(client_fd, IPC_RESULT_OK);
     break;
   }
   case MSG_RESUME: {
     uint32_t id;
-    ipc_read_exact(client_fd, &id, sizeof(id));
-    if (queue_manager_resume(id))
+    if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0)
+      return;
+    DownloadStatus before;
+    if (!queue_manager_get_status(id, &before)) {
+      send_command_result(client_fd, IPC_RESULT_NOT_FOUND);
+      break;
+    }
+    if (queue_manager_resume(id)) {
       db_update_status(id, "QUEUED");
+      send_command_result(client_fd, IPC_RESULT_OK);
+    } else {
+      send_command_result(client_fd, IPC_RESULT_REJECTED);
+    }
     break;
   }
   case MSG_CANCEL: {
     uint32_t id;
-    ipc_read_exact(client_fd, &id, sizeof(id));
+    if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0)
+      return;
+    DownloadStatus before;
+    if (!queue_manager_get_status(id, &before)) {
+      send_command_result(client_fd, IPC_RESULT_NOT_FOUND);
+      break;
+    }
+    if (before == DOWNLOAD_DONE) {
+      send_command_result(client_fd, IPC_RESULT_REJECTED);
+      break;
+    }
     bool was_active = queue_manager_cancel(id);
     if (!was_active)
       db_update_status(id, "CANCELED");
+    send_command_result(client_fd, IPC_RESULT_OK);
     break;
   }
   case MSG_LIST: {
@@ -410,6 +455,15 @@ int ipc_server_start(void) {
   if (bind(g_listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     perror("IPC server: bind() failed");
     close(g_listen_fd);
+    g_listen_fd = -1;
+    return -1;
+  }
+
+  if (fchmod(g_listen_fd, S_IRUSR | S_IWUSR) != 0) {
+    LOG_ERROR("IPC server: could not restrict socket permissions: %s",
+              strerror(errno));
+    close(g_listen_fd);
+    unlink(socket_path);
     g_listen_fd = -1;
     return -1;
   }
@@ -625,7 +679,10 @@ int ipc_send_pause(int sock, uint32_t id) {
     return -1;
   if (ipc_write_exact(sock, &id, sizeof(id)) != 0)
     return -1;
-  return 0;
+  uint8_t result = IPC_RESULT_ERROR;
+  if (ipc_read_exact(sock, &result, sizeof(result)) != 0)
+    return -1;
+  return result == IPC_RESULT_OK ? 0 : -1;
 }
 
 int ipc_send_resume(int sock, uint32_t id) {
@@ -634,7 +691,10 @@ int ipc_send_resume(int sock, uint32_t id) {
     return -1;
   if (ipc_write_exact(sock, &id, sizeof(id)) != 0)
     return -1;
-  return 0;
+  uint8_t result = IPC_RESULT_ERROR;
+  if (ipc_read_exact(sock, &result, sizeof(result)) != 0)
+    return -1;
+  return result == IPC_RESULT_OK ? 0 : -1;
 }
 
 int ipc_send_cancel(int sock, uint32_t id) {
@@ -643,7 +703,10 @@ int ipc_send_cancel(int sock, uint32_t id) {
     return -1;
   if (ipc_write_exact(sock, &id, sizeof(id)) != 0)
     return -1;
-  return 0;
+  uint8_t result = IPC_RESULT_ERROR;
+  if (ipc_read_exact(sock, &result, sizeof(result)) != 0)
+    return -1;
+  return result == IPC_RESULT_OK ? 0 : -1;
 }
 
 int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max) {
@@ -764,19 +827,48 @@ int ipc_write_exact(int fd, const void *buf, size_t len) {
 
 void ipc_broadcast_status(uint32_t download_id, const char *status,
                           float progress) {
-  MsgHeader hdr;
-  hdr.type = MSG_STATUS_EVENT;
-  hdr.length = sizeof(uint32_t) + sizeof(float) +
-               (uint32_t)(4 + (status ? strlen(status) : 0));
+  const char *text = status ? status : "";
+  size_t status_len = strlen(text);
+  size_t payload_len = sizeof(download_id) + sizeof(progress) +
+                       sizeof(uint32_t) + status_len;
+  if (payload_len > IPC_MAX_FRAME_SIZE)
+    return;
+
+  unsigned char frame[sizeof(MsgHeader) + IPC_MAX_FRAME_SIZE];
+  MsgHeader hdr = {.length = (uint32_t)payload_len,
+                   .type = MSG_STATUS_EVENT};
+  size_t offset = 0;
+  memcpy(frame + offset, &hdr, sizeof(hdr));
+  offset += sizeof(hdr);
+  memcpy(frame + offset, &download_id, sizeof(download_id));
+  offset += sizeof(download_id);
+  memcpy(frame + offset, &progress, sizeof(progress));
+  offset += sizeof(progress);
+  uint32_t wire_status_len = (uint32_t)status_len;
+  memcpy(frame + offset, &wire_status_len, sizeof(wire_status_len));
+  offset += sizeof(wire_status_len);
+  memcpy(frame + offset, text, status_len);
+  offset += status_len;
 
   dm_mutex_lock(&g_client_mutex);
   for (int i = 0; i < g_client_count; i++) {
     if (!g_client_subscribed[i])
       continue;
-    ipc_write_exact(g_client_fds[i], &hdr, sizeof(hdr));
-    ipc_write_exact(g_client_fds[i], &download_id, sizeof(download_id));
-    ipc_write_exact(g_client_fds[i], &progress, sizeof(progress));
-    write_string(g_client_fds[i], status);
+
+    int flags = 0;
+#if defined(MSG_NOSIGNAL)
+    flags |= MSG_NOSIGNAL;
+#endif
+#if defined(MSG_DONTWAIT)
+    flags |= MSG_DONTWAIT;
+#endif
+    ssize_t sent = send(g_client_fds[i], frame, offset, flags);
+    if (sent != (ssize_t)offset) {
+      LOG_DEBUG("IPC: removing slow or disconnected subscriber (fd=%d)",
+                g_client_fds[i]);
+      remove_client(i);
+      i--;
+    }
   }
   dm_mutex_unlock(&g_client_mutex);
 }

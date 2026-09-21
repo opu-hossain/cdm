@@ -59,6 +59,9 @@ uint64_t file_get_size(const char *path);
 /** Close a file handle. */
 void file_close(FileHandle fd);
 
+/** Create a directory and any missing parent directories. */
+int file_ensure_directory(const char *path);
+
 #ifdef __cplusplus
 }
 #endif

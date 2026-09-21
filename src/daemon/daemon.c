@@ -7,6 +7,7 @@
 #include "../core/scheduler.h"
 #include "../persistence/db.h"
 #include "../platform/bandwidth.h"
+#include "../platform/file_io.h"
 #include "../platform/ipc_socket.h"
 #include "../platform/thread.h"
 #include "../utils/config.h"
@@ -34,7 +35,7 @@ static void request_shutdown(int sig) {
 }
 
 /** Create a directory if it doesn't already exist. */
-static void ensure_data_dir(const char *dir) { mkdir(dir, 0755); }
+static void ensure_data_dir(const char *dir) { file_ensure_directory(dir); }
 
 /**
  * Return the daemon's data directory (~/.local/share/downloadmgr),

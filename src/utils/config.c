@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Opu Hossain
 
 #include "config.h"
+#include "../platform/file_io.h"
 #include "../vendor/tomlc17.h"
 #include "log.h"
 
@@ -42,6 +43,7 @@ static void set_default_dir(void) {
 #endif
   snprintf(g_default_dir, sizeof(g_default_dir), "%s%cDownloads",
            home ? home : ".", sep);
+  file_ensure_directory(g_default_dir);
 }
 
 static void read_int(toml_datum_t tab, const char *key, int *out) {
@@ -84,6 +86,9 @@ static bool default_dir_is_usable(const char *path) {
   if (strncmp(path, home, home_len) != 0)
     return false;
   if (path[home_len] != '\0' && path[home_len] != '/')
+    return false;
+
+  if (file_ensure_directory(path) != 0)
     return false;
 
   char resolved[1024];

@@ -24,6 +24,7 @@
 
 typedef struct {
   struct Download *d;
+  _Atomic uint64_t **progress_slots;
 } SplitCallbackCtx;
 
 /**
@@ -57,6 +58,8 @@ static void on_rebalance_split(void *userdata, uint64_t victim_start,
   d->chunks[idx] = (DownloadChunk){new_start, new_end - 1, 0};
   d->chunk_count++;
   atomic_store(&d->chunk_live_bytes[idx], 0);
+  if (sctx->progress_slots)
+    sctx->progress_slots[idx] = &d->chunk_live_bytes[idx];
   db_insert_chunk(d->id, new_start, new_end - 1);
 }
 
@@ -225,7 +228,7 @@ int engine_run_download(struct Download *d) {
 
   uint64_t speed_limit = request ? request->speed_limit_bps : 0;
 
-  SplitCallbackCtx split_ctx = {.d = d};
+  SplitCallbackCtx split_ctx = {.d = d, .progress_slots = chunk_progress_slots};
   RebalancePool *pool = NULL;
   if (n_ranges > 1) {
     pool = rebalance_pool_create(ranges, n_ranges, chunk_progress_slots,
