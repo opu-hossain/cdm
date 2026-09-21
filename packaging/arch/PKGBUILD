@@ -1,0 +1,41 @@
+# Maintainer: Opu Hossain <opuhossain@tutamail.com>
+pkgname=downloadmgr
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Core Download Manager"
+arch=('x86_64' 'aarch64')
+url="https://github.com/opu-hossain/cdm"
+license=('MIT')
+depends=(
+  'libnotify'
+  'gtk3'
+  'webkit2gtk-4.1'
+  'curl'
+  'sqlite'
+  'glibc'
+  'gcc-libs'
+)
+makedepends=(
+  'cmake'
+  'git'
+  'pkgconf'
+  'libnotify'
+  'gtk3'
+  'webkit2gtk-4.1'
+)
+source=("$pkgname-$pkgver.tar.gz::https://github.com/opu-hossain/cdm/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/cdm-$pkgver"
+  cmake -S . -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DBUILD_TESTING=OFF
+  cmake --build build -j"$(nproc)"
+}
+
+package() {
+  cd "$srcdir/cdm-$pkgver"
+  DESTDIR="$pkgdir" cmake --install build
+}

@@ -1,0 +1,140 @@
+name: Release (RPM)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Override channel for a manual release: rc or stable'
+        required: false
+        default: rc
+        type: choice
+        options:
+          - rc
+          - stable
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  release-rpm:
+    runs-on: ubuntu-24.04
+    container: fedora:41
+    env:
+      COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+      COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+
+    steps:
+      - name: Bootstrap container tools
+        run: dnf install -y git tar curl which findutils gh
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: ./packaging/deps/rpm.sh
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re, os
+          from pathlib import Path
+          text = Path('.release.toml').read_text(encoding='utf-8')
+          channel = re.search(r'^channel\s*=\s*["\']?([A-Za-z0-9_-]+)["\']?', text, re.M)
+          version = re.search(r'^version\s*=\s*["\']?([0-9]+\.[0-9]+\.[0-9]+)["\']?', text, re.M)
+          rc_num  = re.search(r'^rc\s*=\s*([0-9]+)', text, re.M)
+          publish = re.search(r'^publish\s*=\s*(true|false)', text, re.M)
+          channel_name = (channel.group(1) if channel else 'rc').strip()
+          manual = os.environ.get('INPUT_CHANNEL', '').strip()
+          if manual in {'rc', 'stable'}:
+              channel_name = manual
+          base = (version.group(1) if version else '0.1.0').strip()
+          rc   = int(rc_num.group(1)) if rc_num else 1
+          resolved = f"{base}-rc{rc}" if channel_name == 'rc' else base
+          publish_enabled = publish.group(1).lower() == 'true' if publish else True
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f"version={resolved}\n")
+              out.write(f"release_tag=v{resolved}\n")
+              out.write(f"publish={str(publish_enabled).lower()}\n")
+          PY
+        env:
+          INPUT_CHANNEL: ${{ github.event.inputs.channel || '' }}
+
+      - name: Announce skip if publishing is disabled
+        if: ${{ steps.meta.outputs.publish != 'true' }}
+        run: echo "Release publishing is disabled. Skipping remaining steps."
+
+      - name: Configure build
+        if: ${{ steps.meta.outputs.publish == 'true' }}
+        run: >
+          cmake -S . -B build-rpm
+          -DBUILD_TESTING=OFF
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_INSTALL_PREFIX=/usr
+
+      - name: Build
+        if: ${{ steps.meta.outputs.publish == 'true' }}
+        run: cmake --build build-rpm -j"$(nproc)"
+
+      - name: Build RPM
+        if: ${{ steps.meta.outputs.publish == 'true' }}
+        run: cpack --config build-rpm/CPackConfig.cmake -G RPM
+
+      - name: Rename RPM
+        if: ${{ steps.meta.outputs.publish == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          RPM_PATH="$(ls -1 ./*.rpm | head -n 1)"
+          NEW_PATH="./downloadmgr-${VERSION}-linux.rpm"
+          cp "$RPM_PATH" "$NEW_PATH"
+          echo "PACKAGE_PATH=$NEW_PATH" >> "$GITHUB_ENV"
+
+      - name: Generate checksum
+        if: ${{ steps.meta.outputs.publish == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIR="$(dirname "$PACKAGE_PATH")"
+          BASE="$(basename "$PACKAGE_PATH")"
+          ( cd "$DIR" && sha256sum "$BASE" ) > SHA256SUMS.txt
+
+      - name: Install cosign
+        if: ${{ steps.meta.outputs.publish == 'true' && env.COSIGN_PRIVATE_KEY != '' && env.COSIGN_PASSWORD != '' }}
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign checksums
+        if: ${{ steps.meta.outputs.publish == 'true' && env.COSIGN_PRIVATE_KEY != '' && env.COSIGN_PASSWORD != '' }}
+        run: |
+          echo "$COSIGN_PRIVATE_KEY" > cosign.key
+          chmod 600 cosign.key
+          cosign sign-blob --yes --key cosign.key \
+            --output-signature SHA256SUMS.txt.sig SHA256SUMS.txt
+          rm -f cosign.key
+
+      - name: Publish release assets
+        if: ${{ steps.meta.outputs.publish == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ASSETS=("$PACKAGE_PATH" "SHA256SUMS.txt")
+          [ -f SHA256SUMS.txt.sig ] && ASSETS+=("SHA256SUMS.txt.sig")
+          printf 'Release tag: %s\n' "$RELEASE_TAG"
+          printf 'Assets:\n'; printf '  %s\n' "${ASSETS[@]}"
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes || true
+          gh release upload "$RELEASE_TAG" "${ASSETS[@]}" --clobber
