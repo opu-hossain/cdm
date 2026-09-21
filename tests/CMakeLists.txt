@@ -46,3 +46,16 @@ if(UNIX AND NOT WIN32)
                  COMMAND test_curl_http_integration)
     endif()
 endif()
+
+if(UNIX AND NOT WIN32)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_executable(test_engine_http_integration test_engine_http_integration.c)
+        downloadmgr_enable_warnings(test_engine_http_integration)
+        downloadmgr_enable_sanitizer(test_engine_http_integration)
+        target_link_libraries(test_engine_http_integration
+            PRIVATE downloadmgr_core PkgConfig::CRITERION)
+        add_test(NAME test_engine_http_integration
+                 COMMAND test_engine_http_integration)
+    endif()
+endif()

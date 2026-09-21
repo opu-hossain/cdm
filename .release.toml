@@ -1,0 +1,9 @@
+# Release metadata for automated package generation.
+# Allowed channels: "rc" or "stable".
+# "rc" creates version strings like 0.1.0-rc1, and "stable" creates 0.1.0.
+# Changing this file is the trigger source for automated releases.
+
+channel = "rc"
+version = "0.1.0"
+rc = 1
+publish = true

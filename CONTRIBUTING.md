@@ -51,9 +51,8 @@ Optional:
 ### Clone the Repository
 
 ```bash
-git clone [https://github.com/](https://github.com/)<username>/cdm.git
+git clone https://github.com/<username>/cdm.git
 cd cdm
-
 ```
 
 ### Configure Build
@@ -81,6 +80,16 @@ cmake --build build
 
 ```bash
 ctest --test-dir build --output-on-failure
+```
+
+### Create the first Debian package
+
+```bash
+cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j"$(nproc)"
+ctest --test-dir build --output-on-failure
+cpack --config build/CPackConfig.cmake -G DEB
+sha256sum *.deb > SHA256SUMS.txt
 ```
 
 For AddressSanitizer validation:

@@ -127,7 +127,9 @@ int engine_run_download(struct Download *d) {
 
   if (resuming) {
     uint64_t on_disk = file_get_size(d->dest_path);
-    if (info.total_size != d->total_size || on_disk != d->total_size) {
+    bool stale = (d->total_size != 0 && info.total_size != d->total_size);
+    bool impossible = on_disk > info.total_size;
+    if (stale || impossible) {
       LOG_ERROR("Resume data for download %u is stale (size mismatch), "
                 "restarting from scratch\n",
                 d->id);
@@ -190,7 +192,7 @@ int engine_run_download(struct Download *d) {
     } else {
       n_ranges = 1;
       ranges[0].start = 0;
-      ranges[0].end = 0;
+      ranges[0].end = (info.total_size > 0) ? (info.total_size - 1) : 0;
       ranges[0].resume_offset = 0;
       ranges[0].whole_file = true;
     }

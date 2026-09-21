@@ -20,11 +20,13 @@ A fast, modern, open-source, cross-platform download manager written in C.
 
 > **Project Status**
 >
-> **Core Download Manager (CDM)** is currently under active development.
+> **Core Download Manager (CDM)** is currently in active development and this is the first public Linux-first release.
 >
-> The architecture, APIs, and file formats are still evolving, so breaking changes may occur before the first stable release.
+> The current release focuses on a stable Linux desktop workflow: CLI, daemon, GUI, queue persistence, and resumable HTTP downloads.
 >
-> If you'd like to help shape the project, contributions, testing, bug reports, and design discussions are all welcome.
+> Windows and macOS are not part of this public release scope and are not yet claimed as supported platforms.
+>
+> Contributions, testing, bug reports, and design feedback are welcome.
 
 ---
 
@@ -40,7 +42,7 @@ Many download managers today are either:
 * Limited to a single platform
 * Difficult to extend or contribute to
 
-CDM aims to solve those problems by building a clean, modular download manager entirely in **standard C11**, with the same codebase supporting **Linux**, **macOS**, and **Windows**.
+CDM aims to solve those problems by building a clean, modular download manager entirely in **standard C11**, with the first public release focused on **Linux** support and a long-term path toward broader platform coverage.
 
 The project is built around a reusable download engine that powers multiple frontends—including a command-line interface, graphical interface, daemon, and browser integration.
 
@@ -66,15 +68,15 @@ No vendor lock-in.
 
 ---
 
-## Cross Platform
+## Linux-first release
 
-One shared codebase.
+The current public release is intentionally Linux-first.
 
-* Linux
-* macOS
-* Windows
+* Linux: supported for the first release package
+* macOS: planned, not claimed yet
+* Windows: planned, not claimed yet
 
-Platform-specific code is isolated behind thin abstraction layers.
+Platform-specific code remains isolated behind thin abstraction layers, but only Linux is part of the current public support promise.
 
 ---
 
@@ -248,6 +250,24 @@ Dependencies fetched automatically:
 * tinyfiledialogs
 
 Linux builds require **libnotify** development files through `pkg-config`.
+
+---
+
+## Install from the first release package
+
+Download the Debian package from GitHub Releases and verify its checksum before installing:
+
+```bash
+curl -LO https://github.com/<OWNER>/<REPO>/releases/download/v0.1.0/downloadmgr-0.1.0-Linux.deb
+sha256sum -c SHA256SUMS.txt
+sudo dpkg -i downloadmgr-0.1.0-Linux.deb
+```
+
+If you are installing from a locally downloaded checksum file, verify the artifact with:
+
+```bash
+sha256sum -c SHA256SUMS.txt
+```
 
 ---
 

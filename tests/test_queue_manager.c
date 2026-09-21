@@ -1,6 +1,7 @@
 #include "../src/core/queue_manager.h"
 #include <criterion/criterion.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 static void setup(void) {
   // Allow tests to write inside /tmp
@@ -140,6 +141,20 @@ Test(queue_manager, allowed_root_tracks_environment_changes) {
       queue_manager_add("http://example.com/accepted", "/tmp/accepted", NULL);
   cr_assert_neq(id, 0);
   queue_manager_remove(id);
+}
+
+Test(queue_manager, duplicate_destinations_are_rejected) {
+  const char *dest = "/tmp/duplicate-destination.bin";
+  unlink(dest);
+
+  uint32_t id1 = queue_manager_add("http://example.com/first", dest, NULL);
+  cr_assert_neq(id1, 0);
+
+  uint32_t id2 = queue_manager_add("http://example.com/second", dest, NULL);
+  cr_assert_eq(id2, 0);
+
+  queue_manager_remove(id1);
+  unlink(dest);
 }
 
 Test(queue_manager, snapshot_active_progress) {

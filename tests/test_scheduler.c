@@ -8,6 +8,7 @@
 #include <stdio.h>  // for sprintf
 #include <stdlib.h> // for setenv
 #include <stdatomic.h>
+#include <unistd.h>
 
 // --- Mock engine_run_download (overrides the real one) ---
 static _Atomic int active_workers;
@@ -55,8 +56,10 @@ Test(scheduler, respects_max_active) {
   uint32_t ids[5];
   for (int i = 0; i < 5; i++) {
     char url[100];
+    char dest[128];
     sprintf(url, "http://test%d", i);
-    ids[i] = queue_manager_add(url, "/tmp/file", NULL);
+    snprintf(dest, sizeof(dest), "/tmp/scheduler-file-%d", i);
+    ids[i] = queue_manager_add(url, dest, NULL);
     cr_assert_neq(ids[i], 0);
   }
 
@@ -104,4 +107,37 @@ Test(scheduler, shutdown_preserves_active_download_for_resume) {
 
   queue_manager_remove(id);
   atomic_store(&hold_workers, false);
+}
+
+Test(scheduler, restore_requeues_active_downloads_with_chunk_resume_state) {
+  const char *path = "/tmp/cdm_scheduler_restart.db";
+  unlink(path);
+
+  db_close();
+  cr_assert_eq(db_init(path), 0);
+
+  uint32_t id = 42;
+  RequestOptions opts = {0};
+  cr_assert_eq(db_insert_download(id, "http://example.com/resume",
+                                 "/tmp/resume.bin", &opts),
+               0);
+  cr_assert_eq(db_update_status(id, "ACTIVE"), 0);
+  cr_assert_eq(db_insert_chunk(id, 0, 63), 0);
+  cr_assert_eq(db_update_chunk_progress(id, 0, 31), 0);
+
+  db_close();
+  cr_assert_eq(db_init(path), 0);
+  cr_assert_eq(db_restore_queue(), 0);
+  queue_manager_seed_next_id(db_get_max_id() + 1);
+
+  Download *d = queue_manager_find_next_queued();
+  cr_assert_not_null(d);
+  cr_assert_eq(d->id, id);
+  cr_assert_eq(d->status, DOWNLOAD_QUEUED);
+  cr_assert_eq(d->chunk_count, 1);
+  cr_assert_eq(d->chunks[0].bytes_done, 31);
+
+  queue_manager_remove(id);
+  db_close();
+  unlink(path);
 }

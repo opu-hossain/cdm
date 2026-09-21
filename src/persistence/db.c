@@ -175,6 +175,23 @@ int db_insert_download(uint32_t id, const char *url, const char *dest_path,
                        const RequestOptions *opts) {
   if (!db_ready() || !url || !dest_path)
     return -1;
+
+  const char *check_sql =
+      "SELECT 1 FROM downloads WHERE dest_path = ? AND id != ? LIMIT 1";
+  sqlite3_stmt *check_stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, check_sql, -1, &check_stmt, NULL) != SQLITE_OK) {
+    LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
+    return -1;
+  }
+  sqlite3_bind_text(check_stmt, 1, dest_path, -1, SQLITE_STATIC);
+  sqlite3_bind_int(check_stmt, 2, (int)id);
+  int exists = sqlite3_step(check_stmt) == SQLITE_ROW;
+  sqlite3_finalize(check_stmt);
+  if (exists) {
+    LOG_WARN("db_insert_download: destination already in use: %s", dest_path);
+    return -1;
+  }
+
   const char *sql =
       "INSERT OR REPLACE INTO downloads "
       "(id, url, dest_path, status, created_at, cookie, referrer, "

@@ -29,6 +29,16 @@ static bool request_options_present(const RequestOptions *opts) {
                   opts->speed_limit_bps != 0);
 }
 
+static bool destination_in_use(const char *dest_path) {
+  Download *cur = g_head;
+  while (cur != NULL) {
+    if (strcmp(cur->dest_path, dest_path) == 0)
+      return true;
+    cur = cur->next;
+  }
+  return false;
+}
+
 static void free_download(Download *download) {
   free(download->request);
   free(download);
@@ -137,6 +147,14 @@ uint32_t queue_manager_add(const char *url, const char *dest_path,
 
   if (!is_safe_dest_path(dest_path))
     return 0;
+
+  dm_mutex_lock(&g_mutex);
+  if (destination_in_use(dest_path)) {
+    LOG_WARN("queue_manager_add: destination already in use: %s", dest_path);
+    dm_mutex_unlock(&g_mutex);
+    return 0;
+  }
+  dm_mutex_unlock(&g_mutex);
 
   Download *d = calloc(1, sizeof(Download));
   if (!d)

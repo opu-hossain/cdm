@@ -1,2 +1,9 @@
 build/
+build-asan/
 .cache/
+_CPack_Packages/
+*.deb
+*.tar.gz
+SHA256SUMS.txt
+SHA256SUMS.txt.sig
+release-manifest.txt
