@@ -32,7 +32,7 @@ static void filename_from_url(const char *url, char *out, size_t out_size) {
   out[out_size - 1] = '\0';
 }
 
-static void join_path(const char *dir, const char *filename, char *out,
+static bool join_path(const char *dir, const char *filename, char *out,
                       size_t out_size) {
 #ifdef _WIN32
   const char sep = '\\';
@@ -41,10 +41,20 @@ static void join_path(const char *dir, const char *filename, char *out,
 #endif
   size_t dir_len = strlen(dir);
   if (dir_len > 0 && dir[dir_len - 1] == sep) {
-    snprintf(out, out_size, "%s%s", dir, filename);
+    size_t filename_len = strlen(filename);
+    if (dir_len + filename_len + 1 > out_size)
+      return false;
+    memcpy(out, dir, dir_len);
+    memcpy(out + dir_len, filename, filename_len + 1);
   } else {
-    snprintf(out, out_size, "%s%c%s", dir, sep, filename);
+    size_t filename_len = strlen(filename);
+    if (dir_len + 1 + filename_len + 1 > out_size)
+      return false;
+    memcpy(out, dir, dir_len);
+    out[dir_len] = sep;
+    memcpy(out + dir_len + 1, filename, filename_len + 1);
   }
+  return true;
 }
 
 // Not static anymore — called from gui_worker.c's dispatch_result() on the
@@ -310,15 +320,15 @@ static void get_ui_file_url(char *out_url, size_t max_len) {
 
   /* 1. Next to binary (e.g., <exe_dir>/src/gui/ui/index.html via post-build copy) */
   if (exe_dir[0] != '\0') {
-    snprintf(candidate, sizeof(candidate), "%s/src/gui/ui/index.html", exe_dir);
-    if (check_file_readable(candidate)) {
+    if (join_path(exe_dir, "src/gui/ui/index.html", candidate,
+            sizeof(candidate)) && check_file_readable(candidate)) {
       snprintf(out_url, max_len, "file://%s", candidate);
       return;
     }
 
     /* 2. <exe_dir>/ui/index.html (installed binary layout) */
-    snprintf(candidate, sizeof(candidate), "%s/ui/index.html", exe_dir);
-    if (check_file_readable(candidate)) {
+    if (join_path(exe_dir, "ui/index.html", candidate, sizeof(candidate)) &&
+      check_file_readable(candidate)) {
       snprintf(out_url, max_len, "file://%s", candidate);
       return;
     }
@@ -327,8 +337,8 @@ static void get_ui_file_url(char *out_url, size_t max_len) {
   /* 3. PWD fallback (source repository directory) */
   const char *pwd = getenv("PWD");
   if (pwd && pwd[0] != '\0') {
-    snprintf(candidate, sizeof(candidate), "%s/src/gui/ui/index.html", pwd);
-    if (check_file_readable(candidate)) {
+    if (join_path(pwd, "src/gui/ui/index.html", candidate, sizeof(candidate)) &&
+      check_file_readable(candidate)) {
       snprintf(out_url, max_len, "file://%s", candidate);
       return;
     }
