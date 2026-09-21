@@ -8,6 +8,9 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(DOWNLOADMGR_ENABLE_WARNINGS "Enable warnings for project targets" ON)
+set(DOWNLOADMGR_SANITIZER "" CACHE STRING
+    "Sanitizer to enable: address, undefined, or thread")
+set_property(CACHE DOWNLOADMGR_SANITIZER PROPERTY STRINGS "" address undefined thread)
 
 function(downloadmgr_enable_warnings target)
     if(NOT DOWNLOADMGR_ENABLE_WARNINGS)
@@ -19,6 +22,31 @@ function(downloadmgr_enable_warnings target)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endif()
+endfunction()
+
+function(downloadmgr_enable_sanitizer target)
+    if(DOWNLOADMGR_SANITIZER STREQUAL "")
+        return()
+    endif()
+
+    if(NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+        message(FATAL_ERROR
+            "DOWNLOADMGR_SANITIZER requires GCC or Clang-compatible compilers")
+    endif()
+
+    if(DOWNLOADMGR_SANITIZER STREQUAL "address")
+        set(flags -fsanitize=address -fno-omit-frame-pointer)
+    elseif(DOWNLOADMGR_SANITIZER STREQUAL "undefined")
+        set(flags -fsanitize=undefined -fno-omit-frame-pointer)
+    elseif(DOWNLOADMGR_SANITIZER STREQUAL "thread")
+        set(flags -fsanitize=thread -fno-omit-frame-pointer)
+    else()
+        message(FATAL_ERROR
+            "Unknown DOWNLOADMGR_SANITIZER='${DOWNLOADMGR_SANITIZER}'")
+    endif()
+
+    target_compile_options(${target} PRIVATE ${flags})
+    target_link_options(${target} PRIVATE ${flags})
 endfunction()
 
 include(CTest)
@@ -133,6 +161,7 @@ add_library(downloadmgr_core STATIC
     ${PERSISTENCE_SOURCES}
 )
 downloadmgr_enable_warnings(downloadmgr_core)
+downloadmgr_enable_sanitizer(downloadmgr_core)
 
 target_include_directories(downloadmgr_core PRIVATE src)
 target_link_libraries(downloadmgr_core PUBLIC
@@ -161,6 +190,7 @@ add_executable(downloadmgr
     src/daemon/daemon.c
 )
 downloadmgr_enable_warnings(downloadmgr)
+downloadmgr_enable_sanitizer(downloadmgr)
 
 target_include_directories(downloadmgr PRIVATE src)
 
@@ -182,6 +212,7 @@ add_executable(downloadmgr_native_host
     src/native_host/main_host.c
 )
 downloadmgr_enable_warnings(downloadmgr_native_host)
+downloadmgr_enable_sanitizer(downloadmgr_native_host)
 
 target_link_libraries(downloadmgr_native_host PRIVATE downloadmgr_core)
 
