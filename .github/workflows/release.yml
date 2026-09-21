@@ -44,35 +44,35 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-import re
-import os
-from pathlib import Path
+          import re
+          import os
+          from pathlib import Path
 
-release_file = Path('.release.toml')
-if not release_file.exists():
-    raise SystemExit('Missing .release.toml; release metadata is required.')
+          release_file = Path('.release.toml')
+          if not release_file.exists():
+              raise SystemExit('Missing .release.toml; release metadata is required.')
 
-text = release_file.read_text(encoding='utf-8')
-channel = re.search(r'^channel\s*=\s*["\']?([A-Za-z0-9_-]+)["\']?', text, re.M)
-version = re.search(r'^version\s*=\s*["\']?([0-9]+\.[0-9]+\.[0-9]+)["\']?', text, re.M)
-rc_num = re.search(r'^rc\s*=\s*([0-9]+)', text, re.M)
-publish = re.search(r'^publish\s*=\s*(true|false)', text, re.M)
-channel_name = (channel.group(1) if channel else 'rc').strip()
-manual = os.environ.get('INPUT_CHANNEL', '').strip()
-if manual in {'rc', 'stable'}:
-    channel_name = manual
+          text = release_file.read_text(encoding='utf-8')
+          channel = re.search(r'^channel\s*=\s*["\']?([A-Za-z0-9_-]+)["\']?', text, re.M)
+          version = re.search(r'^version\s*=\s*["\']?([0-9]+\.[0-9]+\.[0-9]+)["\']?', text, re.M)
+          rc_num = re.search(r'^rc\s*=\s*([0-9]+)', text, re.M)
+          publish = re.search(r'^publish\s*=\s*(true|false)', text, re.M)
+          channel_name = (channel.group(1) if channel else 'rc').strip()
+          manual = os.environ.get('INPUT_CHANNEL', '').strip()
+          if manual in {'rc', 'stable'}:
+              channel_name = manual
 
-base_version = (version.group(1) if version else '0.1.0').strip()
-rc_value = int(rc_num.group(1)) if rc_num else 1
-resolved_version = f"{base_version}-rc{rc_value}" if channel_name == 'rc' else base_version
-publish_enabled = publish.group(1).strip().lower() == 'true' if publish else True
+          base_version = (version.group(1) if version else '0.1.0').strip()
+          rc_value = int(rc_num.group(1)) if rc_num else 1
+          resolved_version = f"{base_version}-rc{rc_value}" if channel_name == 'rc' else base_version
+          publish_enabled = publish.group(1).strip().lower() == 'true' if publish else True
 
-with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
-    out.write(f"channel={channel_name}\n")
-    out.write(f"version={resolved_version}\n")
-    out.write(f"release_tag=v{resolved_version}\n")
-    out.write(f"publish={str(publish_enabled).lower()}\n")
-PY
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
+              out.write(f"channel={channel_name}\n")
+              out.write(f"version={resolved_version}\n")
+              out.write(f"release_tag=v{resolved_version}\n")
+              out.write(f"publish={str(publish_enabled).lower()}\n")
+          PY
         env:
           INPUT_CHANNEL: ${{ github.event.inputs.channel || '' }}
 
