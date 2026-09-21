@@ -102,9 +102,9 @@ static void write_string(int fd, const char *s) {
 /**
  * Receive a length‑prefixed string (max `max_len` bytes including NUL).
  *
- * If the incoming string length exceeds `max_len - 1`, the string is truncated
- * to fit in `out` and all excess bytes are drained from the wire so that
- * subsequent messages on the IPC socket stream remain synchronized.
+ * If the incoming string length exceeds `max_len - 1`, all bytes are drained
+ * from the wire so that subsequent messages remain synchronized, but the
+ * field is rejected instead of silently truncated.
  *
  * @return 0 on success, -1 on read error or connection closed.
  */
@@ -127,7 +127,8 @@ static int read_string(int fd, char *out, size_t max_len) {
   }
   out[to_read] = '\0';
 
-  if ((size_t)len >= max_len) {
+  bool oversized = (size_t)len >= max_len;
+  if (oversized) {
     size_t excess = (size_t)len - to_read;
     char dummy[256];
     while (excess > 0) {
@@ -138,7 +139,7 @@ static int read_string(int fd, char *out, size_t max_len) {
     }
   }
 
-  return 0;
+  return oversized ? -1 : 0;
 }
 
 /** Remove a client from the array and compact. */
@@ -226,9 +227,10 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     char url[IPC_MAX_URL_LEN];
     char dest[IPC_MAX_PATH_LEN];
     char options_json[8192];
-    read_string(client_fd, url, sizeof(url));
-    read_string(client_fd, dest, sizeof(dest));
-    read_string(client_fd, options_json, sizeof(options_json));
+    if (read_string(client_fd, url, sizeof(url)) != 0 ||
+        read_string(client_fd, dest, sizeof(dest)) != 0 ||
+        read_string(client_fd, options_json, sizeof(options_json)) != 0)
+      return;
     LOG_INFO("MSG_ADD_DOWNLOAD received: url='%s' dest='%s'", url, dest);
 
     RequestOptions opts = {0};
@@ -629,6 +631,8 @@ int ipc_send_cancel(int sock, uint32_t id) {
 }
 
 int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max) {
+  if (!out || max <= 0)
+    return -1;
   MsgHeader hdr = {.length = 0, .type = MSG_LIST_ALL};
   if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0)
     return -1;
@@ -680,10 +684,11 @@ int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out) {
   if (!found)
     return -1;
 
-  read_string(sock, out->cookie, sizeof(out->cookie));
-  read_string(sock, out->referrer, sizeof(out->referrer));
-  read_string(sock, out->extra_headers, sizeof(out->extra_headers));
-  read_string(sock, out->expected_sha256, sizeof(out->expected_sha256));
+  if (read_string(sock, out->cookie, sizeof(out->cookie)) != 0 ||
+      read_string(sock, out->referrer, sizeof(out->referrer)) != 0 ||
+      read_string(sock, out->extra_headers, sizeof(out->extra_headers)) != 0 ||
+      read_string(sock, out->expected_sha256, sizeof(out->expected_sha256)) != 0)
+    return -1;
   return ipc_read_exact(sock, &out->speed_limit_bps,
                         sizeof(out->speed_limit_bps));
 }
