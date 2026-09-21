@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Core Download Manager
+Comment=Download manager
+Exec=downloadmgr gui
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=true

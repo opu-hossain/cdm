@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 # FIX: Must include both C and CXX since this is a C project integrating a C++ library (webview)
 project(downloadmgr LANGUAGES C CXX)
 
+include(GNUInstallDirs)
+
 # ----- Global settings -----
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -219,3 +221,24 @@ target_link_libraries(downloadmgr_native_host PRIVATE downloadmgr_core)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+
+install(TARGETS downloadmgr
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(DIRECTORY src/gui/ui/
+    DESTINATION ${CMAKE_INSTALL_BINDIR}/ui
+)
+install(FILES resources/downloadmgr.desktop
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+)
+
+set(CPACK_PACKAGE_NAME "downloadmgr")
+set(CPACK_PACKAGE_VENDOR "Core Download Manager")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Core Download Manager")
+set(CPACK_PACKAGE_CONTACT "Core Download Manager maintainers")
+set(CPACK_PACKAGE_VERSION_MAJOR 0)
+set(CPACK_PACKAGE_VERSION_MINOR 1)
+set(CPACK_PACKAGE_VERSION_PATCH 0)
+set(CPACK_GENERATOR "DEB")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libnotify4, libgtk-3-0")
+include(CPack)
