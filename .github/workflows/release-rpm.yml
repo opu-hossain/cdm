@@ -38,6 +38,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # NEW: container UID differs from workspace owner; git refuses without this.
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Install build dependencies
         run: ./packaging/deps/rpm.sh
 
