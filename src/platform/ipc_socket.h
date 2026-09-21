@@ -5,6 +5,7 @@
 #define PLATFORM_IPC_SOCKET_H
 
 #include "ipc_protocol.h"
+#include "../core/download_record.h"
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -15,13 +16,7 @@ extern "C" {
 #define IPC_LIST_ALL_MAX 200
 
 /* Data structures for list‑all responses */
-typedef struct {
-  uint32_t id;
-  char url[IPC_MAX_URL_LEN];
-  char dest_path[IPC_MAX_PATH_LEN];
-  char status[16];
-  float progress;
-} IpcDownloadRecord;
+typedef DownloadListRecord IpcDownloadRecord;
 
 typedef struct {
   char cookie[1024];

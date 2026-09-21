@@ -269,7 +269,7 @@ int db_load_chunks(uint32_t download_id, DbChunkRow *out, int max) {
 
 int db_list_all_downloads(DbDownloadRow *out, int max) {
   const char *sql =
-      "SELECT id, url, dest_path, status, total_size FROM downloads "
+      "SELECT id, url, dest_path, status FROM downloads "
       "ORDER BY id DESC LIMIT ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
@@ -284,7 +284,6 @@ int db_list_all_downloads(DbDownloadRow *out, int max) {
     const char *url = (const char *)sqlite3_column_text(stmt, 1);
     const char *path = (const char *)sqlite3_column_text(stmt, 2);
     const char *stat = (const char *)sqlite3_column_text(stmt, 3);
-    out[n].total_size = (uint64_t)sqlite3_column_int64(stmt, 4);
 
     strncpy(out[n].url, url ? url : "", sizeof(out[n].url) - 1);
     out[n].url[sizeof(out[n].url) - 1] = '\0';
@@ -296,6 +295,53 @@ int db_list_all_downloads(DbDownloadRow *out, int max) {
   }
   sqlite3_finalize(stmt);
   return n;
+}
+
+int db_count_downloads(int max) {
+  const char *sql = "SELECT COUNT(*) FROM downloads";
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+
+  int count = -1;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    sqlite3_int64 total = sqlite3_column_int64(stmt, 0);
+    count = (total > max) ? max : (int)total;
+  }
+  sqlite3_finalize(stmt);
+  return count;
+}
+
+int db_visit_downloads(DbDownloadVisitor visitor, void *ctx, int max) {
+  if (!visitor || max <= 0)
+    return -1;
+
+  const char *sql =
+      "SELECT id, url, dest_path, status FROM downloads "
+      "ORDER BY id DESC LIMIT ?";
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_int(stmt, 1, max);
+
+  int visited = 0;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    DbDownloadRow row = {0};
+    row.id = (uint32_t)sqlite3_column_int(stmt, 0);
+
+    const char *url = (const char *)sqlite3_column_text(stmt, 1);
+    const char *path = (const char *)sqlite3_column_text(stmt, 2);
+    const char *status = (const char *)sqlite3_column_text(stmt, 3);
+    strncpy(row.url, url ? url : "", sizeof(row.url) - 1);
+    strncpy(row.dest_path, path ? path : "", sizeof(row.dest_path) - 1);
+    strncpy(row.status, status ? status : "", sizeof(row.status) - 1);
+
+    if (visitor(&row, ctx) != 0)
+      break;
+    visited++;
+  }
+  sqlite3_finalize(stmt);
+  return visited;
 }
 
 int db_get_download_details(uint32_t id, IpcDownloadDetails *out) {

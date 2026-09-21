@@ -148,6 +148,48 @@ static void remove_client(int index) {
   g_client_count--;
 }
 
+typedef struct {
+  int client_fd;
+} ListResponseContext;
+
+static int send_download_row(const DbDownloadRow *row, void *ctx) {
+  ListResponseContext *response = (ListResponseContext *)ctx;
+  char status[16];
+  float progress = 0.0f;
+  Download *live = queue_manager_find_by_id(row->id);
+
+  if (live) {
+    strncpy(status, status_to_string(live->status), sizeof(status) - 1);
+    status[sizeof(status) - 1] = '\0';
+
+    uint64_t total = live->total_size;
+    if (total > 0) {
+      uint64_t done = 0;
+      if (live->status == DOWNLOAD_ACTIVE) {
+        done = atomic_load(&live->bytes_downloaded);
+      } else if (live->chunk_count > 0) {
+        for (int c = 0; c < live->chunk_count; c++)
+          done += live->chunks[c].bytes_done;
+      }
+      double fraction = (double)done / (double)total;
+      progress = (float)(fraction > 1.0 ? 1.0 : fraction);
+    }
+  } else {
+    strncpy(status, row->status, sizeof(status) - 1);
+    status[sizeof(status) - 1] = '\0';
+  }
+
+  if (strcmp(status, "DONE") == 0)
+    progress = 1.0f;
+
+  if (ipc_write_exact(response->client_fd, &row->id, sizeof(row->id)) != 0)
+    return -1;
+  write_string(response->client_fd, row->url);
+  write_string(response->client_fd, row->dest_path);
+  write_string(response->client_fd, status);
+  return ipc_write_exact(response->client_fd, &progress, sizeof(progress));
+}
+
 /** Dispatch an incoming message. */
 static void handle_message(int client_fd, MsgHeader *hdr) {
   switch (hdr->type) {
@@ -227,53 +269,16 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     break;
   }
   case MSG_LIST_ALL: {
-    DbDownloadRow *rows = calloc(IPC_LIST_ALL_MAX, sizeof(DbDownloadRow));
-    if (!rows) {
+    int n = db_count_downloads(IPC_LIST_ALL_MAX);
+    if (n < 0) {
       uint32_t count = 0;
       ipc_write_exact(client_fd, &count, sizeof(count));
       break;
     }
-    int n = db_list_all_downloads(rows, IPC_LIST_ALL_MAX);
     uint32_t count = (uint32_t)n;
     ipc_write_exact(client_fd, &count, sizeof(count));
-
-    for (int i = 0; i < n; i++) {
-      char status_buf[16];
-      float progress = 0.0f;
-
-      Download *live = queue_manager_find_by_id(rows[i].id);
-      if (live) {
-        strncpy(status_buf, status_to_string(live->status),
-                sizeof(status_buf) - 1);
-        status_buf[sizeof(status_buf) - 1] = '\0';
-
-        uint64_t total = live->total_size;
-        if (total > 0) {
-          uint64_t done = 0;
-          if (live->status == DOWNLOAD_ACTIVE) {
-            done = atomic_load(&live->bytes_downloaded);
-          } else if (live->chunk_count > 0) {
-            for (int c = 0; c < live->chunk_count; c++)
-              done += live->chunks[c].bytes_done;
-          }
-          double frac = (double)done / (double)total;
-          progress = (float)(frac > 1.0 ? 1.0 : frac);
-        }
-      } else {
-        strncpy(status_buf, rows[i].status, sizeof(status_buf) - 1);
-        status_buf[sizeof(status_buf) - 1] = '\0';
-      }
-
-      if (strcmp(status_buf, "DONE") == 0)
-        progress = 1.0f;
-
-      ipc_write_exact(client_fd, &rows[i].id, sizeof(rows[i].id));
-      write_string(client_fd, rows[i].url);
-      write_string(client_fd, rows[i].dest_path);
-      write_string(client_fd, status_buf);
-      ipc_write_exact(client_fd, &progress, sizeof(progress));
-    }
-    free(rows);
+    ListResponseContext response = {.client_fd = client_fd};
+    db_visit_downloads(send_download_row, &response, IPC_LIST_ALL_MAX);
     break;
   }
   case MSG_GET_DETAILS: {

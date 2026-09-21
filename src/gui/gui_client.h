@@ -2,18 +2,12 @@
 #define GUI_GUI_CLIENT_H
 
 #include "../platform/ipc_socket.h"
+#include "../core/download_record.h"
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Lightweight — one row in the list view. Mirrors IpcDownloadRecord. */
-typedef struct {
-  uint32_t id;
-  char url[IPC_MAX_URL_LEN];
-  char dest_path[IPC_MAX_PATH_LEN];
-  char status[16]; // always canonical uppercase — gui_client normalizes
-                   // every string before anything downstream sees it
-  float progress;
-} GuiDownloadRecord;
+/* Lightweight list row. Status is canonical uppercase. */
+typedef DownloadListRecord GuiDownloadRecord;
 
 /* Heavyweight — fetched on demand, one download at a time. Mirrors
    IpcDownloadDetails. */
