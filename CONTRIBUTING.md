@@ -59,14 +59,14 @@ cd cdm
 ### Configure Build
 
 ```bash
-cmake -B build
+cmake -S . -B build -DBUILD_TESTING=ON
 
 ```
 
 For a debug build:
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
 
 ```
 
@@ -75,6 +75,21 @@ cmake -B build -DCMAKE_BUILD_TYPE=Debug
 ```bash
 cmake --build build
 
+```
+
+### Run Tests
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+For AddressSanitizer validation:
+
+```bash
+cmake -S . -B build-asan -DBUILD_TESTING=ON \
+    -DDOWNLOADMGR_SANITIZER=address
+cmake --build build-asan
+ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build-asan --output-on-failure
 ```
 
 ---

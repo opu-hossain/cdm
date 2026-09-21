@@ -242,10 +242,12 @@ Dependencies fetched automatically:
 
 * libcurl
 * SQLite3
-* raylib
-* raygui
+* WebView
+* cJSON
+* tomlc17
+* tinyfiledialogs
 
-Linux notification support uses **libnotify** if available.
+Linux builds require **libnotify** development files through `pkg-config`.
 
 ---
 
@@ -261,8 +263,13 @@ cd cdm
 ## Configure
 
 ```bash
-cmake -B build
+cmake -S . -B build -DBUILD_TESTING=ON
 ```
+
+Project warnings are enabled by default. They can be disabled with
+`-DDOWNLOADMGR_ENABLE_WARNINGS=OFF`. Sanitizers are available for GCC and
+Clang builds through `-DDOWNLOADMGR_SANITIZER=address`, `undefined`, or
+`thread`.
 
 ---
 
@@ -270,6 +277,12 @@ cmake -B build
 
 ```bash
 cmake --build build
+```
+
+## Test
+
+```bash
+ctest --test-dir build --output-on-failure
 ```
 
 ---
@@ -339,12 +352,12 @@ default_directory = "/home/user/Downloads"
 [retry]
 max_attempts = 5
 
-base_delay = 2
+base_delay_sec = 2
 
-max_delay = 60
+max_delay_sec = 60
 
-[network]
-speed_limit = 0
+[throttle]
+max_speed_bytes_per_sec = 0
 ```
 
 Missing values automatically use built-in defaults.
@@ -399,8 +412,10 @@ CDM builds upon several excellent open-source projects.
 
 * libcurl
 * SQLite
-* raylib
-* raygui
+* WebView
+* tinyfiledialogs
+* tomlc17
+* libnotify on Linux
 
 Thanks to the maintainers and contributors of these projects.
 
