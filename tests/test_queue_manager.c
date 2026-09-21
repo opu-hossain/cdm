@@ -94,6 +94,19 @@ Test(queue_manager, request_options_are_optional_and_owned) {
   queue_manager_remove(id);
 }
 
+Test(queue_manager, allowed_root_tracks_environment_changes) {
+  setenv("DOWNLOADMGR_ROOT", "/var", 1);
+  cr_assert_eq(queue_manager_add("http://example.com/rejected", "/tmp/rejected",
+                                 NULL),
+               0);
+
+  setenv("DOWNLOADMGR_ROOT", "/tmp", 1);
+  uint32_t id =
+      queue_manager_add("http://example.com/accepted", "/tmp/accepted", NULL);
+  cr_assert_neq(id, 0);
+  queue_manager_remove(id);
+}
+
 Test(queue_manager, snapshot_active_progress) {
   uint32_t id1 = queue_manager_add("http://a", "/tmp/a", NULL);
   uint32_t id2 = queue_manager_add("http://b", "/tmp/b", NULL);

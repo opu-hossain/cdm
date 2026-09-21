@@ -44,14 +44,9 @@ static void free_download(Download *download) {
  * Defaults to $HOME; override with DOWNLOADMGR_ROOT.
  */
 static const char *get_allowed_root(void) {
-  static char root[1024] = {0};
-  if (root[0] == '\0') {
-    const char *configured = getenv("DOWNLOADMGR_ROOT");
-    const char *home = getenv("HOME");
-    const char *base = configured ? configured : (home ? home : "/tmp");
-    strncpy(root, base, sizeof(root) - 1);
-  }
-  return root;
+  const char *configured = getenv("DOWNLOADMGR_ROOT");
+  const char *home = getenv("HOME");
+  return configured ? configured : (home ? home : "/tmp");
 }
 
 /**
@@ -96,12 +91,19 @@ static bool is_safe_dest_path(const char *path) {
     temp_dir[sizeof(temp_dir) - 1] = '\0';
   }
 
-  const char *root = get_allowed_root();
-  size_t root_len = strlen(root);
-  if (strncmp(resolved_dir, root, root_len) != 0) {
+  const char *configured_root = get_allowed_root();
+  char resolved_root[PATH_MAX];
+  if (realpath(configured_root, resolved_root) == NULL) {
+    LOG_WARN("is_safe_dest_path: rejected — allowed root '%s' is invalid",
+             configured_root);
+    return false;
+  }
+
+  size_t root_len = strlen(resolved_root);
+  if (strncmp(resolved_dir, resolved_root, root_len) != 0) {
     LOG_WARN(
-        "is_safe_dest_path: rejected — '%s' outside allowed root '%s'", // NEW
-        resolved_dir, root);
+        "is_safe_dest_path: rejected — '%s' outside allowed root '%s'",
+        resolved_dir, resolved_root);
     return false;
   }
   if (resolved_dir[root_len] != '\0' && resolved_dir[root_len] != '/')
