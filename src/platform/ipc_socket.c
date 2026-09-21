@@ -62,6 +62,8 @@ static int g_listen_fd = -1;
 static int g_client_fds[MAX_CLIENTS];
 static int g_client_count = 0;
 static bool g_client_subscribed[MAX_CLIENTS];
+static unsigned char g_client_header[ MAX_CLIENTS ][sizeof(MsgHeader)];
+static size_t g_client_header_bytes[MAX_CLIENTS];
 static dm_mutex_t g_client_mutex;
 static bool g_client_mutex_ready = false;
 
@@ -142,10 +144,34 @@ static void remove_client(int index) {
   for (int i = index; i < g_client_count - 1; i++) {
     g_client_fds[i] = g_client_fds[i + 1];
     g_client_subscribed[i] = g_client_subscribed[i + 1];
+    g_client_header_bytes[i] = g_client_header_bytes[i + 1];
+    memcpy(g_client_header[i], g_client_header[i + 1], sizeof(MsgHeader));
   }
   g_client_fds[g_client_count - 1] = -1;
   g_client_subscribed[g_client_count - 1] = false;
+  g_client_header_bytes[g_client_count - 1] = 0;
   g_client_count--;
+}
+
+static bool valid_message_header(const MsgHeader *header) {
+  if (header->length > IPC_MAX_FRAME_SIZE)
+    return false;
+
+  switch (header->type) {
+  case MSG_ADD_DOWNLOAD:
+    return header->length <= IPC_MAX_FRAME_SIZE;
+  case MSG_PAUSE:
+  case MSG_RESUME:
+  case MSG_CANCEL:
+  case MSG_GET_DETAILS:
+    return header->length == sizeof(uint32_t);
+  case MSG_LIST:
+  case MSG_LIST_ALL:
+  case MSG_SUBSCRIBE:
+    return header->length == 0;
+  default:
+    return false;
+  }
 }
 
 typedef struct {
@@ -378,6 +404,7 @@ int ipc_server_start(void) {
   for (int i = 0; i < MAX_CLIENTS; i++) {
     g_client_fds[i] = -1;
     g_client_subscribed[i] = false;
+    g_client_header_bytes[i] = 0;
   }
   g_client_count = 0;
 
@@ -420,6 +447,7 @@ void ipc_server_poll(void) {
       dm_mutex_lock(&g_client_mutex);
       if (g_client_count < MAX_CLIENTS) {
         g_client_subscribed[g_client_count] = false;
+        g_client_header_bytes[g_client_count] = 0;
         g_client_fds[g_client_count++] = new_fd;
         LOG_DEBUG("IPC: Client connected (fd=%d, total=%d)", new_fd,
                   g_client_count);
@@ -435,25 +463,42 @@ void ipc_server_poll(void) {
     if (!FD_ISSET(g_client_fds[i], &rfds))
       continue;
 
-    MsgHeader hdr;
-    ssize_t n = recv(g_client_fds[i], &hdr, sizeof(hdr), MSG_DONTWAIT);
+    size_t remaining = sizeof(MsgHeader) - g_client_header_bytes[i];
+    ssize_t n = recv(g_client_fds[i],
+                     g_client_header[i] + g_client_header_bytes[i], remaining,
+                     MSG_DONTWAIT);
 
     if (n == 0) {
       LOG_DEBUG("IPC: Client disconnected (fd=%d)", g_client_fds[i]);
       dm_mutex_lock(&g_client_mutex);
-      close(g_client_fds[i]);
-      for (int j = i; j < g_client_count - 1; j++) {
-        g_client_fds[j] = g_client_fds[j + 1];
-        g_client_subscribed[j] = g_client_subscribed[j + 1];
-      }
-      g_client_count--;
-      g_client_subscribed[g_client_count] = false;
+      remove_client(i);
       dm_mutex_unlock(&g_client_mutex);
       i--;
-    } else if (n > 0 && (size_t)n == sizeof(hdr)) {
+    } else if (n > 0) {
+      g_client_header_bytes[i] += (size_t)n;
+      if (g_client_header_bytes[i] != sizeof(MsgHeader))
+        continue;
+
+      MsgHeader hdr;
+      memcpy(&hdr, g_client_header[i], sizeof(hdr));
+      g_client_header_bytes[i] = 0;
+      if (!valid_message_header(&hdr)) {
+        LOG_WARN("IPC: Invalid frame type=%d len=%u from fd=%d", hdr.type,
+                 hdr.length, g_client_fds[i]);
+        dm_mutex_lock(&g_client_mutex);
+        remove_client(i);
+        dm_mutex_unlock(&g_client_mutex);
+        i--;
+        continue;
+      }
       LOG_DEBUG("IPC: Received type=%d len=%u from fd=%d", hdr.type, hdr.length,
                 g_client_fds[i]);
       handle_message(g_client_fds[i], &hdr);
+    } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+      dm_mutex_lock(&g_client_mutex);
+      remove_client(i);
+      dm_mutex_unlock(&g_client_mutex);
+      i--;
     }
   }
 }
@@ -600,11 +645,12 @@ int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max) {
     char status[16];
     float progress;
 
-    ipc_read_exact(sock, &id, sizeof(id));
-    read_string(sock, url, sizeof(url));
-    read_string(sock, dest_path, sizeof(dest_path));
-    read_string(sock, status, sizeof(status));
-    ipc_read_exact(sock, &progress, sizeof(progress));
+    if (ipc_read_exact(sock, &id, sizeof(id)) != 0 ||
+        read_string(sock, url, sizeof(url)) != 0 ||
+        read_string(sock, dest_path, sizeof(dest_path)) != 0 ||
+        read_string(sock, status, sizeof(status)) != 0 ||
+        ipc_read_exact(sock, &progress, sizeof(progress)) != 0)
+      return -1;
 
     if (n < max) {
       out[n].id = id;

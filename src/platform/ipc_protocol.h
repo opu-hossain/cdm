@@ -32,6 +32,7 @@ typedef struct {
 
 #define IPC_MAX_URL_LEN 2048
 #define IPC_MAX_PATH_LEN 1024
+#define IPC_MAX_FRAME_SIZE 16384
 
 #ifdef __cplusplus
 }
