@@ -23,17 +23,19 @@ static dm_mutex_t g_mutex;
 static once_flag g_mutex_once = ONCE_FLAG_INIT;
 
 static bool request_options_present(const RequestOptions *opts) {
-  return opts && (opts->cookie[0] != '\0' || opts->referrer[0] != '\0' ||
-                  opts->extra_headers[0] != '\0' ||
-                  opts->expected_sha256[0] != '\0' ||
-                  opts->speed_limit_bps != 0);
+  return opts &&
+         (opts->cookie[0] != '\0' || opts->referrer[0] != '\0' ||
+          opts->extra_headers[0] != '\0' || opts->expected_sha256[0] != '\0' ||
+          opts->speed_limit_bps != 0);
 }
 
 static bool destination_in_use(const char *dest_path) {
   Download *cur = g_head;
   while (cur != NULL) {
-    if (strcmp(cur->dest_path, dest_path) == 0)
+    if (cur->status != DOWNLOAD_DONE && cur->status != DOWNLOAD_ERROR &&
+        strcmp(cur->dest_path, dest_path) == 0) {
       return true;
+    }
     cur = cur->next;
   }
   return false;
@@ -91,7 +93,9 @@ static bool is_safe_dest_path(const char *path) {
     char *parent = dirname(temp_dir);
     if (!parent || strcmp(parent, temp_dir) == 0 || strcmp(parent, ".") == 0 ||
         strcmp(parent, "/") == 0) {
-      LOG_WARN("is_safe_dest_path: rejected — no valid existing parent directory for '%s'", dir);
+      LOG_WARN("is_safe_dest_path: rejected — no valid existing parent "
+               "directory for '%s'",
+               dir);
       return false;
     }
     char parent_copy[1024];
@@ -111,9 +115,8 @@ static bool is_safe_dest_path(const char *path) {
 
   size_t root_len = strlen(resolved_root);
   if (strncmp(resolved_dir, resolved_root, root_len) != 0) {
-    LOG_WARN(
-        "is_safe_dest_path: rejected — '%s' outside allowed root '%s'",
-        resolved_dir, resolved_root);
+    LOG_WARN("is_safe_dest_path: rejected — '%s' outside allowed root '%s'",
+             resolved_dir, resolved_root);
     return false;
   }
   if (resolved_dir[root_len] != '\0' && resolved_dir[root_len] != '/')

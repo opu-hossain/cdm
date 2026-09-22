@@ -4,18 +4,67 @@
 #include "cli.h"
 
 #include "../platform/ipc_socket.h"
+#include "../utils/config.h"
 #include "../utils/log.h"
+#include "platform/ipc_protocol.h"
 
-#include <stdio.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
+
+/**
+ *
+ */
+static void filename_from_url(const char *url, char *out, size_t out_size) {
+  const char *slash = strrchr(url, '/');
+  const char *name = slash ? slash + 1 : url;
+
+  char temp[512];
+  strncpy(temp, name, sizeof(temp) - 1);
+  temp[sizeof(temp) - 1] = '\0';
+
+  char *query = strchr(temp, '?');
+  if (query)
+    *query = '\0';
+
+  if (temp[0] == '\0')
+    strncpy(temp, "download.bin", sizeof(temp) - 1);
+
+  strncpy(out, temp, out_size - 1);
+  out[out_size - 1] = '\0';
+}
+
+static bool join_path(const char *dir, const char *filename, char *out,
+                      size_t out_size) {
+#ifdef _WIN32
+  const char sep = '\\';
+#else
+  const char sep = '/';
+#endif
+  size_t dir_len = strlen(dir);
+  if (dir_len > 0 && dir[dir_len - 1] == sep) {
+    size_t filename_len = strlen(filename);
+    if (dir_len + filename_len + 1 > out_size)
+      return false;
+    memcpy(out, dir, dir_len);
+    memcpy(out + dir_len, filename, filename_len + 1);
+  } else {
+    size_t filename_len = strlen(filename);
+    if (dir_len + 1 + filename_len + 1 > out_size)
+      return false;
+    memcpy(out, dir, dir_len);
+    out[dir_len] = sep;
+    memcpy(out + dir_len + 1, filename, filename_len + 1);
+  }
+  return true;
+}
 
 /**
  * Parse --cookie, --referrer, --sha256, --limit, --header from
@@ -44,8 +93,7 @@ static bool parse_id(const char *text, uint32_t *out) {
 }
 
 static bool parse_add_options(int argc, char **argv, int first_opt_index,
-                              IpcDownloadOptions *opts_out,
-                              bool *valid_out) {
+                              IpcDownloadOptions *opts_out, bool *valid_out) {
   const char *cookie = NULL;
   const char *referrer = NULL;
   const char *sha256 = NULL;
@@ -111,8 +159,8 @@ int run_cli(int argc, char **argv) {
   if (argc < 2) {
     printf("Usage: downloadmgr cli <command> [args...]\n");
     printf("Commands:\n");
-    printf("  add <url> <dest> [--cookie V] [--referrer V] [--header \"K: V\"] "
-           "[--sha256 HEX] [--limit BYTES_PER_SEC]\n");
+    printf("  add <url> [dest_dir] [--cookie V] [--referrer V] "
+           "[--header \"K: V\"] [--sha256 HEX] [--limit BYTES_PER_SEC]\n");
     printf("         (--header may be repeated)\n");
     printf("  pause  <id>          Pause a download\n");
     printf("  resume <id>          Resume a download\n");
@@ -133,10 +181,31 @@ int run_cli(int argc, char **argv) {
   int ret = 0;
 
   /* ---------- dispatch ---------- */
-  if (strcmp(cmd, "add") == 0 && argc >= 4) {
+  if (strcmp(cmd, "add") == 0 && argc >= 3) {
+    const char *url = argv[2];
+    int first_opt_index = 3;
+    const char *dest_dir = NULL;
+
+    if (argc >= 4 && strncmp(argv[3], "--", 2) != 0) {
+      dest_dir = argv[3];
+      first_opt_index = 4;
+    }
+    char filename[512];
+    char full_path[IPC_MAX_PATH_LEN];
+    if (!dest_dir || dest_dir[0] == '\0') {
+      dest_dir = config_get_default_download_dir();
+    }
+    filename_from_url(url, filename, sizeof(filename));
+    if (!join_path(dest_dir, filename, full_path, sizeof(full_path))) {
+      LOG_ERROR("Destination path too long");
+      ipc_client_disconnect(sock);
+      return 1;
+    }
+
     IpcDownloadOptions opts;
     bool valid_opts = false;
-    bool has_opts = parse_add_options(argc, argv, 4, &opts, &valid_opts);
+    bool has_opts =
+        parse_add_options(argc, argv, first_opt_index, &opts, &valid_opts);
     if (!valid_opts) {
       fprintf(stderr, "Invalid add options\n");
       ipc_client_disconnect(sock);
@@ -144,12 +213,12 @@ int run_cli(int argc, char **argv) {
     }
 
     uint32_t id =
-        ipc_send_add_download(sock, argv[2], argv[3], has_opts ? &opts : NULL);
+        ipc_send_add_download(sock, url, full_path, has_opts ? &opts : NULL);
     if (id == 0) {
-      LOG_WARN(
-          "Daemon rejected the download (invalid or unsafe destination path?)");
+      LOG_WARN("Daemon rejected the download (invalid or unsafe destination "
+               "path?)");
     }
-    printf("Download added (ID: %u)\n", id);
+    printf("Download added (ID: %u, saved to %s)\n", id, full_path);
 
   } else if (strcmp(cmd, "pause") == 0 && argc >= 3) {
     uint32_t id = 0;
