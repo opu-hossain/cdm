@@ -173,6 +173,7 @@ set(UTILS_SOURCES
     src/utils/config.c
     src/utils/log.c
     src/utils/notify.c
+    src/utils/path.c
 )
 
 set(ENGINE_SOURCES

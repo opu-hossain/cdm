@@ -2,6 +2,7 @@
 #include "../platform/thread.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
+#include "../utils/path.h"
 #include "../vendor/cJSON.h"
 #include "../vendor/tinyfiledialogs.h"
 #include "gui_client.h"
@@ -16,46 +17,6 @@
 #ifndef _WIN32
 #include <gtk/gtk.h>
 #endif
-
-static void filename_from_url(const char *url, char *out, size_t out_size) {
-  const char *slash = strrchr(url, '/');
-  const char *name = slash ? slash + 1 : url;
-  char temp[512];
-  strncpy(temp, name, sizeof(temp) - 1);
-  temp[sizeof(temp) - 1] = '\0';
-  char *query = strchr(temp, '?');
-  if (query)
-    *query = '\0';
-  if (temp[0] == '\0')
-    strncpy(temp, "download.bin", sizeof(temp) - 1);
-  strncpy(out, temp, out_size - 1);
-  out[out_size - 1] = '\0';
-}
-
-static bool join_path(const char *dir, const char *filename, char *out,
-                      size_t out_size) {
-#ifdef _WIN32
-  const char sep = '\\';
-#else
-  const char sep = '/';
-#endif
-  size_t dir_len = strlen(dir);
-  if (dir_len > 0 && dir[dir_len - 1] == sep) {
-    size_t filename_len = strlen(filename);
-    if (dir_len + filename_len + 1 > out_size)
-      return false;
-    memcpy(out, dir, dir_len);
-    memcpy(out + dir_len, filename, filename_len + 1);
-  } else {
-    size_t filename_len = strlen(filename);
-    if (dir_len + 1 + filename_len + 1 > out_size)
-      return false;
-    memcpy(out, dir, dir_len);
-    out[dir_len] = sep;
-    memcpy(out + dir_len + 1, filename, filename_len + 1);
-  }
-  return true;
-}
 
 // Not static anymore — called from gui_worker.c's dispatch_result() on the
 // UI thread. Declared in gui_worker.c via `extern`; kept here rather than
@@ -188,11 +149,17 @@ static void js_add_download(const char *seq, const char *req, void *arg) {
 
   char filename[512];
   char full_path[IPC_MAX_PATH_LEN];
-  filename_from_url(url, filename, sizeof(filename));
-  join_path(resolved_folder, filename, full_path, sizeof(full_path));
+  char unique_path[IPC_MAX_PATH_LEN];
+  path_filename_from_url(url, filename, sizeof(filename));
+  if (!path_join(resolved_folder, filename, full_path, sizeof(full_path)) ||
+      !path_make_unique(full_path, unique_path, sizeof(unique_path))) {
+    LOG_ERROR("js_add_download: could not find an available destination path");
+    cJSON_Delete(args);
+    return;
+  }
 
-  LOG_INFO("js_add_download: enqueueing full_path='%s'", full_path);
-  gui_worker_enqueue_add_download(seq, url, full_path, cookie, referrer,
+  LOG_INFO("js_add_download: enqueueing full_path='%s'", unique_path);
+  gui_worker_enqueue_add_download(seq, url, unique_path, cookie, referrer,
                                   headers, sha256, speed_limit);
 
   cJSON_Delete(args);
@@ -320,14 +287,14 @@ static void get_ui_file_url(char *out_url, size_t max_len) {
 
   /* 1. Next to binary (e.g., <exe_dir>/src/gui/ui/index.html via post-build copy) */
   if (exe_dir[0] != '\0') {
-    if (join_path(exe_dir, "src/gui/ui/index.html", candidate,
+    if (path_join(exe_dir, "src/gui/ui/index.html", candidate,
             sizeof(candidate)) && check_file_readable(candidate)) {
       snprintf(out_url, max_len, "file://%s", candidate);
       return;
     }
 
     /* 2. <exe_dir>/ui/index.html (installed binary layout) */
-    if (join_path(exe_dir, "ui/index.html", candidate, sizeof(candidate)) &&
+    if (path_join(exe_dir, "ui/index.html", candidate, sizeof(candidate)) &&
       check_file_readable(candidate)) {
       snprintf(out_url, max_len, "file://%s", candidate);
       return;
@@ -337,7 +304,7 @@ static void get_ui_file_url(char *out_url, size_t max_len) {
   /* 3. PWD fallback (source repository directory) */
   const char *pwd = getenv("PWD");
   if (pwd && pwd[0] != '\0') {
-    if (join_path(pwd, "src/gui/ui/index.html", candidate, sizeof(candidate)) &&
+    if (path_join(pwd, "src/gui/ui/index.html", candidate, sizeof(candidate)) &&
       check_file_readable(candidate)) {
       snprintf(out_url, max_len, "file://%s", candidate);
       return;

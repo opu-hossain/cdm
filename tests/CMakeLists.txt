@@ -14,6 +14,7 @@ set(TEST_SOURCES
     test_scheduler.c
     test_engine_runner.c
     test_worker_pool.c
+    test_path.c
 )
 
 foreach(TEST_SOURCE ${TEST_SOURCES})
