@@ -24,16 +24,13 @@
 html,
 body {
   height: 100%;
-  overflow: hidden; /* the container scrolls, not the page — feels like
-                          an app pane, not a webpage */
-  -webkit-user-select: none; /* no accidental text-drag-select on
-                                   buttons/labels/UI chrome */
+  overflow: hidden; /* Keep scrolling inside the application pane. */
+  -webkit-user-select: none; /* Prevent accidental text selection. */
   user-select: none;
   -webkit-app-region: no-drag;
 }
 
-/* Only actual content (URLs, status text, detail values) should be
-   selectable — re-enable it there specifically. */
+/* Re-enable selection for URLs, status text, and detail values. */
 .dl-title,
 .detail-val,
 input,
@@ -44,12 +41,11 @@ textarea {
 
 #downloads-container {
   overflow-y: auto;
-  height: calc(100vh - 220px); /* adjust to your header's actual height */
+  height: calc(100vh - 220px);
   padding-right: 4px;
 }
 
-/* Remove the default blue focus ring browsers use — replace with
-   something intentional */
+/* Use the application focus style. */
 button:focus,
 input:focus,
 textarea:focus {
@@ -57,7 +53,7 @@ textarea:focus {
   box-shadow: 0 0 0 2px var(--primary);
 }
 
-/* Custom scrollbar — thin, dark, matches the app instead of OS/browser default */
+/* Keep the scrollbar compact and consistent with the application. */
 #downloads-container::-webkit-scrollbar {
   width: 8px;
 }
@@ -72,7 +68,7 @@ textarea:focus {
   background: #45454a;
 }
 
-/* Disable the "grab hand" cursor / image-drag ghost that browsers show */
+/* Prevent image dragging from showing a grab cursor. */
 img,
 .status-badge,
 .dl-title {
@@ -85,7 +81,7 @@ button,
   cursor: default;
 }
 button {
-  cursor: pointer; /* buttons should still show pointer */
+  cursor: pointer;
 }
 
 * {
@@ -372,7 +368,7 @@ button.danger {
   box-shadow: 0 10px 24px rgba(232, 106, 106, 0.22);
 }
 
-/* Advanced options disclosure */
+/* Advanced options. */
 .advanced-options {
   margin-top: 6px;
   border-top: 1px solid var(--border);

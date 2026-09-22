@@ -7,9 +7,7 @@
 #include <errno.h>
 #include <stdint.h>
 
-/* ================================================================== */
-/*  POSIX implementation                                              */
-/* ================================================================== */
+/* POSIX implementation */
 #ifndef _WIN32
 
 #include <fcntl.h>
@@ -121,9 +119,7 @@ uint64_t file_get_size(const char *path) {
 
 void file_close(FileHandle fd) { close(fd); }
 
-/* ================================================================== */
-/*  Windows implementation                                            */
-/* ================================================================== */
+/* Windows implementation */
 #else
 
 #define WIN32_LEAN_AND_MEAN

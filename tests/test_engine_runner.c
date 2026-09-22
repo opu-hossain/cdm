@@ -10,7 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 
-// --- Mocks for external dependencies ---
+/* Mocks for external dependencies */
 int curl_client_head(const char *url, const RequestContext *ctx, FileInfo *out) {
   (void)url;
   (void)ctx;
@@ -61,7 +61,7 @@ RebalancePool *rebalance_pool_create(const Range *ranges, int n_ranges,
 
 void rebalance_pool_destroy(RebalancePool *pool) { (void)pool; }
 
-// --- Setup / teardown ---
+/* Setup / teardown */
 static void setup_engine_test(void) {
   setenv("DOWNLOADMGR_ROOT", "/tmp", 1);
   db_init(":memory:"); // use in‑memory DB to avoid "out of memory" errors

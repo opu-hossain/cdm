@@ -84,10 +84,7 @@ static void js_ready(const char *seq, const char *req, void *arg) {
   webview_return(w, seq, 0, "{}");
 }
 
-// ==========================================
-// Javascript Bindings — thin: validate, enqueue, return immediately.
-// NEVER call gui_client_* or gui_push_state_to_ui directly from here.
-// ==========================================
+/* JavaScript bindings validate requests, enqueue work, and return immediately. */
 
 static void js_add_download(const char *seq, const char *req, void *arg) {
   webview_t w = (webview_t)arg;
@@ -315,9 +312,7 @@ static void get_ui_file_url(char *out_url, size_t max_len) {
   snprintf(out_url, max_len, "file://./src/gui/ui/index.html");
 }
 
-// ==========================================
-// Main Entry
-// ==========================================
+/* Application entry point. */
 int run_gui(void) {
   if (!gui_client_connect()) {
     fprintf(stderr, "Cannot connect to daemon.\n");

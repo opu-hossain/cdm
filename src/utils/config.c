@@ -10,18 +10,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ------------------------------------------------------------------ */
-/*  Defaults                                                          */
-/* ------------------------------------------------------------------ */
+/* Defaults */
 #define DEFAULT_MAX_CONCURRENT 3
 #define DEFAULT_RETRY_MAX_ATTEMPTS 5
 #define DEFAULT_RETRY_BASE_DELAY_SEC 2
 #define DEFAULT_RETRY_MAX_DELAY_SEC 60
 #define DEFAULT_MAX_SPEED_BPS 0
 
-/* ------------------------------------------------------------------ */
-/*  Global state (initialised once)                                   */
-/* ------------------------------------------------------------------ */
+/* Global state (initialised once) */
 static int g_max_concurrent = DEFAULT_MAX_CONCURRENT;
 static char g_default_dir[1024] = {0};
 static int g_retry_max_attempts = DEFAULT_RETRY_MAX_ATTEMPTS;
@@ -29,9 +25,7 @@ static int g_retry_base_delay_sec = DEFAULT_RETRY_BASE_DELAY_SEC;
 static int g_retry_max_delay_sec = DEFAULT_RETRY_MAX_DELAY_SEC;
 static uint64_t g_max_speed_bps = DEFAULT_MAX_SPEED_BPS;
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                           */
-/* ------------------------------------------------------------------ */
+/* Helpers */
 
 static void set_default_dir(void) {
 #ifdef _WIN32
@@ -95,9 +89,7 @@ static bool default_dir_is_usable(const char *path) {
   return realpath(path, resolved) != NULL;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Public API                                                        */
-/* ------------------------------------------------------------------ */
+/* Public API */
 
 void config_init(const char *path) {
   set_default_dir();

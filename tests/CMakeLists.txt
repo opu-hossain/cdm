@@ -1,4 +1,4 @@
-# List all test source files
+# Test sources.
 set(TEST_SOURCES
     test_segmenter.c
     test_queue_manager.c

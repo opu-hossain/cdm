@@ -27,9 +27,7 @@ typedef struct {
 
 static SchedulerWorker g_workers[SCHEDULER_MAX_WORKERS];
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                           */
-/* ------------------------------------------------------------------ */
+/* Helpers */
 
 /**
  * Return the filename component of `path` (everything after the last
@@ -178,9 +176,7 @@ static void reap_finished_workers(void) {
   }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Public API                                                        */
-/* ------------------------------------------------------------------ */
+/* Public API */
 
 void scheduler_tick(void) {
   reap_finished_workers();

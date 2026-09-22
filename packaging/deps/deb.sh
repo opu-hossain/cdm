@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build dependencies for Debian / Ubuntu. Safe to run repeatedly.
+# Install Debian and Ubuntu build dependencies.
 set -euo pipefail
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \

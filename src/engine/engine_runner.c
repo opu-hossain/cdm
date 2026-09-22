@@ -18,9 +18,7 @@
 #include <string.h>
 #include <unistd.h>
 
-/* ------------------------------------------------------------------ */
-/*  Types & callback                                                  */
-/* ------------------------------------------------------------------ */
+/* Types & callback */
 
 typedef struct {
   struct Download *d;
@@ -63,9 +61,7 @@ static void on_rebalance_split(void *userdata, uint64_t victim_start,
   db_insert_chunk(d->id, new_start, new_end - 1);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                           */
-/* ------------------------------------------------------------------ */
+/* Helpers */
 
 static bool is_valid_url(const char *url) {
   return (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0);
@@ -86,9 +82,7 @@ static void clear_resume_state(struct Download *d, bool also_delete_file) {
     unlink(d->dest_path);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Public API                                                        */
-/* ------------------------------------------------------------------ */
+/* Public API */
 
 int engine_run_download(struct Download *d) {
   const RequestOptions *request = d->request;

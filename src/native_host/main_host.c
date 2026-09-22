@@ -12,9 +12,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                           */
-/* ------------------------------------------------------------------ */
+/* Helpers */
 
 /**
  * Return the default downloads directory (creating it if necessary).
@@ -27,9 +25,7 @@ static void default_downloads_dir(char *out, size_t out_size) {
   mkdir(out, 0755); /* harmless EEXIST if already present */
 }
 
-/* ------------------------------------------------------------------ */
-/*  Native Messaging entry point                                      */
-/* ------------------------------------------------------------------ */
+/* Native Messaging entry point */
 
 /**
  * Browser Native Host main entry point.

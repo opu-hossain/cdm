@@ -12,9 +12,7 @@
 #include <string.h>
 #include <time.h>
 
-/* ------------------------------------------------------------------ */
-/*  Global state                                                      */
-/* ------------------------------------------------------------------ */
+/* Global state */
 
 static sqlite3 *g_db = NULL;
 
@@ -39,9 +37,7 @@ static bool db_column_exists(const char *table, const char *column) {
   return found;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Lifecycle                                                         */
-/* ------------------------------------------------------------------ */
+/* Lifecycle */
 
 int db_init(const char *db_path) {
   if (!db_path || db_path[0] == '\0')
@@ -167,9 +163,7 @@ void db_close(void) {
   }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Download persistence                                              */
-/* ------------------------------------------------------------------ */
+/* Download persistence */
 
 int db_insert_download(uint32_t id, const char *url, const char *dest_path,
                        const RequestOptions *opts) {
@@ -261,9 +255,7 @@ int db_update_total_size(uint32_t id, uint64_t total_size) {
   return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Chunk persistence                                                 */
-/* ------------------------------------------------------------------ */
+/* Chunk persistence */
 
 int db_insert_chunk(uint32_t download_id, uint64_t range_start,
                     uint64_t range_end) {
@@ -350,9 +342,7 @@ int db_delete_chunks(uint32_t download_id) {
   return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Bulk queries / restore                                            */
-/* ------------------------------------------------------------------ */
+/* Bulk queries / restore */
 
 int db_load_chunks(uint32_t download_id, DbChunkRow *out, int max) {
   if (!db_ready() || !out || max <= 0)

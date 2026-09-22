@@ -16,9 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                           */
-/* ------------------------------------------------------------------ */
+/* Helpers */
 
 /**
  * Parse --cookie, --referrer, --sha256, --limit, --header from
@@ -104,9 +102,7 @@ static bool parse_add_options(int argc, char **argv, int first_opt_index,
   return has_options;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Public API                                                        */
-/* ------------------------------------------------------------------ */
+/* Public API */
 
 int run_cli(int argc, char **argv) {
   /* ---------- usage ---------- */

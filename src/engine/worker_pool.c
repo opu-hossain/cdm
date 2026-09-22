@@ -17,9 +17,7 @@
 
 #include "../utils/log.h"
 
-/* ------------------------------------------------------------------ */
-/*  RebalancePool – internal slot type                                */
-/* ------------------------------------------------------------------ */
+/* RebalancePool – internal slot type */
 
 typedef struct {
   uint64_t start;
@@ -40,9 +38,7 @@ struct RebalancePool {
   _Atomic uint64_t **progress_slots;
 };
 
-/* ------------------------------------------------------------------ */
-/*  RebalancePool – public API                                        */
-/* ------------------------------------------------------------------ */
+/* RebalancePool – public API */
 
 RebalancePool *rebalance_pool_create(const Range *ranges, int n_ranges,
                                      _Atomic uint64_t **progress_slots,
@@ -81,9 +77,7 @@ void rebalance_pool_destroy(RebalancePool *pool) {
   free(pool);
 }
 
-/* ------------------------------------------------------------------ */
-/*  RebalancePool – internal helpers                                  */
-/* ------------------------------------------------------------------ */
+/* RebalancePool – internal helpers */
 
 /**
  * Attempt to acquire a pool slot for an idle worker.
@@ -181,9 +175,7 @@ static void rebalance_pool_mark_done(RebalancePool *pool, int slot_index) {
   dm_mutex_unlock(&pool->mutex);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Worker context & callbacks                                        */
-/* ------------------------------------------------------------------ */
+/* Worker context & callbacks */
 
 typedef struct {
   const char *url;
@@ -385,9 +377,7 @@ static int worker_thread_function(void *arg) {
   return overall_ok ? 0 : -1;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Public API                                                        */
-/* ------------------------------------------------------------------ */
+/* Public API */
 
 WorkerPoolResult
 worker_pool_run(const char *url, const Range *ranges, int n_workers,

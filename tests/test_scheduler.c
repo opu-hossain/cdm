@@ -10,7 +10,7 @@
 #include <stdatomic.h>
 #include <unistd.h>
 
-// --- Mock engine_run_download (overrides the real one) ---
+/* Mock engine_run_download (overrides the real one) */
 static _Atomic int active_workers;
 static _Atomic bool hold_workers;
 

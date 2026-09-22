@@ -23,9 +23,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/* ------------------------------------------------------------------ */
-/*  Internal helpers                                                  */
-/* ------------------------------------------------------------------ */
+/* Internal helpers */
 
 static volatile sig_atomic_t g_shutdown_requested = 0;
 
@@ -82,9 +80,7 @@ static void daemonize(void) {
   }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Public API                                                        */
-/* ------------------------------------------------------------------ */
+/* Public API */
 
 int run_daemon(void) {
   /* Daemonise if stdin is not a terminal (i.e. launched from a

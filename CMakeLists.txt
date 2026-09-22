@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-# FIX: Must include both C and CXX since this is a C project integrating a C++ library (webview)
+# Webview requires C++ support alongside the C project.
 project(downloadmgr LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 
-# ----- Global settings -----
+# Global settings.
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -53,14 +53,12 @@ endfunction()
 
 include(CTest)
 
-# Make FetchContent verbose so you can see download progress and logs for debugging
+# Keep FetchContent output visible during configuration.
 set(FETCHCONTENT_QUIET OFF)
 
 include(FetchContent)
 
-# ============================================================
 # System dependencies (pkg-config)
-# ============================================================
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBNOTIFY REQUIRED IMPORTED_TARGET libnotify)
 
@@ -68,15 +66,7 @@ if(BUILD_TESTING)
     pkg_check_modules(CRITERION REQUIRED IMPORTED_TARGET criterion)
 endif()
 
-# ============================================================
-# libcurl – prefer system, fetch as fallback
-#
-# Rationale:
-#   * Every Linux distro ships libcurl with a stable ABI (libcurl.so.4).
-#   * Vendoring forces us to also ship openssl/zlib/brotli/nghttp2/zstd,
-#     which bloats the package and leaks curl's own install rules.
-#   * Set -DDOWNLOADMGR_USE_SYSTEM_CURL=OFF only for offline or pinned builds.
-# ============================================================
+# Prefer the system libcurl; use the pinned source fallback when disabled.
 option(DOWNLOADMGR_USE_SYSTEM_CURL
        "Use the system libcurl instead of fetching and building curl" ON)
 
@@ -89,7 +79,7 @@ if(DOWNLOADMGR_USE_SYSTEM_CURL)
     add_library(downloadmgr_curl INTERFACE)
     target_include_directories(downloadmgr_curl INTERFACE ${CURL_INCLUDE_DIRS})
     target_link_libraries(downloadmgr_curl INTERFACE ${CURL_LIBRARIES})
-    # System curl on Linux is always shared, so CURL_STATICLIB must be off.
+    # System curl is shared on Linux.
     target_compile_definitions(downloadmgr_curl INTERFACE CURL_STATICLIB=0)
 else()
     message(STATUS "Fetching curl from source (DOWNLOADMGR_USE_SYSTEM_CURL=OFF)")
@@ -105,7 +95,7 @@ else()
         GIT_REPOSITORY https://github.com/curl/curl.git
         GIT_TAG curl-8_21_0
     )
-    # EXCLUDE_FROM_ALL keeps curl's install() rules out of our CPack payload.
+    # Keep curl's install rules out of the package.
     FetchContent_GetProperties(curl)
     if(NOT curl_POPULATED)
         FetchContent_Populate(curl)
@@ -117,9 +107,7 @@ else()
     target_compile_definitions(downloadmgr_curl INTERFACE CURL_STATICLIB=1)
 endif()
 
-# ============================================================
 # SQLite3 – system library (required)
-# ============================================================
 find_package(SQLite3 3.24 REQUIRED)
 message(STATUS "Using system sqlite3: ${SQLite3_VERSION}")
 message(STATUS "  include: ${SQLite3_INCLUDE_DIRS}")
@@ -129,12 +117,7 @@ add_library(downloadmgr_sqlite INTERFACE)
 target_include_directories(downloadmgr_sqlite INTERFACE ${SQLite3_INCLUDE_DIRS})
 target_link_libraries(downloadmgr_sqlite INTERFACE ${SQLite3_LIBRARIES})
 
-# ============================================================
-# Webview – fetched
-#
-# EXCLUDE_FROM_ALL so webview does not inject its own install rules
-# (headers, cmake configs) into our CPack payload.
-# ============================================================
+# Fetch webview without including its install rules in the package.
 FetchContent_Declare(
     webview
     GIT_REPOSITORY https://github.com/webview/webview.git
@@ -146,9 +129,7 @@ if(NOT webview_POPULATED)
     add_subdirectory(${webview_SOURCE_DIR} ${webview_BINARY_DIR} EXCLUDE_FROM_ALL)
 endif()
 
-# ============================================================
 # Vendor (third‑party) static library
-# ============================================================
 add_library(downloadmgr_vendor STATIC
     src/vendor/cJSON.c
     src/vendor/tinyfiledialogs.c
@@ -156,9 +137,7 @@ add_library(downloadmgr_vendor STATIC
 )
 target_include_directories(downloadmgr_vendor PUBLIC src/vendor)
 
-# ============================================================
 # Project source groups
-# ============================================================
 set(PLATFORM_SOURCES
     src/platform/bandwidth.c
     src/platform/curl_client.c
@@ -192,9 +171,7 @@ set(PERSISTENCE_SOURCES
     src/persistence/db.c
 )
 
-# ============================================================
 # Core library – shared code (no main)
-# ============================================================
 add_library(downloadmgr_core STATIC
     ${PLATFORM_SOURCES}
     ${UTILS_SOURCES}
@@ -209,7 +186,7 @@ target_include_directories(downloadmgr_core PRIVATE src)
 target_link_libraries(downloadmgr_core PUBLIC
     downloadmgr_vendor
     downloadmgr_curl
-    downloadmgr_sqlite      # was: sqlite3
+    downloadmgr_sqlite
     PkgConfig::LIBNOTIFY
 )
 
@@ -219,9 +196,7 @@ elseif(UNIX)
     target_link_libraries(downloadmgr_core PUBLIC pthread)
 endif()
 
-# ============================================================
 # Main executable (CLI / GUI / daemon)
-# ============================================================
 add_executable(downloadmgr
     src/main.c
     src/cli/cli.c
@@ -247,9 +222,7 @@ add_custom_command(TARGET downloadmgr POST_BUILD
     $<TARGET_FILE_DIR:downloadmgr>/src/gui/ui
 )
 
-# ============================================================
 # Browser native host executable
-# ============================================================
 add_executable(downloadmgr_native_host
     src/native_host/main_host.c
 )
@@ -272,9 +245,7 @@ install(FILES resources/downloadmgr.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
 )
 
-# ============================================================
 # CPack – DEB + RPM
-# ============================================================
 set(CPACK_PACKAGE_NAME "downloadmgr")
 set(CPACK_PACKAGE_VENDOR "Core Download Manager")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Core Download Manager")
@@ -283,13 +254,8 @@ set(CPACK_PACKAGE_DESCRIPTION
 set(CPACK_PACKAGE_CONTACT "Core Download Manager maintainers")
 set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/opu-hossain/cdm")
 
-# ============================================================
-# Release version – read from .release.toml
-#
-#   * "~" is the correct separator for pre-releases in both dpkg and RPM:
-#     0.1.0~rc1 sorts BELOW 0.1.0, so the final release supersedes the RC.
-#   * CPACK_PACKAGE_FILE_NAME uses "-" because "~" in filenames is awkward.
-# ============================================================
+# Read the package version from .release.toml.
+# The tilde makes pre-release packages sort before the final release.
 set(_channel "rc")
 set(_version_base "0.1.0")
 set(_rc "1")
@@ -341,7 +307,7 @@ message(STATUS "Package file name: ${CPACK_PACKAGE_FILE_NAME}")
 # Generators are selectable via -DCPACK_GENERATOR=DEB / RPM
 set(CPACK_GENERATOR "DEB;RPM")
 
-# ---------- Debian ----------
+# Debian.
 # libcurl4t64 on Ubuntu 24.04+; libcurl4 on older. SHLIBDEPS picks the right
 # one automatically, so we only list the GUI libs here as a floor.
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "libnotify4, libgtk-3-0, libgtk-3-0t64, libwebkit2gtk-4.1-0")
@@ -352,7 +318,7 @@ set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
 set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/opu-hossain/cdm")
 set(CPACK_DEBIAN_PACKAGE_DESCRIPTION "${CPACK_PACKAGE_DESCRIPTION}")
 
-# ---------- RPM ----------
+# RPM.
 set(CPACK_RPM_PACKAGE_LICENSE "MIT")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Internet")
 set(CPACK_RPM_PACKAGE_REQUIRES "libnotify, gtk3, webkit2gtk4.1")

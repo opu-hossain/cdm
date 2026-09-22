@@ -9,9 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ------------------------------------------------------------------ */
-/*  Internal helpers                                                  */
-/* ------------------------------------------------------------------ */
+/* Internal helpers */
 
 /**
  * libcurl header callback – called once per response header line.
@@ -31,9 +29,7 @@ static size_t head_header_callback(void *data, size_t size, size_t nmemb,
   return total; // must return the number of bytes consumed
 }
 
-/* ------------------------------------------------------------------ */
-/*  Public API                                                        */
-/* ------------------------------------------------------------------ */
+/* Public API */
 
 int curl_client_head(const char *url, const RequestContext *ctx,
                      FileInfo *out) {

@@ -14,9 +14,7 @@
 #include <threads.h>
 #include <unistd.h>
 
-/* ------------------------------------------------------------------ */
-/*  Internal state                                                    */
-/* ------------------------------------------------------------------ */
+/* Internal state */
 static Download *g_head = NULL;
 static uint32_t g_next_id = 1;
 static dm_mutex_t g_mutex;
@@ -46,9 +44,7 @@ static void free_download(Download *download) {
   free(download);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Static helpers                                                    */
-/* ------------------------------------------------------------------ */
+/* Static helpers */
 
 /**
  * Return the filesystem root under which all downloads must reside.
@@ -140,9 +136,7 @@ static void initialize_mutex(void) { dm_mutex_init(&g_mutex); }
 
 static void ensure_mutex(void) { call_once(&g_mutex_once, initialize_mutex); }
 
-/* ------------------------------------------------------------------ */
-/*  Lifecycle                                                         */
-/* ------------------------------------------------------------------ */
+/* Lifecycle */
 
 uint32_t queue_manager_add(const char *url, const char *dest_path,
                            const RequestOptions *opts) {
@@ -232,9 +226,7 @@ void queue_manager_remove(uint32_t id) {
   dm_mutex_unlock(&g_mutex);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Query                                                             */
-/* ------------------------------------------------------------------ */
+/* Query */
 
 Download *queue_manager_find_by_id(uint32_t id) {
   ensure_mutex();
@@ -365,9 +357,7 @@ int queue_manager_snapshot_chunk_progress(ChunkProgressSnapshot *out, int max) {
   return n;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Status / control                                                  */
-/* ------------------------------------------------------------------ */
+/* Status / control */
 
 void queue_manager_update_status(uint32_t id, DownloadStatus new_status) {
   ensure_mutex();
@@ -450,9 +440,7 @@ bool queue_manager_resume(uint32_t id) {
   return resumed;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Internal (use with care)                                          */
-/* ------------------------------------------------------------------ */
+/* Internal (use with care) */
 
 void *queue_manager_get_mutex(void) {
   ensure_mutex();

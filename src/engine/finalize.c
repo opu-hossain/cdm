@@ -13,9 +13,7 @@
 
 #define HASH_READ_BUF_SIZE 65536
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                           */
-/* ------------------------------------------------------------------ */
+/* Helpers */
 
 /**
  * Case‑insensitive hexadecimal string equality.
@@ -73,9 +71,7 @@ static int compute_sha256_hex(const char *path, char out_hex[65]) {
   return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Public API                                                        */
-/* ------------------------------------------------------------------ */
+/* Public API */
 
 int engine_finalize(const char *dest_path, uint64_t expected_size,
                     const char *expected_sha256_hex) {

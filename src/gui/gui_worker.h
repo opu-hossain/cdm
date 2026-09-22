@@ -18,8 +18,7 @@ void gui_worker_enqueue_pause(const char *seq, uint32_t id);
 void gui_worker_enqueue_resume(const char *seq, uint32_t id);
 void gui_worker_enqueue_cancel(const char *seq, uint32_t id);
 
-// NEW — on-demand details fetch, dispatched to JS via c_get_details's
-// Promise (seq), not via the periodic model-refresh path.
+/* Fetch details on demand and dispatch the result to the JavaScript promise. */
 void gui_worker_enqueue_get_details(const char *seq, uint32_t id);
 
 #endif

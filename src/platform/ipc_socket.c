@@ -23,9 +23,7 @@
 #include <time.h>
 #include <unistd.h>
 
-/* ------------------------------------------------------------------ */
-/*  Constants                                                         */
-/* ------------------------------------------------------------------ */
+/* Constants */
 #define MAX_CLIENTS 16
 #define IPC_POLL_TIMEOUT_US 20000 /* 20 ms */
 
@@ -73,9 +71,7 @@ static void get_socket_path(char *out, size_t out_size) {
   out[out_size - 1] = '\0';
 }
 
-/* ------------------------------------------------------------------ */
-/*  Server state                                                      */
-/* ------------------------------------------------------------------ */
+/* Server state */
 static int g_listen_fd = -1;
 static int g_client_fds[MAX_CLIENTS];
 static int g_client_count = 0;
@@ -87,9 +83,7 @@ static once_flag g_client_mutex_once = ONCE_FLAG_INIT;
 
 static void initialize_client_mutex(void) { dm_mutex_init(&g_client_mutex); }
 
-/* ------------------------------------------------------------------ */
-/*  Internal helpers                                                   */
-/* ------------------------------------------------------------------ */
+/* Internal helpers */
 
 static const char *status_to_string(DownloadStatus s) {
   switch (s) {
@@ -408,9 +402,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
   }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Server lifecycle                                                  */
-/* ------------------------------------------------------------------ */
+/* Server lifecycle */
 
 bool ipc_server_is_running(void) {
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -586,9 +578,7 @@ void ipc_server_stop(void) {
   unlink(socket_path);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Client lifecycle                                                  */
-/* ------------------------------------------------------------------ */
+/* Client lifecycle */
 
 int ipc_client_connect(void) {
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -616,9 +606,7 @@ void ipc_client_disconnect(int fd) {
     close(fd);
 }
 
-/* ------------------------------------------------------------------ */
-/*  High‑level request / response                                     */
-/* ------------------------------------------------------------------ */
+/* High‑level request / response */
 
 uint32_t ipc_send_add_download(int sock, const char *url, const char *dest_path,
                                const IpcDownloadOptions *options) {
@@ -777,9 +765,7 @@ void ipc_send_subscribe(int sock) {
   ipc_write_exact(sock, &hdr, sizeof(hdr));
 }
 
-/* ------------------------------------------------------------------ */
-/*  Low‑level I/O                                                     */
-/* ------------------------------------------------------------------ */
+/* Low‑level I/O */
 
 int ipc_read_exact(int fd, void *buf, size_t len) {
   size_t remaining = len;
@@ -821,9 +807,7 @@ int ipc_write_exact(int fd, const void *buf, size_t len) {
   return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Broadcast                                                         */
-/* ------------------------------------------------------------------ */
+/* Broadcast */
 
 void ipc_broadcast_status(uint32_t download_id, const char *status,
                           float progress) {
