@@ -4,6 +4,7 @@
 #include "../platform/ipc_socket.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
+#include "../utils/path.h"
 #include "../vendor/cJSON.h"
 
 #include <stdio.h>
@@ -11,45 +12,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                           */
-/* ------------------------------------------------------------------ */
-
-/**
- * Derive a filename from the last path segment of a URL, stripping any
- * query string. Falls back to "download.bin" if the URL ends with a
- * slash.
- */
-static void filename_from_url(const char *url, char *out, size_t out_size) {
-  const char *slash = strrchr(url, '/');
-  const char *name = slash ? slash + 1 : url;
-
-  char temp[512];
-  strncpy(temp, name, sizeof(temp) - 1);
-  temp[sizeof(temp) - 1] = '\0';
-
-  char *query = strchr(temp, '?');
-  if (query)
-    *query = '\0';
-
-  if (temp[0] == '\0')
-    strncpy(temp, "download.bin", sizeof(temp) - 1);
-
-  strncpy(out, temp, out_size - 1);
-  out[out_size - 1] = '\0';
-}
-
-/**
- * Join a directory and filename into a full path.
- */
-static void join_path(const char *dir, const char *filename, char *out,
-                      size_t out_size) {
-  size_t dir_len = strlen(dir);
-  if (dir_len > 0 && dir[dir_len - 1] == '/')
-    snprintf(out, out_size, "%s%s", dir, filename);
-  else
-    snprintf(out, out_size, "%s/%s", dir, filename);
-}
+/* Helpers */
 
 /**
  * Return the default downloads directory (creating it if necessary).
@@ -62,9 +25,7 @@ static void default_downloads_dir(char *out, size_t out_size) {
   mkdir(out, 0755); /* harmless EEXIST if already present */
 }
 
-/* ------------------------------------------------------------------ */
-/*  Native Messaging entry point                                      */
-/* ------------------------------------------------------------------ */
+/* Native Messaging entry point */
 
 /**
  * Browser Native Host main entry point.
@@ -135,9 +96,15 @@ int main(void) {
   char dest_dir[IPC_MAX_PATH_LEN];
   char filename[512];
   char full_path[IPC_MAX_PATH_LEN];
+  char unique_path[IPC_MAX_PATH_LEN];
   default_downloads_dir(dest_dir, sizeof(dest_dir));
-  filename_from_url(url, filename, sizeof(filename));
-  join_path(dest_dir, filename, full_path, sizeof(full_path));
+  path_filename_from_url(url, filename, sizeof(filename));
+  if (!path_join(dest_dir, filename, full_path, sizeof(full_path)) ||
+      !path_make_unique(full_path, unique_path, sizeof(unique_path))) {
+    LOG_ERROR("could not find an available destination path");
+    cJSON_Delete(root);
+    return 1;
+  }
 
   int sock = ipc_client_connect();
   if (sock >= 0) {
@@ -147,7 +114,7 @@ int main(void) {
         .extra_headers = extra_headers,
     };
     bool has_options = cookie || referrer || extra_headers;
-    ipc_send_add_download(sock, url, full_path, has_options ? &opts : NULL);
+    ipc_send_add_download(sock, url, unique_path, has_options ? &opts : NULL);
     ipc_client_disconnect(sock);
   } else {
     LOG_ERROR("could not connect to daemon socket");

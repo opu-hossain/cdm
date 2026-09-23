@@ -1,4 +1,4 @@
-# List all test source files
+# Test sources.
 set(TEST_SOURCES
     test_segmenter.c
     test_queue_manager.c
@@ -14,6 +14,8 @@ set(TEST_SOURCES
     test_scheduler.c
     test_engine_runner.c
     test_worker_pool.c
+    test_path.c
+    test_gui_controller.c
 )
 
 foreach(TEST_SOURCE ${TEST_SOURCES})
@@ -25,13 +27,23 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         target_sources(${TEST_NAME} PRIVATE
             ${CMAKE_SOURCE_DIR}/src/engine/engine_runner.c
         )
+    elseif(TEST_NAME STREQUAL test_gui_controller)
+        target_sources(${TEST_NAME} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/gui/gui_controller.c
+            ${CMAKE_SOURCE_DIR}/src/gui/gui_client.c
+        )
     endif()
     target_link_libraries(${TEST_NAME}
         PRIVATE
         downloadmgr_core
         PkgConfig::CRITERION
     )
-    add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
+    if(TEST_NAME STREQUAL test_scheduler)
+        # Expose Criterion case names in verbose CTest output.
+        add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME} --verbose)
+    else()
+        add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
+    endif()
 endforeach()
 
 if(UNIX AND NOT WIN32)

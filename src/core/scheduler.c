@@ -14,6 +14,7 @@
 
 #include <stdatomic.h>
 #include <string.h>
+#include <unistd.h>
 
 #define SCHEDULER_MAX_WORKERS 64
 
@@ -27,9 +28,7 @@ typedef struct {
 
 static SchedulerWorker g_workers[SCHEDULER_MAX_WORKERS];
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                           */
-/* ------------------------------------------------------------------ */
+/* Helpers */
 
 /**
  * Return the filename component of `path` (everything after the last
@@ -90,11 +89,14 @@ static int download_thread_fn(void *arg) {
 
   if (canceled) {
     LOG_INFO("Download %u canceled", dl->id);
-    db_update_status(dl->id, "CANCELED");
+    queue_manager_clear_resume_state(dl->id);
     db_delete_chunks(dl->id);
+    db_update_total_size(dl->id, 0);
+    if (dl->dest_path[0] != '\0')
+      unlink(dl->dest_path);
+    db_update_status(dl->id, "CANCELED");
+    queue_manager_update_status(dl->id, DOWNLOAD_CANCELED);
     ipc_broadcast_status(dl->id, "Canceled", 0.0f);
-    queue_manager_update_status(dl->id, DOWNLOAD_ERROR);
-    queue_manager_remove(dl->id);
     return rc;
   }
 
@@ -120,15 +122,15 @@ static int download_thread_fn(void *arg) {
     return rc;
   }
 
-  if (rc == -3) {
+  if (rc == -3 || rc == -4) {
     dl->retry_count = 0;
     dl->next_retry_at = 0;
     queue_manager_update_status(dl->id, DOWNLOAD_ERROR);
     db_update_status(dl->id, "ERROR");
     ipc_broadcast_status(dl->id, "Error", dl->progress);
-    LOG_WARN("Download %u failed — destination file already exists, not "
-             "retrying: %s",
-             dl->id, dl->dest_path);
+    LOG_WARN("Download %u failed — %s, not retrying: %s", dl->id,
+             rc == -4 ? "resume file is missing" : "destination already exists",
+             dl->dest_path);
     dm_notify_send("Download Failed", basename_of(dl->dest_path),
                    DM_NOTIFY_ERROR);
     return rc;
@@ -178,9 +180,7 @@ static void reap_finished_workers(void) {
   }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Public API                                                        */
-/* ------------------------------------------------------------------ */
+/* Public API */
 
 void scheduler_tick(void) {
   reap_finished_workers();

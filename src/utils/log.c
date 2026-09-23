@@ -10,14 +10,10 @@
 #include <threads.h>
 #include <time.h>
 
-/* ------------------------------------------------------------------ */
-/*  Constants                                                         */
-/* ------------------------------------------------------------------ */
+/* Constants */
 #define LOG_MAX_BYTES (5 * 1024 * 1024) /* rotate once exceeded */
 
-/* ------------------------------------------------------------------ */
-/*  Global state                                                      */
-/* ------------------------------------------------------------------ */
+/* Global state */
 static FILE *g_log_fp = NULL;
 static char g_log_path[1024] = {0};
 static LogLevel g_min_level = LOG_INFO;
@@ -26,9 +22,7 @@ static once_flag g_mutex_once = ONCE_FLAG_INIT;
 
 static void initialize_mutex(void) { dm_mutex_init(&g_log_mutex); }
 
-/* ------------------------------------------------------------------ */
-/*  Internal helpers                                                   */
-/* ------------------------------------------------------------------ */
+/* Internal helpers */
 
 static const char *level_name(LogLevel level) {
   switch (level) {
@@ -71,9 +65,7 @@ static void rotate_if_needed(void) {
     setvbuf(g_log_fp, NULL, _IOLBF, 0);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Public API                                                        */
-/* ------------------------------------------------------------------ */
+/* Public API */
 
 bool log_init(const char *log_path, LogLevel min_level) {
   call_once(&g_mutex_once, initialize_mutex);

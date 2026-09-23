@@ -8,8 +8,9 @@ url="https://github.com/opu-hossain/cdm"
 license=('MIT')
 depends=(
   'libnotify'
-  'gtk3'
-  'webkit2gtk-4.1'
+  'sdl2'
+  'libepoxy'
+  'mesa'
   'curl'
   'sqlite'
   'glibc'
@@ -20,8 +21,9 @@ makedepends=(
   'git'
   'pkgconf'
   'libnotify'
-  'gtk3'
-  'webkit2gtk-4.1'
+  'sdl2'
+  'libepoxy'
+  'mesa'
 )
 source=("$pkgname-$pkgver.tar.gz::https://github.com/opu-hossain/cdm/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')

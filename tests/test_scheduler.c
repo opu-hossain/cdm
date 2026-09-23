@@ -10,18 +10,22 @@
 #include <stdatomic.h>
 #include <unistd.h>
 
-// --- Mock engine_run_download (overrides the real one) ---
+/* Mock engine_run_download (overrides the real one) */
 static _Atomic int active_workers;
 static _Atomic bool hold_workers;
+static _Atomic bool fail_workers;
+static _Atomic int engine_runs;
 
 int engine_run_download(struct Download *d) {
-  (void)d;
+  atomic_fetch_add(&engine_runs, 1);
   atomic_fetch_add(&active_workers, 1);
   while (atomic_load(&hold_workers) &&
-         !atomic_load(&d->pause_requested))
+         !atomic_load(&d->pause_requested) &&
+         !atomic_load(&d->cancel_requested))
     dm_thread_sleep_ms(1);
   atomic_fetch_sub(&active_workers, 1);
-  if (atomic_load(&d->pause_requested))
+  if (atomic_load(&d->pause_requested) ||
+      atomic_load(&d->cancel_requested) || atomic_load(&fail_workers))
     return -1;
   return 0;
 }
@@ -30,12 +34,53 @@ static void setup_scheduler(void) {
   setenv("DOWNLOADMGR_ROOT", "/tmp", 1);
   atomic_store(&active_workers, 0);
   atomic_store(&hold_workers, false);
+  atomic_store(&fail_workers, false);
+  atomic_store(&engine_runs, 0);
   db_init(":memory:");
 }
 
 static void teardown_scheduler(void) { db_close(); }
 
 TestSuite(scheduler, .init = setup_scheduler, .fini = teardown_scheduler);
+
+Test(scheduler, automatic_retries_stop_at_terminal_error) {
+  uint32_t id = queue_manager_add("http://example.com/fails",
+                                  "/tmp/scheduler-retry-limit", NULL);
+  cr_assert_neq(id, 0);
+  atomic_store(&fail_workers, true);
+  int max_retries = config_get_retry_max_attempts();
+
+  for (int attempt = 0; attempt <= max_retries; attempt++) {
+    scheduler_tick();
+    DownloadStatus status = DOWNLOAD_ACTIVE;
+    for (int wait = 0; wait < 1000; wait++) {
+      if (atomic_load(&engine_runs) > attempt &&
+          queue_manager_get_status(id, &status) &&
+          status != DOWNLOAD_ACTIVE)
+        break;
+      dm_thread_sleep_ms(1);
+    }
+    cr_assert_eq(atomic_load(&engine_runs), attempt + 1);
+    Download *d = queue_manager_find_by_id(id);
+    cr_assert_not_null(d);
+    if (attempt < max_retries) {
+      cr_assert_eq(status, DOWNLOAD_QUEUED);
+      cr_assert_eq(d->retry_count, attempt + 1);
+      d->next_retry_at = time(NULL) - 1; /* Skip wall-clock backoff in test. */
+      dm_thread_sleep_ms(2);
+    } else {
+      cr_assert_eq(status, DOWNLOAD_ERROR);
+    }
+  }
+
+  for (int tick = 0; tick < 10; tick++)
+    scheduler_tick();
+  cr_assert_eq(atomic_load(&engine_runs), max_retries + 1);
+  DownloadStatus final_status = DOWNLOAD_QUEUED;
+  cr_assert(queue_manager_get_status(id, &final_status));
+  cr_assert_eq(final_status, DOWNLOAD_ERROR);
+  queue_manager_remove(id);
+}
 
 Test(scheduler, tick_starts_download) {
   uint32_t id = queue_manager_add("http://example.com", "/tmp/file", NULL);

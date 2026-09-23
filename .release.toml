@@ -1,9 +1,10 @@
 # Release metadata for automated package generation.
 # Allowed channels: "rc" or "stable".
 # "rc" creates version strings like 0.1.0-rc1, and "stable" creates 0.1.0.
-# Changing this file is the trigger source for automated releases.
+# Changes here do not trigger a release. Push a matching vX.Y.Z[-rcN] tag
+# (for example with scripts/cdm tag), or manually dispatch a release workflow.
 
 channel = "rc"
-version = "0.1.0"
-rc = 3
+version = "0.2.0"
+rc = 1
 publish = true

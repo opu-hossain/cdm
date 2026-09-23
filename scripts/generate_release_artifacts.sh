@@ -67,20 +67,27 @@ else:
 PY
 )"
 
-PACKAGE_NAME="downloadmgr-${VERSION}-linux.deb"
+ARCH="$(dpkg --print-architecture)"
+PACKAGE_NAME="downloadmgr-${VERSION}-linux-${ARCH}.deb"
 
 cmake -S "$ROOT_DIR" -B "$BUILD_DIR" -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build "$BUILD_DIR" -j"${JOBS:-$(nproc)}"
 ctest --test-dir "$BUILD_DIR" --output-on-failure
 cpack --config "$BUILD_DIR/CPackConfig.cmake" -G DEB
 
-PACKAGE_PATH="$(find "$ROOT_DIR" -maxdepth 1 -name '*.deb' | sort | tail -n 1)"
+PACKAGE_PATH="$(find "$ROOT_DIR" -maxdepth 1 -name '*.deb' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
 if [[ -z "$PACKAGE_PATH" ]]; then
   echo "No .deb package was generated." >&2
   exit 1
 fi
 
-sha256sum "$PACKAGE_PATH" > "$ROOT_DIR/SHA256SUMS.txt"
+RENAMED_PATH="$ROOT_DIR/$PACKAGE_NAME"
+if [[ "$PACKAGE_PATH" != "$RENAMED_PATH" ]]; then
+  mv "$PACKAGE_PATH" "$RENAMED_PATH"
+fi
+PACKAGE_PATH="$RENAMED_PATH"
+
+( cd "$ROOT_DIR" && sha256sum "$PACKAGE_NAME" ) > "$ROOT_DIR/SHA256SUMS.txt"
 ls -l "$PACKAGE_PATH" "$ROOT_DIR/SHA256SUMS.txt"
 
 echo "Release channel: $CHANNEL"

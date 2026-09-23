@@ -5,8 +5,8 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
-#include <threads.h>
 #include <sys/socket.h>
+#include <threads.h>
 
 #define GUI_CMD_TIMEOUT_MS 5000
 #define GUI_EVENT_QUEUE_CAP 512
@@ -257,6 +257,15 @@ bool gui_client_cancel(uint32_t id) {
   return send_with_retry(ipc_send_cancel, id);
 }
 
+static int send_reload_config(int sock, uint32_t id) {
+  (void)id;
+  return ipc_send_reload_config(sock);
+}
+
+bool gui_client_reload_config(void) {
+  return send_with_retry(send_reload_config, 0);
+}
+
 bool gui_client_add_download(const char *url, const char *dest,
                              const IpcDownloadOptions *opts, uint32_t *out_id) {
   if (g_cmd_fd < 0) {
@@ -269,11 +278,15 @@ bool gui_client_add_download(const char *url, const char *dest,
   }
 
   uint32_t id = ipc_send_add_download(g_cmd_fd, url, dest, opts);
-  // id==0 here is ambiguous between "daemon rejected it" and "the
-  // read/write itself silently failed" in the current protocol — see the
-  // header comment. We deliberately do NOT reconnect-and-retry an add, to
-  // avoid a double-submit if the first attempt actually landed.
+  // Do not retry an add after an IPC failure: the request may have reached the
+  // daemon even if its response was lost, and retrying could create a
+  // duplicate.
   *out_id = id;
+  if (id == 0) {
+    ipc_client_disconnect(g_cmd_fd);
+    g_cmd_fd = -1;
+    note_lost();
+  }
   return id != 0;
 }
 
@@ -325,10 +338,10 @@ bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count) {
     float progress;
 
     if (ipc_read_exact(g_cmd_fd, &id, sizeof(id)) != 0 ||
-      read_string_local(g_cmd_fd, url, sizeof(url)) != 0 ||
-      read_string_local(g_cmd_fd, dest_path, sizeof(dest_path)) != 0 ||
-      read_string_local(g_cmd_fd, status, sizeof(status)) != 0 ||
-      ipc_read_exact(g_cmd_fd, &progress, sizeof(progress)) != 0) {
+        read_string_local(g_cmd_fd, url, sizeof(url)) != 0 ||
+        read_string_local(g_cmd_fd, dest_path, sizeof(dest_path)) != 0 ||
+        read_string_local(g_cmd_fd, status, sizeof(status)) != 0 ||
+        ipc_read_exact(g_cmd_fd, &progress, sizeof(progress)) != 0) {
       free(out);
       ipc_client_disconnect(g_cmd_fd);
       g_cmd_fd = -1;

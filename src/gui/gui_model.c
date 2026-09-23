@@ -101,7 +101,8 @@ int gui_model_snapshot_rows(GuiRow *out, int max) {
 // refresh. Declared here rather than in the header on purpose — this is
 // an implementation seam specific to the "just added" UX, not part of
 // the model's general contract.
-void gui_model_add_local_row(uint32_t id, const char *url) {
+void gui_model_add_local_row(uint32_t id, const char *url,
+                             const char *dest_path) {
   ensure_mutex();
   dm_mutex_lock(&g_mutex);
   if (g_row_count < GUI_MODEL_MAX_ROWS) {
@@ -116,7 +117,9 @@ void gui_model_add_local_row(uint32_t id, const char *url) {
     row->id = id;
     strncpy(row->url, url, sizeof(row->url) - 1);
     row->url[sizeof(row->url) - 1] = '\0';
-    row->dest_path[0] = '\0';
+    strncpy(row->dest_path, dest_path ? dest_path : "",
+            sizeof(row->dest_path) - 1);
+    row->dest_path[sizeof(row->dest_path) - 1] = '\0';
     strncpy(row->status, "QUEUED", sizeof(row->status) - 1);
     row->status[sizeof(row->status) - 1] = '\0';
     row->progress = 0.0f;

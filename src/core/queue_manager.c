@@ -14,26 +14,27 @@
 #include <threads.h>
 #include <unistd.h>
 
-/* ------------------------------------------------------------------ */
-/*  Internal state                                                    */
-/* ------------------------------------------------------------------ */
+/* Internal state */
 static Download *g_head = NULL;
 static uint32_t g_next_id = 1;
 static dm_mutex_t g_mutex;
 static once_flag g_mutex_once = ONCE_FLAG_INIT;
 
 static bool request_options_present(const RequestOptions *opts) {
-  return opts && (opts->cookie[0] != '\0' || opts->referrer[0] != '\0' ||
-                  opts->extra_headers[0] != '\0' ||
-                  opts->expected_sha256[0] != '\0' ||
-                  opts->speed_limit_bps != 0);
+  return opts &&
+         (opts->cookie[0] != '\0' || opts->referrer[0] != '\0' ||
+          opts->extra_headers[0] != '\0' || opts->expected_sha256[0] != '\0' ||
+          opts->speed_limit_bps != 0);
 }
 
 static bool destination_in_use(const char *dest_path) {
   Download *cur = g_head;
   while (cur != NULL) {
-    if (strcmp(cur->dest_path, dest_path) == 0)
+    if (cur->status != DOWNLOAD_DONE && cur->status != DOWNLOAD_ERROR &&
+        cur->status != DOWNLOAD_CANCELED &&
+        strcmp(cur->dest_path, dest_path) == 0) {
       return true;
+    }
     cur = cur->next;
   }
   return false;
@@ -44,9 +45,7 @@ static void free_download(Download *download) {
   free(download);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Static helpers                                                    */
-/* ------------------------------------------------------------------ */
+/* Static helpers */
 
 /**
  * Return the filesystem root under which all downloads must reside.
@@ -91,7 +90,9 @@ static bool is_safe_dest_path(const char *path) {
     char *parent = dirname(temp_dir);
     if (!parent || strcmp(parent, temp_dir) == 0 || strcmp(parent, ".") == 0 ||
         strcmp(parent, "/") == 0) {
-      LOG_WARN("is_safe_dest_path: rejected — no valid existing parent directory for '%s'", dir);
+      LOG_WARN("is_safe_dest_path: rejected — no valid existing parent "
+               "directory for '%s'",
+               dir);
       return false;
     }
     char parent_copy[1024];
@@ -111,9 +112,8 @@ static bool is_safe_dest_path(const char *path) {
 
   size_t root_len = strlen(resolved_root);
   if (strncmp(resolved_dir, resolved_root, root_len) != 0) {
-    LOG_WARN(
-        "is_safe_dest_path: rejected — '%s' outside allowed root '%s'",
-        resolved_dir, resolved_root);
+    LOG_WARN("is_safe_dest_path: rejected — '%s' outside allowed root '%s'",
+             resolved_dir, resolved_root);
     return false;
   }
   if (resolved_dir[root_len] != '\0' && resolved_dir[root_len] != '/')
@@ -137,9 +137,7 @@ static void initialize_mutex(void) { dm_mutex_init(&g_mutex); }
 
 static void ensure_mutex(void) { call_once(&g_mutex_once, initialize_mutex); }
 
-/* ------------------------------------------------------------------ */
-/*  Lifecycle                                                         */
-/* ------------------------------------------------------------------ */
+/* Lifecycle */
 
 uint32_t queue_manager_add(const char *url, const char *dest_path,
                            const RequestOptions *opts) {
@@ -229,9 +227,7 @@ void queue_manager_remove(uint32_t id) {
   dm_mutex_unlock(&g_mutex);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Query                                                             */
-/* ------------------------------------------------------------------ */
+/* Query */
 
 Download *queue_manager_find_by_id(uint32_t id) {
   ensure_mutex();
@@ -362,9 +358,7 @@ int queue_manager_snapshot_chunk_progress(ChunkProgressSnapshot *out, int max) {
   return n;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Status / control                                                  */
-/* ------------------------------------------------------------------ */
+/* Status / control */
 
 void queue_manager_update_status(uint32_t id, DownloadStatus new_status) {
   ensure_mutex();
@@ -384,25 +378,39 @@ bool queue_manager_cancel(uint32_t id) {
   bool was_active = false;
 
   dm_mutex_lock(&g_mutex);
-  Download **prev_ptr = &g_head;
-  while (*prev_ptr != NULL) {
-    Download *cur = *prev_ptr;
+  for (Download *cur = g_head; cur != NULL; cur = cur->next) {
     if (cur->id == id) {
       if (cur->status == DOWNLOAD_ACTIVE) {
         atomic_store(&cur->cancel_requested, true);
         was_active = true;
       } else {
-        *prev_ptr = cur->next;
-        if (cur->dest_path[0] != '\0')
-          unlink(cur->dest_path);
-        free_download(cur);
+        cur->status = DOWNLOAD_CANCELED;
       }
       break;
     }
-    prev_ptr = &cur->next;
   }
   dm_mutex_unlock(&g_mutex);
   return was_active;
+}
+
+void queue_manager_clear_resume_state(uint32_t id) {
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  for (Download *cur = g_head; cur != NULL; cur = cur->next) {
+    if (cur->id != id)
+      continue;
+    memset(cur->chunks, 0, sizeof(cur->chunks));
+    cur->chunk_count = 0;
+    cur->total_size = 0;
+    cur->progress = 0.0f;
+    cur->retry_count = 0;
+    cur->next_retry_at = 0;
+    atomic_store(&cur->bytes_downloaded, 0);
+    for (int i = 0; i < QM_MAX_CHUNKS; i++)
+      atomic_store(&cur->chunk_live_bytes[i], 0);
+    break;
+  }
+  dm_mutex_unlock(&g_mutex);
 }
 
 bool queue_manager_pause(uint32_t id) {
@@ -447,9 +455,7 @@ bool queue_manager_resume(uint32_t id) {
   return resumed;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Internal (use with care)                                          */
-/* ------------------------------------------------------------------ */
+/* Internal (use with care) */
 
 void *queue_manager_get_mutex(void) {
   ensure_mutex();

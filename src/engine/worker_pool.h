@@ -15,9 +15,7 @@
 extern "C" {
 #endif
 
-/* ------------------------------------------------------------------ */
-/*  Rebalance pool types                                              */
-/* ------------------------------------------------------------------ */
+/* Rebalance pool types. */
 
 /**
  * Callback invoked when a rebalance pool splits a chunk.
@@ -54,9 +52,7 @@ RebalancePool *rebalance_pool_create(const Range *ranges, int n_ranges,
 /** Free a rebalance pool. */
 void rebalance_pool_destroy(RebalancePool *pool);
 
-/* ------------------------------------------------------------------ */
-/*  Worker pool result                                                */
-/* ------------------------------------------------------------------ */
+/* Worker pool result. */
 
 typedef struct {
   bool all_succeeded;

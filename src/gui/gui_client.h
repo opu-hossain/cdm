@@ -1,8 +1,8 @@
 #ifndef GUI_GUI_CLIENT_H
 #define GUI_GUI_CLIENT_H
 
-#include "../platform/ipc_socket.h"
 #include "../core/download_record.h"
+#include "../platform/ipc_socket.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -41,12 +41,12 @@ bool gui_client_cancel(uint32_t id);
 
 bool gui_client_add_download(const char *url, const char *dest,
                              const IpcDownloadOptions *opts, uint32_t *out_id);
+bool gui_client_reload_config(void);
 
-// Full snapshot fetch. On success, caller owns *out_records (free() it).
+/* Fetch a full snapshot. The caller owns *out_records on success. */
 bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count);
 
-// On-demand single-download details fetch — only call when the user
-// actually opens a row's details panel, never in a bulk/periodic loop.
+/* Fetch details only when the user opens a row's details panel. */
 bool gui_client_get_details(uint32_t id, GuiDownloadDetails *out);
 
 bool gui_client_poll_event(GuiClientEvent *out);

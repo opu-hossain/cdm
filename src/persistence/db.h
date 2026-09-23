@@ -4,8 +4,8 @@
 #ifndef PERSISTENCE_DB_H
 #define PERSISTENCE_DB_H
 
-#include "../core/queue_manager.h"
 #include "../core/download_record.h"
+#include "../core/queue_manager.h"
 #include "../platform/ipc_socket.h" // for IpcDownloadDetails
 
 #include <stdbool.h>
@@ -15,9 +15,7 @@
 extern "C" {
 #endif
 
-/* ------------------------------------------------------------------ */
-/*  Row types for bulk queries                                        */
-/* ------------------------------------------------------------------ */
+/* Row types for bulk queries */
 
 typedef struct {
   uint64_t range_start;
@@ -30,25 +28,20 @@ typedef DownloadListRecord DbDownloadRow;
 
 typedef int (*DbDownloadVisitor)(const DbDownloadRow *row, void *ctx);
 
-/* ------------------------------------------------------------------ */
-/*  Lifecycle                                                         */
-/* ------------------------------------------------------------------ */
+/* Database lifecycle. */
 
 int db_init(const char *db_path);
 void db_close(void);
 
-/* ------------------------------------------------------------------ */
-/*  Download persistence                                              */
-/* ------------------------------------------------------------------ */
+/* Download persistence. */
 
 int db_insert_download(uint32_t id, const char *url, const char *dest_path,
                        const RequestOptions *opts);
+bool db_destination_exists(const char *dest_path);
 int db_update_status(uint32_t id, const char *status);
 int db_update_total_size(uint32_t id, uint64_t total_size);
 
-/* ------------------------------------------------------------------ */
-/*  Chunk persistence (resume support)                                */
-/* ------------------------------------------------------------------ */
+/* Chunk persistence for resume support. */
 
 int db_insert_chunk(uint32_t download_id, uint64_t range_start,
                     uint64_t range_end);
@@ -58,9 +51,7 @@ int db_update_chunk_range(uint32_t download_id, uint64_t range_start,
                           uint64_t new_range_end);
 int db_delete_chunks(uint32_t download_id);
 
-/* ------------------------------------------------------------------ */
-/*  Bulk queries / restore                                            */
-/* ------------------------------------------------------------------ */
+/* Bulk queries and queue restore. */
 
 int db_load_chunks(uint32_t download_id, DbChunkRow *out, int max);
 int db_list_all_downloads(DbDownloadRow *out, int max);

@@ -4,6 +4,7 @@
 #ifndef UTILS_CONFIG_H
 #define UTILS_CONFIG_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -27,6 +28,18 @@ int config_get_retry_max_attempts(void);           // default 5
 int config_get_retry_base_delay_sec(void);         // default 2
 int config_get_retry_max_delay_sec(void);          // default 60
 uint64_t config_get_max_speed_bytes_per_sec(void); // default 0 (unlimited)
+
+typedef struct {
+  int max_concurrent_downloads;
+  const char *default_download_dir;
+  int retry_max_attempts;
+  int retry_base_delay_sec;
+  int retry_max_delay_sec;
+  uint64_t max_speed_bytes_per_sec;
+} DownloadManagerConfig;
+
+void config_get(DownloadManagerConfig *out);
+bool config_save(const DownloadManagerConfig *config);
 
 #ifdef __cplusplus
 }

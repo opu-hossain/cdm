@@ -7,9 +7,7 @@
 #include "sha256.h"
 #include <string.h>
 
-/* ------------------------------------------------------------------ */
-/*  Internal macros & constants                                       */
-/* ------------------------------------------------------------------ */
+/* Internal macros & constants */
 
 #define ROTLEFT(a, b) (((a) << (b)) | ((a) >> (32 - (b))))
 #define ROTRIGHT(a, b) (((a) >> (b)) | ((a) << (32 - (b))))
@@ -34,9 +32,7 @@ static const uint32_t k[64] = {
     0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
     0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
 
-/* ------------------------------------------------------------------ */
-/*  Core transform                                                    */
-/* ------------------------------------------------------------------ */
+/* Core transform */
 
 static void sha256_transform(SHA256_CTX *ctx, const uint8_t data[]) {
   uint32_t a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
@@ -79,9 +75,7 @@ static void sha256_transform(SHA256_CTX *ctx, const uint8_t data[]) {
   ctx->state[7] += h;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Public API                                                        */
-/* ------------------------------------------------------------------ */
+/* Public API */
 
 void sha256_init(SHA256_CTX *ctx) {
   ctx->datalen = 0;

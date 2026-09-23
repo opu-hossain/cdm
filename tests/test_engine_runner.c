@@ -10,7 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 
-// --- Mocks for external dependencies ---
+/* Mocks for external dependencies */
 int curl_client_head(const char *url, const RequestContext *ctx, FileInfo *out) {
   (void)url;
   (void)ctx;
@@ -61,7 +61,7 @@ RebalancePool *rebalance_pool_create(const Range *ranges, int n_ranges,
 
 void rebalance_pool_destroy(RebalancePool *pool) { (void)pool; }
 
-// --- Setup / teardown ---
+/* Setup / teardown */
 static void setup_engine_test(void) {
   setenv("DOWNLOADMGR_ROOT", "/tmp", 1);
   db_init(":memory:"); // use in‑memory DB to avoid "out of memory" errors
@@ -94,4 +94,21 @@ Test(engine_runner, invalid_url) {
 
   int rc = engine_run_download(&d);
   cr_assert_eq(rc, -1, "Invalid URL should return -1");
+}
+
+Test(engine_runner, missing_resume_file_is_terminal_and_clears_ranges) {
+  Download d = {0};
+  d.id = 123;
+  strcpy(d.url, "http://example.com/missing");
+  strcpy(d.dest_path, "/tmp/cdm-missing-resume-file");
+  unlink(d.dest_path);
+  d.chunk_count = 1;
+  d.total_size = 1000;
+  d.chunks[0] = (DownloadChunk){0, 999, 400};
+  atomic_store(&d.bytes_downloaded, 400);
+
+  cr_assert_eq(engine_run_download(&d), -4);
+  cr_assert_eq(d.chunk_count, 0);
+  cr_assert_eq(d.total_size, 0);
+  cr_assert_eq(atomic_load(&d.bytes_downloaded), 0);
 }

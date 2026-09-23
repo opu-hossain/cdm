@@ -25,6 +25,7 @@ struct Download;
  *         -3 on destination-already-exists (non-retryable — the target
  *          file existed before this attempt started; nothing was created
  *          or needs cleanup)
+ *         -4 on missing resume file (non-retryable — stale ranges are cleared)
  */
 int engine_run_download(struct Download *d);
 

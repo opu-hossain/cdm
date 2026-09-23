@@ -17,24 +17,18 @@ static uint64_t now_ms(void) {
 }
 #endif
 
-/* ------------------------------------------------------------------ */
-/*  Token bucket constants                                            */
-/* ------------------------------------------------------------------ */
+/* Token bucket constants */
 
 /* Cap the bucket at ~0.5 s worth of the configured rate so the aggregate
    rate tracks the cap closely while allowing small bursts. */
 #define BUCKET_FRACTION_MS 500
 
-/* ------------------------------------------------------------------ */
-/*  Global state (accessed only from daemon thread + workers)         */
-/* ------------------------------------------------------------------ */
+/* Global state (accessed only from daemon thread + workers) */
 
 static _Atomic int64_t g_tokens = 0;
 static uint64_t g_last_refill_ms = 0; // daemon thread only
 
-/* ------------------------------------------------------------------ */
-/*  Public API                                                        */
-/* ------------------------------------------------------------------ */
+/* Public API */
 
 void bandwidth_tick(void) {
   uint64_t cap = config_get_max_speed_bytes_per_sec();

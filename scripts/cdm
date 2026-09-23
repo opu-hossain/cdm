@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# scripts/cdm — build & release toolkit for downloadmgr
-#
-# Reads .release.toml as the single source of truth for versions.
-# Handles DEB (host), RPM (Fedora container), and Arch (PKGBUILD) builds.
+# Build and release toolkit for downloadmgr.
+# Reads .release.toml for versions and builds DEB, RPM, and Arch packages.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# ---------- output ----------
+# Output helpers.
 if [[ -t 1 ]]; then
     C_RED=$'\e[31m'; C_GRN=$'\e[32m'; C_YLW=$'\e[33m'
     C_BLU=$'\e[34m'; C_DIM=$'\e[2m'; C_RST=$'\e[0m'
@@ -22,7 +20,7 @@ warn() { printf '%s  !%s %s\n' "$C_YLW" "$C_RST" "$*" >&2; }
 die()  { printf '%serr%s %s\n' "$C_RED" "$C_RST" "$*" >&2; exit 1; }
 has()  { command -v "$1" >/dev/null 2>&1; }
 
-# ---------- .release.toml ----------
+# Release metadata.
 read_release() {
     local key="$1" default="$2" line
     [[ -f .release.toml ]] || { echo "$default"; return; }
@@ -62,7 +60,7 @@ show_version() {
     printf 'publish:       %s\n' "$(release_publish)"
 }
 
-# ---------- source tarball ----------
+# Source tarball.
 make_source_tarball() {
     local version="$1" out="${2:-/tmp/cdm-${version}.tar.gz}"
     local stage; stage="$(mktemp -d)"
@@ -84,7 +82,7 @@ make_source_tarball() {
     printf '%s\n' "$out"
 }
 
-# ---------- dependencies ----------
+# Dependency information.
 show_deps() {
     local kind="${1:-}"
     local f="$ROOT/packaging/deps/${kind}.sh"
@@ -94,7 +92,7 @@ show_deps() {
     sed -n '/^[^#]/p' "$f"
 }
 
-# ---------- DEB ----------
+# Debian package.
 build_deb() {
     compute_versions
     has dpkg-deb || die "install dpkg (Arch: sudo pacman -S dpkg)"
@@ -124,7 +122,7 @@ verify_deb() {
     dpkg-deb -c "$deb" | awk '{print $NF}' | grep -v '/$'
 }
 
-# ---------- RPM ----------
+# RPM package.
 build_rpm() {
     compute_versions
     has podman || die "install podman (Arch: sudo pacman -S podman)"
@@ -163,7 +161,7 @@ verify_rpm() {
         | grep -Ev '^(rpmlib|libc\.|libm\.|libgcc|libstdc\+\+|rtld|/usr/bin/sh)'
 }
 
-# ---------- Arch ----------
+# Arch package.
 build_arch() {
     compute_versions
     has makepkg || die "install base-devel"
@@ -180,7 +178,7 @@ build_arch() {
     make_source_tarball "$TAG_VERSION" "$tarball_path" >/dev/null
     cp "$tarball_path" "$pkgdir/$tarball_name"
 
-    # temporarily point PKGBUILD at the local tarball
+    # Point PKGBUILD at the local tarball for this build.
     local bak="$pkgdir/PKGBUILD.bak"
     cp "$pkgdir/PKGBUILD" "$bak"
     trap 'mv -f "'"$bak"'" "'"$pkgdir"'/PKGBUILD" 2>/dev/null || true' EXIT
@@ -214,7 +212,7 @@ verify_arch() {
     if has namcap; then namcap "$zst" || true; else warn "namcap not installed"; fi
 }
 
-# ---------- pipelines ----------
+# Build and verification pipelines.
 build_all() { build_deb; build_rpm; build_arch; }
 verify_all() {
     [[ -n "$(find . -maxdepth 1 -name '*.deb' -print -quit)" ]] && verify_deb || warn "no .deb"
@@ -230,7 +228,7 @@ run_tests() {
     ctest --test-dir build --output-on-failure
 }
 
-# ---------- version management ----------
+# Version management.
 bump_version() {
     local what="${1:-}"
     case "$what" in
@@ -271,7 +269,7 @@ bump_version() {
     show_version
 }
 
-# ---------- release ----------
+# Release actions.
 github_repo_url() {
     local remote
     remote="$(git config --get remote.origin.url || true)"
@@ -306,7 +304,7 @@ make_tag() {
     open_release
 }
 
-# ---------- housekeeping ----------
+# Housekeeping.
 clean_all() {
     info "Cleaning build trees and artifacts"
     rm -rf build build-asan build-deb build-rpm _CPack_Packages
@@ -321,7 +319,7 @@ clean_all() {
     ok "clean"
 }
 
-# ---------- doctor ----------
+# Environment checks.
 doctor() {
     compute_versions
     local fail=0
@@ -410,7 +408,7 @@ doctor() {
     ok "all checks passed"
 }
 
-# ---------- dispatcher ----------
+# Command dispatcher.
 usage() {
     cat <<EOF
 cdm — build & release toolkit
