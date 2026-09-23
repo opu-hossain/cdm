@@ -1,0 +1,2 @@
+# Third-party sources (excluded from language stats, marked as vendored)
+src/vendor/* linguist-vendored
