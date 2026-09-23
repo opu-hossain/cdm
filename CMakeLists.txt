@@ -57,16 +57,6 @@ set(FETCHCONTENT_QUIET OFF)
 
 include(FetchContent)
 
-FetchContent_Declare(
-    nuklear
-    GIT_REPOSITORY https://github.com/Immediate-Mode-UI/Nuklear.git
-    GIT_TAG v4.13.3
-)
-FetchContent_GetProperties(nuklear)
-if(NOT nuklear_POPULATED)
-    FetchContent_Populate(nuklear)
-endif()
-
 # System dependencies (pkg-config)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBNOTIFY REQUIRED IMPORTED_TARGET libnotify)
@@ -230,8 +220,7 @@ downloadmgr_enable_sanitizer(downloadmgr)
 target_include_directories(downloadmgr PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
     src
-    ${nuklear_SOURCE_DIR}
-    ${nuklear_SOURCE_DIR}/demo/sdl_opengl3
+    src/vendor
 )
 
 target_link_libraries(downloadmgr PRIVATE

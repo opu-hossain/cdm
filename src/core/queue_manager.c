@@ -393,6 +393,26 @@ bool queue_manager_cancel(uint32_t id) {
   return was_active;
 }
 
+void queue_manager_clear_resume_state(uint32_t id) {
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  for (Download *cur = g_head; cur != NULL; cur = cur->next) {
+    if (cur->id != id)
+      continue;
+    memset(cur->chunks, 0, sizeof(cur->chunks));
+    cur->chunk_count = 0;
+    cur->total_size = 0;
+    cur->progress = 0.0f;
+    cur->retry_count = 0;
+    cur->next_retry_at = 0;
+    atomic_store(&cur->bytes_downloaded, 0);
+    for (int i = 0; i < QM_MAX_CHUNKS; i++)
+      atomic_store(&cur->chunk_live_bytes[i], 0);
+    break;
+  }
+  dm_mutex_unlock(&g_mutex);
+}
+
 bool queue_manager_pause(uint32_t id) {
   ensure_mutex();
   bool was_active = false;
@@ -420,8 +440,7 @@ bool queue_manager_resume(uint32_t id) {
   dm_mutex_lock(&g_mutex);
   for (Download *cur = g_head; cur != NULL; cur = cur->next) {
     if (cur->id == id) {
-      if (cur->status == DOWNLOAD_PAUSED || cur->status == DOWNLOAD_ERROR ||
-          cur->status == DOWNLOAD_CANCELED) {
+      if (cur->status == DOWNLOAD_PAUSED || cur->status == DOWNLOAD_ERROR) {
         atomic_store(&cur->pause_requested, false);
         atomic_store(&cur->cancel_requested, false);
         cur->retry_count = 0;

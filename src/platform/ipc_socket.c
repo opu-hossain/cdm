@@ -374,10 +374,12 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       strncpy(canceled_path, download->dest_path, sizeof(canceled_path) - 1);
     bool was_active = queue_manager_cancel(id);
     if (!was_active) {
-      db_update_status(id, "CANCELED");
+      queue_manager_clear_resume_state(id);
       db_delete_chunks(id);
+      db_update_total_size(id, 0);
       if (canceled_path[0] != '\0')
         unlink(canceled_path);
+      db_update_status(id, "CANCELED");
     }
     send_command_result(client_fd, IPC_RESULT_OK);
     break;

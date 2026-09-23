@@ -38,7 +38,12 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         downloadmgr_core
         PkgConfig::CRITERION
     )
-    add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
+    if(TEST_NAME STREQUAL test_scheduler)
+        # Expose Criterion case names in verbose CTest output.
+        add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME} --verbose)
+    else()
+        add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
+    endif()
 endforeach()
 
 if(UNIX AND NOT WIN32)

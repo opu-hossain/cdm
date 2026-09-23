@@ -13,6 +13,7 @@
 #include "segmenter.h"
 #include "worker_pool.h"
 
+#include <errno.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <string.h>
@@ -76,8 +77,15 @@ static bool chunk_is_complete(const DownloadChunk *c) {
  * the destination file is removed from disk.
  */
 static void clear_resume_state(struct Download *d, bool also_delete_file) {
+  memset(d->chunks, 0, sizeof(d->chunks));
   d->chunk_count = 0;
+  d->total_size = 0;
+  d->progress = 0.0f;
+  atomic_store(&d->bytes_downloaded, 0);
+  for (int i = 0; i < QM_MAX_CHUNKS; i++)
+    atomic_store(&d->chunk_live_bytes[i], 0);
   db_delete_chunks(d->id);
+  db_update_total_size(d->id, 0);
   if (also_delete_file && d->dest_path[0] != '\0')
     unlink(d->dest_path);
 }
@@ -86,6 +94,14 @@ static void clear_resume_state(struct Download *d, bool also_delete_file) {
 
 int engine_run_download(struct Download *d) {
   const RequestOptions *request = d->request;
+
+  if (d->chunk_count > 0 && access(d->dest_path, F_OK) != 0 &&
+      errno == ENOENT) {
+    LOG_ERROR("Resume file for download %u is missing: %s", d->id,
+              d->dest_path);
+    clear_resume_state(d, false);
+    return -4;
+  }
 
   LOG_INFO("Starting download: %s\n", d->url);
 

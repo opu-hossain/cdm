@@ -135,6 +135,9 @@ void queue_manager_update_status(uint32_t id, DownloadStatus new_status);
 /** Request cancellation of a download. Returns true if found. */
 bool queue_manager_cancel(uint32_t id);
 
+/** Discard in-memory resume data after a canceled file is removed. */
+void queue_manager_clear_resume_state(uint32_t id);
+
 /** Request pause. Returns true if found. */
 bool queue_manager_pause(uint32_t id);
 

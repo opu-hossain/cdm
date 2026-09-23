@@ -214,6 +214,7 @@ static void apply_theme(struct nk_context *ctx) {
   ctx->style.edit.rounding = 7;
   ctx->style.edit.padding = nk_vec2(10, 8);
   ctx->style.edit.border = 1;
+  ctx->style.edit.cursor_size = 1.5f;
   ctx->style.property.rounding = 7;
   ctx->style.property.border = 1;
   ctx->style.property.padding = nk_vec2(10, 8);
@@ -731,10 +732,16 @@ static void draw_menu(struct nk_context *ctx, UiState *ui, GuiRow *rows,
         report_enqueue(ui, gui_controller_enqueue_pause(row->id));
         close = true;
       }
-    } else {
-      if (button(ctx, 5, by, 170, 30, paused ? "Resume" : "Retry", true,
-                 false)) {
+    } else if (paused) {
+      if (button(ctx, 5, by, 170, 30, "Resume", true, false)) {
         report_enqueue(ui, gui_controller_enqueue_resume(row->id));
+        close = true;
+      }
+    } else {
+      /* ERROR rows cannot prove their partial file is still valid from GuiRow. */
+      if (button(ctx, 5, by, 170, 30, "Re-download", true, false)) {
+        report_enqueue(
+            ui, gui_controller_enqueue_add(row->url, row->dest_path, NULL));
         close = true;
       }
     }
@@ -1008,6 +1015,11 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
                           ui->headers, ui->sha256, (uint64_t)ui->speed_limit)) {
       ui->add_open = false;
       ui->error[0] = '\0';
+      ui->url[0] = ui->folder[0] = ui->cookie[0] = ui->referrer[0] = '\0';
+      ui->headers[0] = ui->sha256[0] = '\0';
+      ui->speed_limit = 0;
+      copy_text(ui->numbers[5], sizeof(ui->numbers[5]), "0");
+      ui->advanced = false;
     } else
       copy_text(ui->error, sizeof(ui->error),
                 "Could not prepare or enqueue the download.");
@@ -1201,6 +1213,7 @@ int run_gui(void) {
     uint32_t now = SDL_GetTicks();
     if (ui.disk_checked_at == UINT32_MAX ||
         now - ui.disk_checked_at >= 10000) {
+      /* Verified: this checks the configured directory's filesystem, not '/'. */
       ui.disk_available = diskspace_get(config_get_default_download_dir(),
                                         &ui.disk);
       ui.disk_checked_at = now;

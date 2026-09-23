@@ -240,13 +240,16 @@ Each module has a single responsibility and communicates through well-defined in
   * Clang
   * MSVC
 
-Dependencies fetched automatically:
+System libraries and development headers:
 
 * libcurl
 * SQLite3
 * SDL2
 * OpenGL
 * libepoxy
+
+Bundled in `src/vendor/` (no build-time fetch):
+
 * Nuklear
 * cJSON
 * tomlc17
