@@ -17,4 +17,10 @@ bool path_join(const char *dir, const char *filename, char *out,
 /** Choose an unused path, inserting " (n)" before the extension if needed. */
 bool path_make_unique(const char *path, char *out, size_t out_size);
 
+typedef bool (*PathConflictFn)(const char *path, void *context);
+
+bool path_make_unique_with_conflict(const char *path, char *out,
+                                    size_t out_size, PathConflictFn conflict,
+                                    void *context);
+
 #endif /* UTILS_PATH_H */

@@ -22,6 +22,7 @@ typedef enum {
   MSG_SUBSCRIBE,
   MSG_LIST_ALL,
   MSG_GET_DETAILS,
+  MSG_RELOAD_CONFIG,
 } MsgType;
 
 /* Every message on the wire starts with this header. */

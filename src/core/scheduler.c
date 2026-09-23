@@ -14,6 +14,7 @@
 
 #include <stdatomic.h>
 #include <string.h>
+#include <unistd.h>
 
 #define SCHEDULER_MAX_WORKERS 64
 
@@ -90,9 +91,10 @@ static int download_thread_fn(void *arg) {
     LOG_INFO("Download %u canceled", dl->id);
     db_update_status(dl->id, "CANCELED");
     db_delete_chunks(dl->id);
-    ipc_broadcast_status(dl->id, "Canceled", 0.0f);
-    queue_manager_update_status(dl->id, DOWNLOAD_ERROR);
-    queue_manager_remove(dl->id);
+    if (dl->dest_path[0] != '\0')
+      unlink(dl->dest_path);
+    queue_manager_update_status(dl->id, DOWNLOAD_CANCELED);
+    ipc_broadcast_status(dl->id, "Canceled", dl->progress);
     return rc;
   }
 

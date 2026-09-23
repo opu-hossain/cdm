@@ -244,7 +244,10 @@ Dependencies fetched automatically:
 
 * libcurl
 * SQLite3
-* WebView
+* SDL2
+* OpenGL
+* libepoxy
+* Nuklear
 * cJSON
 * tomlc17
 * tinyfiledialogs
@@ -432,7 +435,10 @@ CDM builds upon several excellent open-source projects.
 
 * libcurl
 * SQLite
-* WebView
+* SDL2
+* OpenGL
+* libepoxy
+* Nuklear
 * tinyfiledialogs
 * tomlc17
 * libnotify on Linux

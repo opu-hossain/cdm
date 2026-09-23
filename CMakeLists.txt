@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-# Webview requires C++ support alongside the C project.
-project(downloadmgr LANGUAGES C CXX)
+project(downloadmgr LANGUAGES C)
 
 include(GNUInstallDirs)
 
@@ -58,9 +57,22 @@ set(FETCHCONTENT_QUIET OFF)
 
 include(FetchContent)
 
+FetchContent_Declare(
+    nuklear
+    GIT_REPOSITORY https://github.com/Immediate-Mode-UI/Nuklear.git
+    GIT_TAG v4.13.3
+)
+FetchContent_GetProperties(nuklear)
+if(NOT nuklear_POPULATED)
+    FetchContent_Populate(nuklear)
+endif()
+
 # System dependencies (pkg-config)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBNOTIFY REQUIRED IMPORTED_TARGET libnotify)
+pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
+find_package(OpenGL REQUIRED)
 
 if(BUILD_TESTING)
     pkg_check_modules(CRITERION REQUIRED IMPORTED_TARGET criterion)
@@ -117,18 +129,6 @@ add_library(downloadmgr_sqlite INTERFACE)
 target_include_directories(downloadmgr_sqlite INTERFACE ${SQLite3_INCLUDE_DIRS})
 target_link_libraries(downloadmgr_sqlite INTERFACE ${SQLite3_LIBRARIES})
 
-# Fetch webview without including its install rules in the package.
-FetchContent_Declare(
-    webview
-    GIT_REPOSITORY https://github.com/webview/webview.git
-    GIT_TAG cbbdee44afff22867de9fd88a9fc8350d9bdd399
-)
-FetchContent_GetProperties(webview)
-if(NOT webview_POPULATED)
-    FetchContent_Populate(webview)
-    add_subdirectory(${webview_SOURCE_DIR} ${webview_BINARY_DIR} EXCLUDE_FROM_ALL)
-endif()
-
 # Vendor (third‑party) static library
 add_library(downloadmgr_vendor STATIC
     src/vendor/cJSON.c
@@ -141,6 +141,7 @@ target_include_directories(downloadmgr_vendor PUBLIC src/vendor)
 set(PLATFORM_SOURCES
     src/platform/bandwidth.c
     src/platform/curl_client.c
+    src/platform/diskspace.c
     src/platform/file_io.c
     src/platform/ipc_socket.c
     src/platform/sha256.c
@@ -196,31 +197,52 @@ elseif(UNIX)
     target_link_libraries(downloadmgr_core PUBLIC pthread)
 endif()
 
+# Portable font embedding: no shell, xxd, Python, or runtime file lookup.
+set(GUI_FONT_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/gui_font_data.h")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+add_custom_command(
+    OUTPUT "${GUI_FONT_HEADER}"
+    COMMAND "${CMAKE_COMMAND}"
+        "-DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/LiberationSans-Regular.ttf"
+        "-DOUTPUT=${GUI_FONT_HEADER}"
+        "-DINPUT_BOLD=${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/LiberationSans-Bold.ttf"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedFont.cmake"
+    DEPENDS assets/fonts/LiberationSans-Regular.ttf
+            assets/fonts/LiberationSans-Bold.ttf cmake/EmbedFont.cmake
+    VERBATIM
+)
+
 # Main executable (CLI / GUI / daemon)
 add_executable(downloadmgr
+    "${GUI_FONT_HEADER}"
     src/main.c
     src/cli/cli.c
-    src/gui/gui.c
+    src/gui/gui_backend_sdl.c
+    src/gui/gui_controller.c
+    src/gui/gui_nuklear.c
     src/gui/gui_client.c
     src/gui/gui_model.c
-    src/gui/gui_worker.c
     src/daemon/daemon.c
 )
 downloadmgr_enable_warnings(downloadmgr)
 downloadmgr_enable_sanitizer(downloadmgr)
 
-target_include_directories(downloadmgr PRIVATE src)
+target_include_directories(downloadmgr PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    src
+    ${nuklear_SOURCE_DIR}
+    ${nuklear_SOURCE_DIR}/demo/sdl_opengl3
+)
 
 target_link_libraries(downloadmgr PRIVATE
     downloadmgr_core
-    webview::core_static
+    PkgConfig::SDL2
+    PkgConfig::EPOXY
+    OpenGL::GL
 )
-
-add_custom_command(TARGET downloadmgr POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${CMAKE_SOURCE_DIR}/src/gui/ui
-    $<TARGET_FILE_DIR:downloadmgr>/src/gui/ui
-)
+if(UNIX)
+    target_link_libraries(downloadmgr PRIVATE m)
+endif()
 
 # Browser native host executable
 add_executable(downloadmgr_native_host
@@ -238,9 +260,6 @@ endif()
 install(TARGETS downloadmgr
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-install(DIRECTORY src/gui/ui/
-    DESTINATION ${CMAKE_INSTALL_BINDIR}/ui
-)
 install(FILES resources/downloadmgr.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
 )
@@ -250,7 +269,7 @@ set(CPACK_PACKAGE_NAME "downloadmgr")
 set(CPACK_PACKAGE_VENDOR "Core Download Manager")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Core Download Manager")
 set(CPACK_PACKAGE_DESCRIPTION
-    "Core Download Manager (cdm) is a segmented download manager with a CLI, a GTK/WebView GUI, and a resident daemon.")
+    "Core Download Manager (cdm) is a segmented download manager with a CLI, an SDL2/Nuklear GUI, and a resident daemon.")
 set(CPACK_PACKAGE_CONTACT "Core Download Manager maintainers")
 set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/opu-hossain/cdm")
 
@@ -310,7 +329,7 @@ set(CPACK_GENERATOR "DEB;RPM")
 # Debian.
 # libcurl4t64 on Ubuntu 24.04+; libcurl4 on older. SHLIBDEPS picks the right
 # one automatically, so we only list the GUI libs here as a floor.
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libnotify4, libgtk-3-0, libgtk-3-0t64, libwebkit2gtk-4.1-0")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libnotify4, libsdl2-2.0-0, libepoxy0, libgl1")
 set(CPACK_DEBIAN_PACKAGE_SECTION "net")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
@@ -321,7 +340,7 @@ set(CPACK_DEBIAN_PACKAGE_DESCRIPTION "${CPACK_PACKAGE_DESCRIPTION}")
 # RPM.
 set(CPACK_RPM_PACKAGE_LICENSE "MIT")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Internet")
-set(CPACK_RPM_PACKAGE_REQUIRES "libnotify, gtk3, webkit2gtk4.1")
+set(CPACK_RPM_PACKAGE_REQUIRES "libnotify, SDL2, libepoxy, mesa-libGL")
 set(CPACK_RPM_PACKAGE_RELEASE 1)
 set(CPACK_RPM_PACKAGE_AUTOREQ ON)
 set(CPACK_RPM_PACKAGE_SUMMARY "Core Download Manager")

@@ -25,6 +25,24 @@ static int g_retry_base_delay_sec = DEFAULT_RETRY_BASE_DELAY_SEC;
 static int g_retry_max_delay_sec = DEFAULT_RETRY_MAX_DELAY_SEC;
 static uint64_t g_max_speed_bps = DEFAULT_MAX_SPEED_BPS;
 
+static void reset_defaults(void) {
+  g_max_concurrent = DEFAULT_MAX_CONCURRENT;
+  g_retry_max_attempts = DEFAULT_RETRY_MAX_ATTEMPTS;
+  g_retry_base_delay_sec = DEFAULT_RETRY_BASE_DELAY_SEC;
+  g_retry_max_delay_sec = DEFAULT_RETRY_MAX_DELAY_SEC;
+  g_max_speed_bps = DEFAULT_MAX_SPEED_BPS;
+}
+
+static void get_config_path(char *out, size_t out_size) {
+#ifdef _WIN32
+  const char *home = getenv("USERPROFILE");
+#else
+  const char *home = getenv("HOME");
+#endif
+  snprintf(out, out_size, "%s/.local/share/downloadmgr/config.toml",
+           home ? home : "/tmp");
+}
+
 /* Helpers */
 
 static void set_default_dir(void) {
@@ -92,17 +110,12 @@ static bool default_dir_is_usable(const char *path) {
 /* Public API */
 
 void config_init(const char *path) {
+  reset_defaults();
   set_default_dir();
 
   char resolved_path[1024];
   if (!path) {
-#ifdef _WIN32
-    const char *home = getenv("USERPROFILE");
-#else
-    const char *home = getenv("HOME");
-#endif
-    snprintf(resolved_path, sizeof(resolved_path),
-             "%s/.local/share/downloadmgr/config.toml", home ? home : "/tmp");
+    get_config_path(resolved_path, sizeof(resolved_path));
     path = resolved_path;
   }
 
@@ -166,3 +179,51 @@ int config_get_retry_max_attempts(void) { return g_retry_max_attempts; }
 int config_get_retry_base_delay_sec(void) { return g_retry_base_delay_sec; }
 int config_get_retry_max_delay_sec(void) { return g_retry_max_delay_sec; }
 uint64_t config_get_max_speed_bytes_per_sec(void) { return g_max_speed_bps; }
+
+void config_get(DownloadManagerConfig *out) {
+  if (!out)
+    return;
+  out->max_concurrent_downloads = g_max_concurrent;
+  out->default_download_dir = g_default_dir;
+  out->retry_max_attempts = g_retry_max_attempts;
+  out->retry_base_delay_sec = g_retry_base_delay_sec;
+  out->retry_max_delay_sec = g_retry_max_delay_sec;
+  out->max_speed_bytes_per_sec = g_max_speed_bps;
+}
+
+bool config_save(const DownloadManagerConfig *config) {
+  if (!config || !config->default_download_dir ||
+      config->max_concurrent_downloads < 1 || config->retry_max_attempts < 0 ||
+      config->retry_base_delay_sec < 1 ||
+      config->retry_max_delay_sec < config->retry_base_delay_sec ||
+      config->default_download_dir[0] == '\0' ||
+      !default_dir_is_usable(config->default_download_dir))
+    return false;
+
+  char path[1024];
+  get_config_path(path, sizeof(path));
+  char directory[1024];
+  snprintf(directory, sizeof(directory), "%s/.local/share/downloadmgr",
+           getenv("HOME") ? getenv("HOME") : "/tmp");
+  if (file_ensure_directory(directory) != 0)
+    return false;
+
+  FILE *fp = fopen(path, "w");
+  if (!fp)
+    return false;
+  int rc = fprintf(
+      fp,
+      "[downloads]\nmax_concurrent = %d\ndefault_directory = \"%s\"\n\n"
+      "[retry]\nmax_attempts = %d\nbase_delay_sec = %d\n"
+      "max_delay_sec = %d\n\n[throttle]\nmax_speed_bytes_per_sec = %llu\n",
+      config->max_concurrent_downloads, config->default_download_dir,
+      config->retry_max_attempts, config->retry_base_delay_sec,
+      config->retry_max_delay_sec,
+      (unsigned long long)config->max_speed_bytes_per_sec);
+  bool saved = rc >= 0 && fclose(fp) == 0;
+  if (saved)
+    config_init(path);
+  else
+    fclose(fp);
+  return saved;
+}

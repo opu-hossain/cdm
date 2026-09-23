@@ -4,8 +4,8 @@
 #ifndef PERSISTENCE_DB_H
 #define PERSISTENCE_DB_H
 
-#include "../core/queue_manager.h"
 #include "../core/download_record.h"
+#include "../core/queue_manager.h"
 #include "../platform/ipc_socket.h" // for IpcDownloadDetails
 
 #include <stdbool.h>
@@ -37,6 +37,7 @@ void db_close(void);
 
 int db_insert_download(uint32_t id, const char *url, const char *dest_path,
                        const RequestOptions *opts);
+bool db_destination_exists(const char *dest_path);
 int db_update_status(uint32_t id, const char *status);
 int db_update_total_size(uint32_t id, uint64_t total_size);
 

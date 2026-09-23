@@ -103,12 +103,11 @@ int db_init(const char *db_path) {
     return -1;
   }
 
-  static const char *migration_names[] = {
-      "cookie", "referrer", "extra_headers", "expected_sha256",
-      "speed_limit_bps"};
-  static const char *migration_types[] = {
-      "TEXT DEFAULT ''", "TEXT DEFAULT ''", "TEXT DEFAULT ''",
-      "TEXT DEFAULT ''", "INTEGER DEFAULT 0"};
+  static const char *migration_names[] = {"cookie", "referrer", "extra_headers",
+                                          "expected_sha256", "speed_limit_bps"};
+  static const char *migration_types[] = {"TEXT DEFAULT ''", "TEXT DEFAULT ''",
+                                          "TEXT DEFAULT ''", "TEXT DEFAULT ''",
+                                          "INTEGER DEFAULT 0"};
 
   char *migration_error = NULL;
   rc = sqlite3_exec(g_db, "BEGIN;", NULL, NULL, &migration_error);
@@ -215,6 +214,20 @@ int db_insert_download(uint32_t id, const char *url, const char *dest_path,
     LOG_ERROR("insert failed for id=%u: %s", id, sqlite3_errmsg(g_db));
   }
   return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+bool db_destination_exists(const char *dest_path) {
+  if (!db_ready() || !dest_path)
+    return false;
+
+  const char *sql = "SELECT 1 FROM downloads WHERE dest_path = ? LIMIT 1";
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    return false;
+  sqlite3_bind_text(stmt, 1, dest_path, -1, SQLITE_STATIC);
+  bool exists = sqlite3_step(stmt) == SQLITE_ROW;
+  sqlite3_finalize(stmt);
+  return exists;
 }
 
 int db_update_status(uint32_t id, const char *status) {
@@ -371,9 +384,8 @@ int db_load_chunks(uint32_t download_id, DbChunkRow *out, int max) {
 int db_list_all_downloads(DbDownloadRow *out, int max) {
   if (!db_ready() || !out || max <= 0)
     return 0;
-  const char *sql =
-      "SELECT id, url, dest_path, status FROM downloads "
-      "ORDER BY id DESC LIMIT ?";
+  const char *sql = "SELECT id, url, dest_path, status FROM downloads "
+                    "ORDER BY id DESC LIMIT ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
     LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
@@ -421,9 +433,8 @@ int db_visit_downloads(DbDownloadVisitor visitor, void *ctx, int max) {
   if (!db_ready() || !visitor || max <= 0)
     return -1;
 
-  const char *sql =
-      "SELECT id, url, dest_path, status FROM downloads "
-      "ORDER BY id DESC LIMIT ?";
+  const char *sql = "SELECT id, url, dest_path, status FROM downloads "
+                    "ORDER BY id DESC LIMIT ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
     return -1;
@@ -534,33 +545,28 @@ int db_restore_queue(void) {
     const char *sha256 = (const char *)sqlite3_column_text(stmt, 9);
     uint64_t speed_limit = (uint64_t)sqlite3_column_int64(stmt, 10);
 
-    if (stat && strcmp(stat, "CANCELED") == 0) {
-      free(d);
-      continue;
-    }
-
     strncpy(d->url, url ? url : "", sizeof(d->url) - 1);
     strncpy(d->dest_path, path ? path : "", sizeof(d->dest_path) - 1);
-        RequestOptions options = {0};
-        strncpy(options.cookie, cookie ? cookie : "", sizeof(options.cookie) - 1);
-        strncpy(options.referrer, referrer ? referrer : "",
-          sizeof(options.referrer) - 1);
-        strncpy(options.extra_headers, headers ? headers : "",
-          sizeof(options.extra_headers) - 1);
-        strncpy(options.expected_sha256, sha256 ? sha256 : "",
-          sizeof(options.expected_sha256) - 1);
-        options.speed_limit_bps = speed_limit;
+    RequestOptions options = {0};
+    strncpy(options.cookie, cookie ? cookie : "", sizeof(options.cookie) - 1);
+    strncpy(options.referrer, referrer ? referrer : "",
+            sizeof(options.referrer) - 1);
+    strncpy(options.extra_headers, headers ? headers : "",
+            sizeof(options.extra_headers) - 1);
+    strncpy(options.expected_sha256, sha256 ? sha256 : "",
+            sizeof(options.expected_sha256) - 1);
+    options.speed_limit_bps = speed_limit;
 
-        if (options.cookie[0] != '\0' || options.referrer[0] != '\0' ||
-      options.extra_headers[0] != '\0' ||
-      options.expected_sha256[0] != '\0' || options.speed_limit_bps != 0) {
-          d->request = malloc(sizeof(*d->request));
-          if (!d->request) {
-      free(d);
-      continue;
-          }
-          *d->request = options;
-        }
+    if (options.cookie[0] != '\0' || options.referrer[0] != '\0' ||
+        options.extra_headers[0] != '\0' ||
+        options.expected_sha256[0] != '\0' || options.speed_limit_bps != 0) {
+      d->request = malloc(sizeof(*d->request));
+      if (!d->request) {
+        free(d);
+        continue;
+      }
+      *d->request = options;
+    }
 
     /* Map status string to enum. */
     if (strcmp(stat, "QUEUED") == 0)
@@ -571,6 +577,8 @@ int db_restore_queue(void) {
       d->status = DOWNLOAD_PAUSED;
     else if (strcmp(stat, "ERROR") == 0)
       d->status = DOWNLOAD_ERROR;
+    else if (strcmp(stat, "CANCELED") == 0)
+      d->status = DOWNLOAD_CANCELED;
     else
       d->status = DOWNLOAD_QUEUED;
 

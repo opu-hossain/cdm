@@ -28,7 +28,7 @@ void path_filename_from_url(const char *url, char *out, size_t out_size) {
 }
 
 bool path_join(const char *dir, const char *filename, char *out,
-              size_t out_size) {
+               size_t out_size) {
 #ifdef _WIN32
   const char sep = '\\';
 #else
@@ -54,11 +54,13 @@ static bool path_exists(const char *path) {
   return stat(path, &info) == 0;
 }
 
-bool path_make_unique(const char *path, char *out, size_t out_size) {
+bool path_make_unique_with_conflict(const char *path, char *out,
+                                    size_t out_size, PathConflictFn conflict,
+                                    void *context) {
   if (!path || !out || out_size == 0)
     return false;
 
-  if (!path_exists(path)) {
+  if (!path_exists(path) && (!conflict || !conflict(path, context))) {
     if (strlen(path) >= out_size)
       return false;
     strcpy(out, path);
@@ -80,14 +82,18 @@ bool path_make_unique(const char *path, char *out, size_t out_size) {
   size_t extension_len = strlen(extension);
 
   for (unsigned int suffix = 1; suffix < 1000000; suffix++) {
-    int written = snprintf(out, out_size, "%.*s%.*s (%u)%.*s",
-                           (int)prefix_len, path, (int)stem_len, filename,
-                           suffix, (int)extension_len, extension);
+    int written = snprintf(out, out_size, "%.*s%.*s (%u)%.*s", (int)prefix_len,
+                           path, (int)stem_len, filename, suffix,
+                           (int)extension_len, extension);
     if (written < 0 || (size_t)written >= out_size)
       return false;
-    if (!path_exists(out))
+    if (!path_exists(out) && (!conflict || !conflict(out, context)))
       return true;
   }
 
   return false;
+}
+
+bool path_make_unique(const char *path, char *out, size_t out_size) {
+  return path_make_unique_with_conflict(path, out, out_size, NULL, NULL);
 }

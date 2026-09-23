@@ -38,6 +38,7 @@ typedef enum {
   DOWNLOAD_PAUSED,
   DOWNLOAD_DONE,
   DOWNLOAD_ERROR,
+  DOWNLOAD_CANCELED,
 } DownloadStatus;
 
 /* Full download entry */

@@ -15,6 +15,7 @@ set(TEST_SOURCES
     test_engine_runner.c
     test_worker_pool.c
     test_path.c
+    test_gui_controller.c
 )
 
 foreach(TEST_SOURCE ${TEST_SOURCES})
@@ -25,6 +26,11 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     if(TEST_NAME STREQUAL test_engine_runner)
         target_sources(${TEST_NAME} PRIVATE
             ${CMAKE_SOURCE_DIR}/src/engine/engine_runner.c
+        )
+    elseif(TEST_NAME STREQUAL test_gui_controller)
+        target_sources(${TEST_NAME} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/gui/gui_controller.c
+            ${CMAKE_SOURCE_DIR}/src/gui/gui_client.c
         )
     endif()
     target_link_libraries(${TEST_NAME}

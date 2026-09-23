@@ -31,6 +31,7 @@ static bool destination_in_use(const char *dest_path) {
   Download *cur = g_head;
   while (cur != NULL) {
     if (cur->status != DOWNLOAD_DONE && cur->status != DOWNLOAD_ERROR &&
+        cur->status != DOWNLOAD_CANCELED &&
         strcmp(cur->dest_path, dest_path) == 0) {
       return true;
     }
@@ -377,22 +378,16 @@ bool queue_manager_cancel(uint32_t id) {
   bool was_active = false;
 
   dm_mutex_lock(&g_mutex);
-  Download **prev_ptr = &g_head;
-  while (*prev_ptr != NULL) {
-    Download *cur = *prev_ptr;
+  for (Download *cur = g_head; cur != NULL; cur = cur->next) {
     if (cur->id == id) {
       if (cur->status == DOWNLOAD_ACTIVE) {
         atomic_store(&cur->cancel_requested, true);
         was_active = true;
       } else {
-        *prev_ptr = cur->next;
-        if (cur->dest_path[0] != '\0')
-          unlink(cur->dest_path);
-        free_download(cur);
+        cur->status = DOWNLOAD_CANCELED;
       }
       break;
     }
-    prev_ptr = &cur->next;
   }
   dm_mutex_unlock(&g_mutex);
   return was_active;
@@ -425,7 +420,8 @@ bool queue_manager_resume(uint32_t id) {
   dm_mutex_lock(&g_mutex);
   for (Download *cur = g_head; cur != NULL; cur = cur->next) {
     if (cur->id == id) {
-      if (cur->status == DOWNLOAD_PAUSED || cur->status == DOWNLOAD_ERROR) {
+      if (cur->status == DOWNLOAD_PAUSED || cur->status == DOWNLOAD_ERROR ||
+          cur->status == DOWNLOAD_CANCELED) {
         atomic_store(&cur->pause_requested, false);
         atomic_store(&cur->cancel_requested, false);
         cur->retry_count = 0;

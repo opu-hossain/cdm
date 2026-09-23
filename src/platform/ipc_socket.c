@@ -5,9 +5,11 @@
 
 #include "../core/queue_manager.h"
 #include "../persistence/db.h"
-#include "file_io.h"
+#include "../utils/config.h"
 #include "../utils/log.h"
+#include "../utils/path.h"
 #include "../vendor/cJSON.h"
+#include "file_io.h"
 #include "thread.h"
 
 #include <errno.h>
@@ -16,10 +18,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <threads.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <threads.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -38,7 +40,8 @@ static bool join_path(char *out, size_t out_size, const char *base,
   return true;
 }
 
-/** Get user-isolated IPC socket path (XDG_RUNTIME_DIR, ~/.local/share/downloadmgr, or /tmp/downloadmgr_UID.sock). */
+/** Get user-isolated IPC socket path (XDG_RUNTIME_DIR,
+ * ~/.local/share/downloadmgr, or /tmp/downloadmgr_UID.sock). */
 static void get_socket_path(char *out, size_t out_size) {
   static char cached_path[1024] = {0};
   if (cached_path[0] != '\0') {
@@ -63,7 +66,8 @@ static void get_socket_path(char *out, size_t out_size) {
         cached_path[0] = '\0';
       }
     } else {
-      snprintf(cached_path, sizeof(cached_path), "/tmp/downloadmgr_%u.sock", (unsigned int)getuid());
+      snprintf(cached_path, sizeof(cached_path), "/tmp/downloadmgr_%u.sock",
+               (unsigned int)getuid());
     }
   }
 
@@ -76,7 +80,7 @@ static int g_listen_fd = -1;
 static int g_client_fds[MAX_CLIENTS];
 static int g_client_count = 0;
 static bool g_client_subscribed[MAX_CLIENTS];
-static unsigned char g_client_header[ MAX_CLIENTS ][sizeof(MsgHeader)];
+static unsigned char g_client_header[MAX_CLIENTS][sizeof(MsgHeader)];
 static size_t g_client_header_bytes[MAX_CLIENTS];
 static dm_mutex_t g_client_mutex;
 static once_flag g_client_mutex_once = ONCE_FLAG_INIT;
@@ -97,6 +101,8 @@ static const char *status_to_string(DownloadStatus s) {
     return "DONE";
   case DOWNLOAD_ERROR:
     return "ERROR";
+  case DOWNLOAD_CANCELED:
+    return "CANCELED";
   default:
     return "UNKNOWN";
   }
@@ -183,6 +189,7 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_LIST:
   case MSG_LIST_ALL:
   case MSG_SUBSCRIBE:
+  case MSG_RELOAD_CONFIG:
     return header->length == 0;
   default:
     return false;
@@ -197,9 +204,8 @@ static float snapshot_progress(const DownloadRuntimeSnapshot *snapshot) {
   if (snapshot->total_size == 0)
     return 0.0f;
 
-  uint64_t done = snapshot->status == DOWNLOAD_ACTIVE
-                      ? snapshot->bytes_downloaded
-                      : 0;
+  uint64_t done =
+      snapshot->status == DOWNLOAD_ACTIVE ? snapshot->bytes_downloaded : 0;
   if (snapshot->status != DOWNLOAD_ACTIVE) {
     for (int i = 0; i < snapshot->chunk_count; i++)
       done += snapshot->chunks[i].bytes_done;
@@ -240,6 +246,11 @@ static void send_command_result(int client_fd, IpcResult result) {
   ipc_write_exact(client_fd, &wire_result, sizeof(wire_result));
 }
 
+static bool db_path_conflict(const char *path, void *context) {
+  (void)context;
+  return db_destination_exists(path);
+}
+
 /** Dispatch an incoming message. */
 static void handle_message(int client_fd, MsgHeader *hdr) {
   switch (hdr->type) {
@@ -252,6 +263,18 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         read_string(client_fd, options_json, sizeof(options_json)) != 0)
       return;
     LOG_INFO("MSG_ADD_DOWNLOAD received: url='%s' dest='%s'", url, dest);
+
+    char unique_dest[IPC_MAX_PATH_LEN];
+    if (!path_make_unique_with_conflict(dest, unique_dest, sizeof(unique_dest),
+                                        db_path_conflict, NULL)) {
+      LOG_ERROR("MSG_ADD_DOWNLOAD: could not allocate destination path");
+      uint32_t id = 0;
+      ipc_write_exact(client_fd, &id, sizeof(id));
+      break;
+    }
+    if (strcmp(unique_dest, dest) != 0)
+      LOG_INFO("MSG_ADD_DOWNLOAD: selected unique destination '%s'",
+               unique_dest);
 
     RequestOptions opts = {0};
     if (options_json[0] != '\0') {
@@ -281,9 +304,9 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       }
     }
 
-    uint32_t id = queue_manager_add(url, dest, &opts);
+    uint32_t id = queue_manager_add(url, unique_dest, &opts);
     LOG_INFO("MSG_ADD_DOWNLOAD: queue_manager_add returned id=%u", id);
-    if (id != 0 && db_insert_download(id, url, dest, &opts) != 0) {
+    if (id != 0 && db_insert_download(id, url, unique_dest, &opts) != 0) {
       LOG_ERROR("MSG_ADD_DOWNLOAD: persistence failed for id=%u", id);
       queue_manager_remove(id);
       id = 0;
@@ -292,6 +315,10 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     ipc_write_exact(client_fd, &id, sizeof(id));
     break;
   }
+  case MSG_RELOAD_CONFIG:
+    config_init(NULL);
+    send_command_result(client_fd, IPC_RESULT_OK);
+    break;
   case MSG_PAUSE: {
     uint32_t id;
     if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0)
@@ -341,9 +368,17 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       send_command_result(client_fd, IPC_RESULT_REJECTED);
       break;
     }
+    char canceled_path[IPC_MAX_PATH_LEN] = {0};
+    Download *download = queue_manager_find_by_id(id);
+    if (download)
+      strncpy(canceled_path, download->dest_path, sizeof(canceled_path) - 1);
     bool was_active = queue_manager_cancel(id);
-    if (!was_active)
+    if (!was_active) {
       db_update_status(id, "CANCELED");
+      db_delete_chunks(id);
+      if (canceled_path[0] != '\0')
+        unlink(canceled_path);
+    }
     send_command_result(client_fd, IPC_RESULT_OK);
     break;
   }
@@ -528,9 +563,9 @@ void ipc_server_poll(void) {
       continue;
 
     size_t remaining = sizeof(MsgHeader) - g_client_header_bytes[i];
-    ssize_t n = recv(g_client_fds[i],
-                     g_client_header[i] + g_client_header_bytes[i], remaining,
-                     MSG_DONTWAIT);
+    ssize_t n =
+        recv(g_client_fds[i], g_client_header[i] + g_client_header_bytes[i],
+             remaining, MSG_DONTWAIT);
 
     if (n == 0) {
       LOG_DEBUG("IPC: Client disconnected (fd=%d)", g_client_fds[i]);
@@ -610,6 +645,9 @@ void ipc_client_disconnect(int fd) {
 
 uint32_t ipc_send_add_download(int sock, const char *url, const char *dest_path,
                                const IpcDownloadOptions *options) {
+  if (sock < 0 || !url || !dest_path)
+    return 0;
+
   char *options_json = NULL;
   if (options) {
     cJSON *root = cJSON_CreateObject();
@@ -635,17 +673,30 @@ uint32_t ipc_send_add_download(int sock, const char *url, const char *dest_path,
                      (uint32_t)strlen(json_str);
 
   MsgHeader hdr = {.length = payload, .type = MSG_ADD_DOWNLOAD};
-  ipc_write_exact(sock, &hdr, sizeof(hdr));
-  write_string(sock, url);
-  write_string(sock, dest_path);
-  write_string(sock, json_str);
+  bool sent = ipc_write_exact(sock, &hdr, sizeof(hdr)) == 0;
+  if (sent)
+    sent = ipc_write_exact(sock, &(uint32_t){(uint32_t)strlen(url)},
+                           sizeof(uint32_t)) == 0;
+  if (sent && url[0] != '\0')
+    sent = ipc_write_exact(sock, url, strlen(url)) == 0;
+  if (sent)
+    sent = ipc_write_exact(sock, &(uint32_t){(uint32_t)strlen(dest_path)},
+                           sizeof(uint32_t)) == 0;
+  if (sent && dest_path[0] != '\0')
+    sent = ipc_write_exact(sock, dest_path, strlen(dest_path)) == 0;
+  if (sent)
+    sent = ipc_write_exact(sock, &(uint32_t){(uint32_t)strlen(json_str)},
+                           sizeof(uint32_t)) == 0;
+  if (sent && json_str[0] != '\0')
+    sent = ipc_write_exact(sock, json_str, strlen(json_str)) == 0;
 
   uint32_t id = 0;
-  ipc_read_exact(sock, &id, sizeof(id));
+  if (sent)
+    sent = ipc_read_exact(sock, &id, sizeof(id)) == 0;
 
   if (options_json)
     cJSON_free(options_json);
-  return id;
+  return sent ? id : 0;
 }
 
 int ipc_client_connect_timeout(int timeout_ms) {
@@ -754,7 +805,8 @@ int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out) {
   if (read_string(sock, out->cookie, sizeof(out->cookie)) != 0 ||
       read_string(sock, out->referrer, sizeof(out->referrer)) != 0 ||
       read_string(sock, out->extra_headers, sizeof(out->extra_headers)) != 0 ||
-      read_string(sock, out->expected_sha256, sizeof(out->expected_sha256)) != 0)
+      read_string(sock, out->expected_sha256, sizeof(out->expected_sha256)) !=
+          0)
     return -1;
   return ipc_read_exact(sock, &out->speed_limit_bps,
                         sizeof(out->speed_limit_bps));
@@ -763,6 +815,16 @@ int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out) {
 void ipc_send_subscribe(int sock) {
   MsgHeader hdr = {.length = 0, .type = MSG_SUBSCRIBE};
   ipc_write_exact(sock, &hdr, sizeof(hdr));
+}
+
+int ipc_send_reload_config(int sock) {
+  MsgHeader hdr = {.length = 0, .type = MSG_RELOAD_CONFIG};
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0)
+    return -1;
+  uint8_t result = IPC_RESULT_ERROR;
+  if (ipc_read_exact(sock, &result, sizeof(result)) != 0)
+    return -1;
+  return result == IPC_RESULT_OK ? 0 : -1;
 }
 
 /* Low‑level I/O */
@@ -813,14 +875,13 @@ void ipc_broadcast_status(uint32_t download_id, const char *status,
                           float progress) {
   const char *text = status ? status : "";
   size_t status_len = strlen(text);
-  size_t payload_len = sizeof(download_id) + sizeof(progress) +
-                       sizeof(uint32_t) + status_len;
+  size_t payload_len =
+      sizeof(download_id) + sizeof(progress) + sizeof(uint32_t) + status_len;
   if (payload_len > IPC_MAX_FRAME_SIZE)
     return;
 
   unsigned char frame[sizeof(MsgHeader) + IPC_MAX_FRAME_SIZE];
-  MsgHeader hdr = {.length = (uint32_t)payload_len,
-                   .type = MSG_STATUS_EVENT};
+  MsgHeader hdr = {.length = (uint32_t)payload_len, .type = MSG_STATUS_EVENT};
   size_t offset = 0;
   memcpy(frame + offset, &hdr, sizeof(hdr));
   offset += sizeof(hdr);

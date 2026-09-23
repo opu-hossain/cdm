@@ -4,8 +4,8 @@
 #ifndef PLATFORM_IPC_SOCKET_H
 #define PLATFORM_IPC_SOCKET_H
 
-#include "ipc_protocol.h"
 #include "../core/download_record.h"
+#include "ipc_protocol.h"
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -54,6 +54,7 @@ int ipc_send_resume(int sock, uint32_t id);
 int ipc_send_cancel(int sock, uint32_t id);
 int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max);
 int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out);
+int ipc_send_reload_config(int sock);
 void ipc_send_subscribe(int sock);
 
 /* Low-level I/O for external event listeners. */

@@ -1,8 +1,8 @@
 #ifndef GUI_GUI_CLIENT_H
 #define GUI_GUI_CLIENT_H
 
-#include "../platform/ipc_socket.h"
 #include "../core/download_record.h"
+#include "../platform/ipc_socket.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -41,6 +41,7 @@ bool gui_client_cancel(uint32_t id);
 
 bool gui_client_add_download(const char *url, const char *dest,
                              const IpcDownloadOptions *opts, uint32_t *out_id);
+bool gui_client_reload_config(void);
 
 /* Fetch a full snapshot. The caller owns *out_records on success. */
 bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count);

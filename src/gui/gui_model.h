@@ -20,7 +20,8 @@ void gui_model_apply_snapshot(const GuiDownloadRecord *records, int count);
 void gui_model_apply_status_update(uint32_t id, const char *status,
                                    float progress);
 void gui_model_apply_optimistic(uint32_t id, const char *new_status);
-void gui_model_add_local_row(uint32_t id, const char *url);
+void gui_model_add_local_row(uint32_t id, const char *url,
+                             const char *dest_path);
 void gui_model_for_each_row(void (*fn)(const GuiRow *row, void *ctx),
                             void *ctx);
 
