@@ -35,6 +35,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Ensure release commit is on main
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "::error::Commit ${{ github.sha }} (ref ${{ github.ref }}) is not on main. Refusing to publish a release from a non-main branch/commit." >&2
+            exit 1
+          fi
+
       - name: Install build dependencies
         run: ./packaging/deps/deb.sh
 
@@ -104,8 +113,9 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.meta.outputs.version }}"
+          ARCH="$(dpkg --print-architecture)"
           PACKAGE_PATH="$(ls -1 ./*.deb | head -n 1)"
-          NEW_PATH="./downloadmgr-${VERSION}-linux.deb"
+          NEW_PATH="./downloadmgr-${VERSION}-linux-${ARCH}.deb"
           cp "$PACKAGE_PATH" "$NEW_PATH"
           echo "PACKAGE_PATH=$NEW_PATH" >> "$GITHUB_ENV"
 

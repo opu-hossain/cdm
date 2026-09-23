@@ -42,6 +42,15 @@ jobs:
       - name: Mark workspace safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      - name: Ensure release commit is on main
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "::error::Commit ${{ github.sha }} (ref ${{ github.ref }}) is not on main. Refusing to publish a release from a non-main branch/commit." >&2
+            exit 1
+          fi
+
       - name: Install build dependencies
         run: ./packaging/deps/rpm.sh
 
@@ -100,8 +109,9 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.meta.outputs.version }}"
+          ARCH="$(rpm --eval '%{_arch}')"
           RPM_PATH="$(ls -1 ./*.rpm | head -n 1)"
-          NEW_PATH="./downloadmgr-${VERSION}-linux.rpm"
+          NEW_PATH="./downloadmgr-${VERSION}-linux-${ARCH}.rpm"
           cp "$RPM_PATH" "$NEW_PATH"
           echo "PACKAGE_PATH=$NEW_PATH" >> "$GITHUB_ENV"
 
