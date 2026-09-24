@@ -4,6 +4,8 @@
 #ifndef CORE_QUEUE_MANAGER_H
 #define CORE_QUEUE_MANAGER_H
 
+#include "download_record.h"
+
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -58,6 +60,7 @@ typedef struct Download {
   _Atomic bool pause_requested;
   _Atomic uint64_t bytes_downloaded;
   _Atomic uint64_t chunk_live_bytes[QM_MAX_CHUNKS];
+  DownloadTransferMetrics transfer_metrics; // guarded by queue mutex
 
   DownloadChunk chunks[QM_MAX_CHUNKS];
   int chunk_count;
@@ -74,6 +77,7 @@ typedef struct {
   uint32_t id;
   uint64_t bytes_downloaded;
   uint64_t total_size;
+  DownloadTransferMetrics transfer_metrics;
 } DownloadProgressSnapshot;
 
 typedef struct {
@@ -89,6 +93,7 @@ typedef struct {
   char dest_path[1024];
   int chunk_count;
   DownloadChunk chunks[QM_MAX_CHUNKS];
+  DownloadTransferMetrics transfer_metrics;
 } DownloadRuntimeSnapshot;
 
 /* Queue lifecycle. */
@@ -130,6 +135,10 @@ bool queue_manager_get_runtime_snapshot(uint32_t id,
 /** Fill `out` with up to `max` active download progress snapshots. */
 int queue_manager_snapshot_active_progress(DownloadProgressSnapshot *out,
                                            int max);
+
+/* Persist a daemon progress sample under the queue mutex. */
+void queue_manager_set_transfer_metrics(uint32_t id,
+                                        DownloadTransferMetrics metrics);
 
 /** Fill `out` with up to `max` chunk progress snapshots. */
 int queue_manager_snapshot_chunk_progress(ChunkProgressSnapshot *out, int max);

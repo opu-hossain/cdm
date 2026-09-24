@@ -1501,10 +1501,16 @@ void ipc_broadcast_status(uint32_t download_id, const char *status,
 
   IpcProgressV2 rich_event;
   memset(&rich_event, 0, sizeof(rich_event));
+  DownloadRuntimeSnapshot transfer_snapshot = {0};
+  if (queue_manager_get_runtime_snapshot(download_id, &transfer_snapshot)) {
+    rich_event.speed_bps = transfer_snapshot.transfer_metrics.speed_bps;
+    rich_event.eta_seconds = transfer_snapshot.transfer_metrics.eta_seconds;
+  } else {
+    rich_event.eta_seconds = UINT64_MAX;
+  }
   rich_event.download_id = download_id;
   rich_event.bytes_received = browser_event.bytes_received;
   rich_event.total_bytes = browser_event.total_bytes;
-  rich_event.eta_seconds = UINT64_MAX;
   rich_event.progress = browser_event.total_bytes ? progress : -1.0f;
   snprintf(rich_event.status, sizeof(rich_event.status), "%s", text);
   snprintf(rich_event.error, sizeof(rich_event.error), "%s",

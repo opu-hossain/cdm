@@ -1,6 +1,7 @@
 #include "../src/platform/ipc_socket.h"
 #include "../src/core/queue_manager.h"
 #include "../src/persistence/db.h"
+#include "../src/platform/thread.h"
 #include "../src/utils/log.h"
 #include <criterion/criterion.h>
 #include <stdatomic.h>
@@ -162,7 +163,17 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   cr_assert_eq(ipc_write_exact(legacy_client, &barrier, sizeof(barrier)), 0);
   cr_assert_eq(ipc_read_exact(legacy_client, &ignored_count,
                               sizeof(ignored_count)), 0);
-  ipc_broadcast_status(download_id, "Downloading", 0.25f);
+  queue_manager_update_status(download_id, DOWNLOAD_ACTIVE);
+  Download *active = queue_manager_find_by_id(download_id);
+  cr_assert_not_null(active);
+  dm_mutex_t *queue_mutex = (dm_mutex_t *)queue_manager_get_mutex();
+  dm_mutex_lock(queue_mutex);
+  active->total_size = 10000;
+  atomic_store(&active->bytes_downloaded, 3000);
+  dm_mutex_unlock(queue_mutex);
+  DownloadTransferMetrics sample = {.speed_bps = 1300, .eta_seconds = 6};
+  queue_manager_set_transfer_metrics(download_id, sample);
+  ipc_broadcast_status(download_id, "Downloading", 0.3f);
   MsgHeader v2_header = {0}, fallback_header = {0};
   IpcProgressV2 rich = {0};
   cr_assert_eq(ipc_read_exact(v2_client, &v2_header, sizeof(v2_header)), 0);
@@ -170,10 +181,11 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   cr_assert_eq(v2_header.length, sizeof(rich));
   cr_assert_eq(ipc_read_exact(v2_client, &rich, sizeof(rich)), 0);
   cr_assert_eq(rich.download_id, download_id);
-  cr_assert_eq(rich.total_bytes, 0);
-  cr_assert_eq(rich.speed_bps, 0);
-  cr_assert_eq(rich.eta_seconds, UINT64_MAX);
-  cr_assert_float_eq(rich.progress, -1.0f, 0.001f);
+  cr_assert_eq(rich.bytes_received, 3000);
+  cr_assert_eq(rich.total_bytes, 10000);
+  cr_assert_eq(rich.speed_bps, 1300);
+  cr_assert_eq(rich.eta_seconds, 6);
+  cr_assert_float_eq(rich.progress, 0.3f, 0.001f);
   cr_assert_str_eq(rich.status, "Downloading");
   cr_assert_eq(ipc_read_exact(v2_client, &fallback_header,
                               sizeof(fallback_header)), 0);
@@ -189,6 +201,7 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   cr_assert_leq(legacy_event.length, sizeof(fallback));
   cr_assert_eq(ipc_read_exact(legacy_client, fallback, legacy_event.length), 0);
   ipc_client_disconnect(legacy_client);
+  queue_manager_update_status(download_id, DOWNLOAD_QUEUED);
 
   strcpy(request.request_id, "ipc-test-offer-2");
   IpcBrowserOffer dismissed = {0};

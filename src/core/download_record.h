@@ -18,6 +18,14 @@ typedef struct {
   float progress;
 } DownloadListRecord;
 
+/* Daemon-owned transfer sample; queue mutex protects every read/write. */
+typedef struct {
+  uint64_t sampled_bytes;
+  uint64_t sampled_at_ms; // CLOCK_MONOTONIC milliseconds; 0 = no sample
+  uint64_t speed_bps; // exponential moving average, alpha = 0.3
+  uint64_t eta_seconds; // UINT64_MAX = unknown
+} DownloadTransferMetrics;
+
 #ifdef __cplusplus
 }
 #endif

@@ -43,6 +43,29 @@ static void teardown_scheduler(void) { db_close(); }
 
 TestSuite(scheduler, .init = setup_scheduler, .fini = teardown_scheduler);
 
+Test(scheduler, smooths_transfer_speed_and_estimates_eta) {
+  DownloadTransferMetrics sample = {.eta_seconds = UINT64_MAX};
+  sample = scheduler_advance_transfer_metrics(sample, 0, 10000, 1000);
+  cr_assert_eq(sample.speed_bps, 0);
+  cr_assert_eq(sample.eta_seconds, UINT64_MAX);
+
+  sample = scheduler_advance_transfer_metrics(sample, 1000, 10000, 2000);
+  cr_assert_eq(sample.speed_bps, 1000);
+  cr_assert_eq(sample.eta_seconds, 9);
+
+  sample = scheduler_advance_transfer_metrics(sample, 3000, 10000, 3000);
+  cr_assert_eq(sample.speed_bps, 1300); // 0.3 * 2000 + 0.7 * 1000
+  cr_assert_eq(sample.eta_seconds, 6);
+
+  sample = scheduler_advance_transfer_metrics(sample, 3000, 0, 4000);
+  cr_assert_eq(sample.speed_bps, 910);
+  cr_assert_eq(sample.eta_seconds, UINT64_MAX);
+
+  sample = scheduler_advance_transfer_metrics(sample, 100, 10000, 5000);
+  cr_assert_eq(sample.speed_bps, 0); // a restarted transfer resets samples
+  cr_assert_eq(sample.eta_seconds, UINT64_MAX);
+}
+
 Test(scheduler, automatic_retries_stop_at_terminal_error) {
   uint32_t id = queue_manager_add("http://example.com/fails",
                                   "/tmp/scheduler-retry-limit", NULL);

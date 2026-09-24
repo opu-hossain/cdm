@@ -4,6 +4,8 @@
 #ifndef CORE_SCHEDULER_H
 #define CORE_SCHEDULER_H
 
+#include "download_record.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -24,6 +26,11 @@ void scheduler_shutdown(void);
  * clients and persist chunk progress to the database.
  */
 void scheduler_report_progress(void);
+
+/* Advance a per-download speed/ETA sample using monotonic milliseconds. */
+DownloadTransferMetrics scheduler_advance_transfer_metrics(
+    DownloadTransferMetrics previous, uint64_t bytes_received,
+    uint64_t total_bytes, uint64_t now_ms);
 
 #ifdef __cplusplus
 }

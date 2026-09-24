@@ -14,6 +14,7 @@
 
 #include <stdatomic.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #define SCHEDULER_MAX_WORKERS 64
@@ -196,6 +197,8 @@ void scheduler_tick(void) {
   if (active_count < max_active) {
     next_dl = queue_manager_find_next_queued();
     if (next_dl != NULL) {
+      next_dl->transfer_metrics =
+          (DownloadTransferMetrics){.eta_seconds = UINT64_MAX};
       next_dl->status = DOWNLOAD_ACTIVE;
       next_dl->next_retry_at = 0; // not needed once running
     }
@@ -257,10 +260,59 @@ void scheduler_shutdown(void) {
   }
 }
 
+DownloadTransferMetrics scheduler_advance_transfer_metrics(
+    DownloadTransferMetrics previous, uint64_t bytes_received,
+    uint64_t total_bytes, uint64_t now_ms) {
+  DownloadTransferMetrics next = previous;
+  next.sampled_bytes = bytes_received;
+  next.sampled_at_ms = now_ms;
+  next.eta_seconds = UINT64_MAX;
+
+  if (previous.sampled_at_ms == 0 || now_ms <= previous.sampled_at_ms ||
+      bytes_received < previous.sampled_bytes) {
+    next.speed_bps = 0;
+    return next;
+  }
+
+  uint64_t delta_bytes = bytes_received - previous.sampled_bytes;
+  uint64_t elapsed_ms = now_ms - previous.sampled_at_ms;
+  long double instant =
+      ((long double)delta_bytes * 1000.0L) / (long double)elapsed_ms;
+  uint64_t instantaneous =
+      instant >= (long double)UINT64_MAX ? UINT64_MAX : (uint64_t)instant;
+  if (previous.speed_bps == 0)
+    next.speed_bps = instantaneous;
+  else
+    next.speed_bps = (instantaneous / 10) * 3 +
+                     (previous.speed_bps / 10) * 7 +
+                     ((instantaneous % 10) * 3 +
+                      (previous.speed_bps % 10) * 7) / 10;
+
+  if (total_bytes > 0 && next.speed_bps > 0) {
+    uint64_t remaining =
+        bytes_received >= total_bytes ? 0 : total_bytes - bytes_received;
+    next.eta_seconds = remaining / next.speed_bps +
+                       (remaining % next.speed_bps != 0);
+  }
+  return next;
+}
+
 void scheduler_report_progress(void) {
+  struct timespec now;
+  bool have_time = clock_gettime(CLOCK_MONOTONIC, &now) == 0;
+  uint64_t now_ms = have_time
+                        ? (uint64_t)now.tv_sec * 1000 +
+                              (uint64_t)now.tv_nsec / 1000000
+                        : 0;
   DownloadProgressSnapshot snaps[64];
   int n = queue_manager_snapshot_active_progress(snaps, 64);
   for (int i = 0; i < n; i++) {
+    if (have_time) {
+      DownloadTransferMetrics metrics = scheduler_advance_transfer_metrics(
+          snaps[i].transfer_metrics, snaps[i].bytes_downloaded,
+          snaps[i].total_size, now_ms);
+      queue_manager_set_transfer_metrics(snaps[i].id, metrics);
+    }
     float progress = 0.0f;
     if (snaps[i].total_size > 0) {
       progress = (float)((double)snaps[i].bytes_downloaded /

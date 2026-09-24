@@ -154,6 +154,7 @@ static uint32_t add_download(const char *url, const char *dest_path,
 
   d->status = DOWNLOAD_QUEUED;
   d->priority = 0;
+  d->transfer_metrics.eta_seconds = UINT64_MAX;
 
   dm_mutex_lock(&g_mutex);
   d->id = g_next_id++;
@@ -178,6 +179,7 @@ void queue_manager_add_existing(Download *d) {
   ensure_mutex();
 
   dm_mutex_lock(&g_mutex);
+  d->transfer_metrics = (DownloadTransferMetrics){.eta_seconds = UINT64_MAX};
   if (d->id >= g_next_id)
     g_next_id = d->id + 1;
   d->next = g_head;
@@ -300,6 +302,7 @@ bool queue_manager_get_runtime_snapshot(uint32_t id,
       out->status = cur->status;
       out->total_size = cur->total_size;
       out->bytes_downloaded = atomic_load(&cur->bytes_downloaded);
+      out->transfer_metrics = cur->transfer_metrics;
       memcpy(out->dest_path, cur->dest_path, sizeof(out->dest_path));
       out->chunk_count = cur->chunk_count;
       if (out->chunk_count > QM_MAX_CHUNKS)
@@ -324,11 +327,25 @@ int queue_manager_snapshot_active_progress(DownloadProgressSnapshot *out,
       out[n].id = cur->id;
       out[n].bytes_downloaded = atomic_load(&cur->bytes_downloaded);
       out[n].total_size = cur->total_size;
+      out[n].transfer_metrics = cur->transfer_metrics;
       n++;
     }
   }
   dm_mutex_unlock(&g_mutex);
   return n;
+}
+
+void queue_manager_set_transfer_metrics(uint32_t id,
+                                        DownloadTransferMetrics metrics) {
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  for (Download *cur = g_head; cur != NULL; cur = cur->next) {
+    if (cur->id == id && cur->status == DOWNLOAD_ACTIVE) {
+      cur->transfer_metrics = metrics;
+      break;
+    }
+  }
+  dm_mutex_unlock(&g_mutex);
 }
 
 int queue_manager_snapshot_chunk_progress(ChunkProgressSnapshot *out, int max) {
@@ -357,6 +374,9 @@ void queue_manager_update_status(uint32_t id, DownloadStatus new_status) {
   dm_mutex_lock(&g_mutex);
   for (Download *cur = g_head; cur != NULL; cur = cur->next) {
     if (cur->id == id) {
+      if (new_status == DOWNLOAD_ACTIVE && cur->status != DOWNLOAD_ACTIVE)
+        cur->transfer_metrics =
+            (DownloadTransferMetrics){.eta_seconds = UINT64_MAX};
       cur->status = new_status;
       break;
     }

@@ -325,3 +325,23 @@ Open questions:
 
 Next:
 - 0.4.3 Compute speed and ETA in the daemon.
+
+## 2026-09-25 — Codex, task 0.4.3
+
+Branch: `cdm`
+Commit: `feat(scheduler): compute per-download speed and eta in daemon` (this entry's commit)
+
+Tasks completed:
+- 0.4.3 Sample received bytes on each daemon progress tick using CLOCK_MONOTONIC. Seed from the first measured interval, then smooth with an EMA (alpha 0.3). Publish rounded-up ETA when total and speed are known, otherwise UINT64_MAX.
+- Store per-download samples under the queue mutex, reset them on a new active run, and put computed speed/ETA into the opt-in v2 progress event.
+
+Tests:
+- Test first: synthetic speed/ETA test failed to compile before the metrics type and calculation existed.
+- Synthetic samples verify EMA, ETA, unknown total, and byte-counter reset. The local IPC integration verifies computed fields propagate into the v2 payload.
+- Full `cmake --build build -j` and CTest passed 27/27.
+
+Open questions:
+- None for task 0.4.3.
+
+Next:
+- 0.4.4 Update GUI to consume v2 events.
