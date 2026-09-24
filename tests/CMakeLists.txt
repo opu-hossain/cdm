@@ -31,6 +31,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         target_sources(${TEST_NAME} PRIVATE
             ${CMAKE_SOURCE_DIR}/src/gui/gui_controller.c
             ${CMAKE_SOURCE_DIR}/src/gui/gui_client.c
+            ${CMAKE_SOURCE_DIR}/src/gui/gui_model.c
         )
     endif()
     target_link_libraries(${TEST_NAME}

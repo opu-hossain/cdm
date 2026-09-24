@@ -615,11 +615,25 @@ static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
     label(ctx, nk_rect(r.x + 64, r.y + 10, name_width, 16),
           filename_for_row(row), 13, TEXT, bg);
     char meta[IPC_MAX_PATH_LEN + 32];
-    // TODO(ui-v2): Byte totals, measured speed, ETA and per-row error reasons
-    // are absent from GuiRow/IPC.
-    if (is_status(row, "DONE"))
+    if (is_status(row, "ERROR") && row->error[0])
+      copy_text(meta, sizeof(meta), row->error);
+    else if (is_status(row, "DONE"))
       copy_text(meta, sizeof(meta), "Completed");
-    else if (progress)
+    else if (progress && row->has_v2) {
+      char received[32], total[32], speed[32], eta[32];
+      gui_format_bytes(row->bytes_received, received, sizeof(received));
+      if (row->total_bytes)
+        gui_format_bytes(row->total_bytes, total, sizeof(total));
+      else
+        copy_text(total, sizeof(total), "?");
+      gui_format_bytes(row->speed_bps, speed, sizeof(speed));
+      gui_format_eta(row->eta_seconds, eta, sizeof(eta));
+      if (is_status(row, "PAUSED"))
+        snprintf(meta, sizeof(meta), "%s / %s  ·  Paused", received, total);
+      else
+        snprintf(meta, sizeof(meta), "%s / %s  ·  %s/s  ·  ETA %s",
+                 received, total, speed, eta);
+    } else if (progress)
       snprintf(meta, sizeof(meta), "%.0f%%  /  %s", row->progress * 100,
                is_status(row, "PAUSED") ? "Paused" : row->dest_path);
     else
@@ -1106,9 +1120,14 @@ static void consume_events(UiState *ui) {
       int n = gui_model_snapshot_rows(previous, GUI_MODEL_MAX_ROWS);
       maybe_complete(ui, find_row(previous, n, event.data.status.download_id),
                      event.data.status.status);
-      gui_model_apply_status_update(event.data.status.download_id,
-                                    event.data.status.status,
-                                    event.data.status.progress);
+      if (event.data.status.has_v2)
+        gui_model_apply_status_update_v2(event.data.status.download_id,
+                                         event.data.status.status,
+                                         &event.data.status.v2);
+      else
+        gui_model_apply_status_update(event.data.status.download_id,
+                                      event.data.status.status,
+                                      event.data.status.progress);
       break;
     }
     case GUI_CONTROLLER_EVENT_SNAPSHOT: {

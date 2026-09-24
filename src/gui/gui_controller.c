@@ -264,6 +264,9 @@ static void publish_client_events(void) {
       GuiControllerEvent event = {.type = GUI_CONTROLLER_EVENT_STATUS};
       event.data.status.download_id = client_event.download_id;
       event.data.status.progress = client_event.progress;
+      event.data.status.has_v2 = client_event.has_v2;
+      if (client_event.has_v2)
+        event.data.status.v2 = client_event.v2;
       snprintf(event.data.status.status, sizeof(event.data.status.status), "%s",
                client_event.status);
       gui_controller_publish(&event);

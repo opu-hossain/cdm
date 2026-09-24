@@ -35,6 +35,8 @@ typedef struct {
   uint32_t download_id;
   char status[16];
   float progress;
+  bool has_v2;
+  IpcProgressV2 v2;
 } GuiControllerStatusEvent;
 
 typedef struct {

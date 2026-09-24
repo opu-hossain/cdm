@@ -105,8 +105,27 @@ static int read_string_local(int fd, char *out, size_t max_len) {
   return 0;
 }
 
+static bool drain_payload(int fd, uint32_t length) {
+  char discard[256];
+  while (length > 0) {
+    size_t chunk = length < sizeof(discard) ? length : sizeof(discard);
+    if (ipc_read_exact(fd, discard, chunk) != 0)
+      return false;
+    length -= (uint32_t)chunk;
+  }
+  return true;
+}
+
+static void subscribe_listener(int fd, uint16_t version) {
+  if (version == IPC_PROTOCOL_VERSION)
+    ipc_send_subscribe_v2(fd);
+  else
+    ipc_send_subscribe(fd);
+}
+
 static int listener_thread_fn(void *arg) {
   (void)arg;
+  bool skip_v1_fallback = false;
   while (atomic_load(&g_running)) {
     MsgHeader hdr;
     if (ipc_read_exact(g_listener_fd, &hdr, sizeof(hdr)) != 0) {
@@ -118,9 +137,11 @@ static int listener_thread_fn(void *arg) {
       dm_thread_sleep_ms(1000);
       if (g_listener_fd >= 0)
         ipc_client_disconnect(g_listener_fd);
-      g_listener_fd = ipc_client_connect_compatible(-1, NULL);
+      uint16_t version = 1;
+      g_listener_fd = ipc_client_connect_compatible(-1, &version);
       if (g_listener_fd >= 0) {
-        ipc_send_subscribe(g_listener_fd);
+        subscribe_listener(g_listener_fd, version);
+        skip_v1_fallback = false;
         if (!atomic_exchange(&g_was_connected, true)) {
           push_event((GuiClientEvent){.type = GUI_EVT_CONNECTION_RESTORED});
         }
@@ -128,8 +149,39 @@ static int listener_thread_fn(void *arg) {
       continue;
     }
 
-    if (hdr.type != MSG_STATUS_EVENT)
+    if (hdr.length > IPC_MAX_FRAME_SIZE) {
+      ipc_client_disconnect(g_listener_fd);
+      g_listener_fd = -1;
       continue;
+    }
+    if (hdr.type == MSG_STATUS_EVENT_V2 &&
+        hdr.length == sizeof(IpcProgressV2)) {
+      IpcProgressV2 rich;
+      if (ipc_read_exact(g_listener_fd, &rich, sizeof(rich)) != 0) {
+        ipc_client_disconnect(g_listener_fd);
+        g_listener_fd = -1;
+        continue;
+      }
+      rich.status[sizeof(rich.status) - 1] = '\0';
+      rich.error[sizeof(rich.error) - 1] = '\0';
+      GuiClientEvent evt = {.type = GUI_EVT_STATUS_UPDATE,
+                            .download_id = rich.download_id,
+                            .progress = rich.progress,
+                            .has_v2 = true,
+                            .v2 = rich};
+      normalize_status(rich.status, evt.status, sizeof(evt.status));
+      push_event(evt);
+      skip_v1_fallback = true;
+      continue;
+    }
+    if (hdr.type != MSG_STATUS_EVENT || skip_v1_fallback) {
+      if (!drain_payload(g_listener_fd, hdr.length)) {
+        ipc_client_disconnect(g_listener_fd);
+        g_listener_fd = -1;
+      }
+      skip_v1_fallback = false;
+      continue;
+    }
 
     uint32_t id;
     float progress;
@@ -174,13 +226,14 @@ bool gui_client_connect(void) {
   if (g_cmd_fd < 0)
     return false;
 
-  g_listener_fd = ipc_client_connect_compatible(-1, NULL);
+  uint16_t version = 1;
+  g_listener_fd = ipc_client_connect_compatible(-1, &version);
   if (g_listener_fd < 0) {
     ipc_client_disconnect(g_cmd_fd);
     g_cmd_fd = -1;
     return false;
   }
-  ipc_send_subscribe(g_listener_fd);
+  subscribe_listener(g_listener_fd, version);
 
   atomic_store(&g_running, true);
   atomic_store(&g_was_connected, true);

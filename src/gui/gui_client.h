@@ -30,6 +30,8 @@ typedef struct {
   uint32_t download_id; // valid only for GUI_EVT_STATUS_UPDATE
   char status[16];
   float progress;
+  bool has_v2;
+  IpcProgressV2 v2;
 } GuiClientEvent;
 
 bool gui_client_connect(void);

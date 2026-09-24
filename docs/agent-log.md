@@ -345,3 +345,24 @@ Open questions:
 
 Next:
 - 0.4.4 Update GUI to consume v2 events.
+
+## 2026-09-25 — Codex, task 0.4.4
+
+Branch: `cdm`
+Commit: `feat(gui): show speed, eta and size from v2 progress events` (this entry's commit)
+
+Tasks completed:
+- 0.4.4 Subscribe to v2 status frames when the daemon reports protocol version 2, parse them into controller and model events, and drain the following v1 fallback frame. Older daemons still use v1 subscription and clear stale v2 statistics.
+- Preserve transfer fields across periodic list snapshots. Render received/total bytes, daemon speed, ETA, and an error reason in the existing Nuklear row theme. Add byte and ETA formatting helpers.
+
+Tests:
+- Test first: synthetic v2 controller/model test failed to compile before new fields and formatting helpers existed.
+- Focused model test covers v2 fields, snapshot retention, v1-only fallback, byte formatting, and ETA formatting.
+- Full `cmake --build build -j` and CTest passed 27/27.
+- Isolated offscreen GUI smoke ran for two seconds with a loopback download row present. This verified the GUI event loop and row rendering path without using the user's daemon.
+
+Open questions:
+- None for task 0.4.4.
+
+Next:
+- 0.4.5 Update browser popup to consume v2 events.
