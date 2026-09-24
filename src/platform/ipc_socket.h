@@ -101,6 +101,10 @@ int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max);
  * total_out is the full database count, before offset/limit. */
 int ipc_send_list_page(int sock, uint32_t offset, uint32_t limit,
                        IpcDownloadRecord *out, int max, uint32_t *total_out);
+/* Type 36 has the same page header plus uint64_t total_size per row. */
+int ipc_send_list_page_with_size(int sock, uint32_t offset, uint32_t limit,
+                                  IpcDownloadRecord *out, int max,
+                                  uint32_t *total_out);
 int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out);
 int ipc_send_reload_config(int sock);
 void ipc_send_subscribe(int sock);

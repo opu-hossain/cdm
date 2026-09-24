@@ -431,7 +431,7 @@ int db_load_chunks(uint32_t download_id, DbChunkRow *out, int max) {
 int db_list_all_downloads(DbDownloadRow *out, int max) {
   if (!db_ready() || !out || max <= 0)
     return 0;
-  const char *sql = "SELECT id, url, dest_path, status FROM downloads "
+  const char *sql = "SELECT id, url, dest_path, status, total_size FROM downloads "
                     "ORDER BY id DESC LIMIT ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
@@ -453,6 +453,7 @@ int db_list_all_downloads(DbDownloadRow *out, int max) {
     out[n].dest_path[sizeof(out[n].dest_path) - 1] = '\0';
     strncpy(out[n].status, stat ? stat : "", sizeof(out[n].status) - 1);
     out[n].status[sizeof(out[n].status) - 1] = '\0';
+    out[n].total_size = (uint64_t)sqlite3_column_int64(stmt, 4);
     n++;
   }
   sqlite3_finalize(stmt);
@@ -494,7 +495,7 @@ int db_visit_downloads_page(DbDownloadVisitor visitor, void *ctx,
   if (!db_ready() || !visitor || limit == 0)
     return -1;
 
-  const char *sql = "SELECT id, url, dest_path, status FROM downloads "
+  const char *sql = "SELECT id, url, dest_path, status, total_size FROM downloads "
                     "ORDER BY id DESC LIMIT ? OFFSET ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
@@ -513,6 +514,7 @@ int db_visit_downloads_page(DbDownloadVisitor visitor, void *ctx,
     strncpy(row.url, url ? url : "", sizeof(row.url) - 1);
     strncpy(row.dest_path, path ? path : "", sizeof(row.dest_path) - 1);
     strncpy(row.status, status ? status : "", sizeof(row.status) - 1);
+    row.total_size = (uint64_t)sqlite3_column_int64(stmt, 4);
 
     if (visitor(&row, ctx) != 0)
       break;

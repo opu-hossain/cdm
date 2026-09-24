@@ -78,6 +78,10 @@ if(UNIX AND NOT WIN32)
                  COMMAND ${Python3_EXECUTABLE} -B
                          ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_rejected_add.py
                          $<TARGET_FILE:cdm>)
+        add_test(NAME test_cli_list
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_list.py
+                         $<TARGET_FILE:cdm>)
         add_test(NAME test_ipc_fallback
                  COMMAND ${Python3_EXECUTABLE} -B
                          ${CMAKE_CURRENT_SOURCE_DIR}/test_ipc_fallback.py

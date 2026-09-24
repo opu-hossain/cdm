@@ -16,6 +16,7 @@ typedef struct {
   char dest_path[1024];
   char status[16];
   float progress;
+  uint64_t total_size; // internal row field; only type 36 serializes it
 } DownloadListRecord;
 
 /* Daemon-owned transfer sample; queue mutex protects every read/write. */

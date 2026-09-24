@@ -418,6 +418,7 @@ static bool valid_message_header(const MsgHeader *header) {
     return header->length >= sizeof(uint32_t) * 2 &&
            header->length <= sizeof(uint32_t) * 2 + IPC_MAX_PATH_LEN - 1;
   case MSG_LIST_PAGE:
+  case MSG_LIST_PAGE_WITH_SIZE:
     return header->length == sizeof(uint32_t) * 2;
   case MSG_LIST:
   case MSG_LIST_ALL:
@@ -797,7 +798,8 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     db_visit_downloads(send_download_row, &response, IPC_LIST_ALL_MAX);
     break;
   }
-  case MSG_LIST_PAGE: {
+  case MSG_LIST_PAGE:
+  case MSG_LIST_PAGE_WITH_SIZE: {
     uint32_t request[2];
     if (ipc_read_exact(client_fd, request, sizeof(request)) != 0)
       return;
@@ -823,6 +825,10 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     ListResponseContext response = {.client_fd = client_fd};
     for (int i = 0; i < page.count; i++) {
       if (send_download_row(&page.rows[i], &response) != 0)
+        break;
+      if (hdr->type == MSG_LIST_PAGE_WITH_SIZE &&
+          ipc_write_exact(client_fd, &page.rows[i].total_size,
+                          sizeof(page.rows[i].total_size)) != 0)
         break;
     }
     free(page.rows);
@@ -1296,7 +1302,8 @@ int ipc_send_cancel(int sock, uint32_t id) {
 }
 
 static int read_download_rows(int sock, uint32_t count,
-                              IpcDownloadRecord *out, int max) {
+                              IpcDownloadRecord *out, int max,
+                              bool with_size) {
   int n = 0;
   for (uint32_t i = 0; i < count; i++) {
     uint32_t id;
@@ -1304,12 +1311,15 @@ static int read_download_rows(int sock, uint32_t count,
     char dest_path[IPC_MAX_PATH_LEN];
     char status[16];
     float progress;
+    uint64_t total_size = 0;
 
     if (ipc_read_exact(sock, &id, sizeof(id)) != 0 ||
         read_string(sock, url, sizeof(url)) != 0 ||
         read_string(sock, dest_path, sizeof(dest_path)) != 0 ||
         read_string(sock, status, sizeof(status)) != 0 ||
-        ipc_read_exact(sock, &progress, sizeof(progress)) != 0)
+        ipc_read_exact(sock, &progress, sizeof(progress)) != 0 ||
+        (with_size &&
+         ipc_read_exact(sock, &total_size, sizeof(total_size)) != 0))
       return -1;
 
     if (n < max) {
@@ -1321,6 +1331,7 @@ static int read_download_rows(int sock, uint32_t count,
       strncpy(out[n].status, status, sizeof(out[n].status) - 1);
       out[n].status[sizeof(out[n].status) - 1] = '\0';
       out[n].progress = progress;
+      out[n].total_size = total_size;
       n++;
     }
   }
@@ -1336,14 +1347,15 @@ int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max) {
   uint32_t count = 0;
   if (ipc_read_exact(sock, &count, sizeof(count)) != 0)
     return -1;
-  return read_download_rows(sock, count, out, max);
+  return read_download_rows(sock, count, out, max, false);
 }
 
-int ipc_send_list_page(int sock, uint32_t offset, uint32_t limit,
-                       IpcDownloadRecord *out, int max, uint32_t *total_out) {
+static int send_list_page_type(int sock, MsgType type, uint32_t offset,
+                               uint32_t limit, IpcDownloadRecord *out, int max,
+                               uint32_t *total_out) {
   if (!out || max <= 0 || !total_out)
     return -1;
-  MsgHeader hdr = {.length = sizeof(uint32_t) * 2, .type = MSG_LIST_PAGE};
+  MsgHeader hdr = {.length = sizeof(uint32_t) * 2, .type = type};
   uint32_t request[2] = {offset, limit};
   if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0 ||
       ipc_write_exact(sock, request, sizeof(request)) != 0)
@@ -1353,10 +1365,24 @@ int ipc_send_list_page(int sock, uint32_t offset, uint32_t limit,
       ipc_read_exact(sock, &returned, sizeof(returned)) != 0 ||
       returned > IPC_LIST_PAGE_MAX)
     return -1;
-  int count = read_download_rows(sock, returned, out, max);
+  int count = read_download_rows(sock, returned, out, max,
+                                 type == MSG_LIST_PAGE_WITH_SIZE);
   if (count >= 0)
     *total_out = total;
   return count;
+}
+
+int ipc_send_list_page(int sock, uint32_t offset, uint32_t limit,
+                       IpcDownloadRecord *out, int max, uint32_t *total_out) {
+  return send_list_page_type(sock, MSG_LIST_PAGE, offset, limit, out, max,
+                             total_out);
+}
+
+int ipc_send_list_page_with_size(int sock, uint32_t offset, uint32_t limit,
+                                  IpcDownloadRecord *out, int max,
+                                  uint32_t *total_out) {
+  return send_list_page_type(sock, MSG_LIST_PAGE_WITH_SIZE, offset, limit,
+                             out, max, total_out);
 }
 
 int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out) {

@@ -10,6 +10,7 @@
 #include "platform/ipc_protocol.h"
 
 #include <errno.h>
+#include <ctype.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -101,6 +102,110 @@ static bool parse_add_options(int argc, char **argv, int first_opt_index,
   return has_options;
 }
 
+static void print_list_row(const IpcDownloadRecord *row) {
+  const char *filename = strrchr(row->dest_path, '/');
+  filename = filename ? filename + 1 : row->dest_path;
+  char percent[16], size[32];
+  if (row->progress < 0)
+    snprintf(percent, sizeof(percent), "?");
+  else
+    snprintf(percent, sizeof(percent), "%.0f%%", row->progress * 100.0f);
+  if (row->total_size)
+    snprintf(size, sizeof(size), "%llu",
+             (unsigned long long)row->total_size);
+  else
+    snprintf(size, sizeof(size), "?");
+  printf("%u\t%s\t%s\t%s\t", row->id, row->status, percent, size);
+  for (const char *p = filename; *p; p++)
+    putchar(*p == '\t' || *p == '\n' || *p == '\r' ? ' ' : *p);
+  putchar('\n');
+}
+
+static int run_list(int sock, uint16_t daemon_version, int argc, char **argv) {
+  uint32_t offset = 0, limit = 100;
+  char status[16] = {0};
+  if ((argc - 2) % 2 != 0) {
+    fprintf(stderr, "Usage: cdm cli list [--offset N] [--limit N] [--status S]\n");
+    return 1;
+  }
+  for (int i = 2; i < argc; i += 2) {
+    uint64_t value;
+    if (strcmp(argv[i], "--offset") == 0) {
+      if (!parse_u64(argv[i + 1], &value) || value > UINT32_MAX) {
+        fprintf(stderr, "Invalid list offset: %s\n", argv[i + 1]);
+        return 1;
+      }
+      offset = (uint32_t)value;
+    } else if (strcmp(argv[i], "--limit") == 0) {
+      if (!parse_u64(argv[i + 1], &value) || value == 0 ||
+          value > IPC_LIST_PAGE_MAX) {
+        fprintf(stderr, "List limit must be 1..%d\n", IPC_LIST_PAGE_MAX);
+        return 1;
+      }
+      limit = (uint32_t)value;
+    } else if (strcmp(argv[i], "--status") == 0) {
+      size_t length = strlen(argv[i + 1]);
+      if (length == 0 || length >= sizeof(status)) {
+        fprintf(stderr, "Invalid list status\n");
+        return 1;
+      }
+      for (size_t j = 0; j < length; j++)
+        status[j] = (char)toupper((unsigned char)argv[i + 1][j]);
+      if (strcmp(status, "QUEUED") && strcmp(status, "ACTIVE") &&
+          strcmp(status, "PAUSED") && strcmp(status, "DONE") &&
+          strcmp(status, "ERROR") && strcmp(status, "CANCELED")) {
+        fprintf(stderr, "Invalid list status: %s\n", argv[i + 1]);
+        return 1;
+      }
+    } else {
+      fprintf(stderr, "Unknown list flag: %s\n", argv[i]);
+      return 1;
+    }
+  }
+
+  if (daemon_version != IPC_PROTOCOL_VERSION) {
+    fprintf(stderr, "Daemon does not support history rows with size\n");
+    return 1;
+  }
+  IpcDownloadRecord *rows = calloc(IPC_LIST_PAGE_MAX, sizeof(*rows));
+  if (!rows)
+    return 1;
+  uint32_t raw_offset = status[0] ? 0 : offset;
+  uint64_t matched = 0;
+  uint32_t printed = 0;
+  bool header_printed = false;
+  int result = 0;
+  while (printed < limit) {
+    uint32_t total = 0;
+    uint32_t request_limit = status[0] ? IPC_LIST_PAGE_MAX : limit;
+    int count = ipc_send_list_page_with_size(sock, raw_offset, request_limit,
+                                              rows, IPC_LIST_PAGE_MAX, &total);
+    if (count < 0) {
+      fprintf(stderr, "Daemon does not support sized history pages or IPC failed\n");
+      result = 1;
+      break;
+    }
+    if (!header_printed) {
+      puts("id\tstatus\tpercent\tsize\tfilename");
+      header_printed = true;
+    }
+    for (int i = 0; i < count && printed < limit; i++) {
+      if (status[0] && strcmp(rows[i].status, status) != 0)
+        continue;
+      if (status[0] && matched++ < offset)
+        continue;
+      print_list_row(&rows[i]);
+      printed++;
+    }
+    uint64_t next_offset = (uint64_t)raw_offset + (uint32_t)count;
+    if (count == 0 || next_offset >= total || !status[0])
+      break;
+    raw_offset = (uint32_t)next_offset;
+  }
+  free(rows);
+  return result;
+}
+
 /* Public API */
 
 int run_cli(int argc, char **argv) {
@@ -114,11 +219,13 @@ int run_cli(int argc, char **argv) {
     printf("  pause  <id>          Pause a download\n");
     printf("  resume <id>          Resume a download\n");
     printf("  cancel <id>          Cancel a download\n");
+    printf("  list [--offset N] [--limit N] [--status S]\n");
     return 1;
   }
 
   /* ---------- connect to daemon ---------- */
-  int sock = ipc_client_connect_compatible(-1, NULL);
+  uint16_t daemon_version = 1;
+  int sock = ipc_client_connect_compatible(-1, &daemon_version);
   if (sock < 0) {
     LOG_ERROR("Cannot connect to daemon");
     fprintf(stderr,
@@ -130,7 +237,10 @@ int run_cli(int argc, char **argv) {
   int ret = 0;
 
   /* ---------- dispatch ---------- */
-  if (strcmp(cmd, "add") == 0 && argc >= 3) {
+  if (strcmp(cmd, "list") == 0) {
+    ret = run_list(sock, daemon_version, argc, argv);
+
+  } else if (strcmp(cmd, "add") == 0 && argc >= 3) {
     const char *url = argv[2];
     int first_opt_index = 3;
     const char *dest_dir = NULL;

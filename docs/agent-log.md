@@ -442,3 +442,23 @@ Open questions:
 
 Next:
 - 0.5.3 Add a CLI list command.
+
+## 2026-09-25 — Codex, task 0.5.3
+
+Branch: `cdm`
+Commit: `feat(cli): add paginated list command` (this entry's commit)
+
+Tasks completed:
+- 0.5.3 Added `cdm cli list [--offset N] [--limit N] [--status S]` with tab-separated id, status, percent, recorded total size in bytes, and filename. Status filtering scans all daemon pages before applying the filtered offset. Zero stored size prints `?`.
+- Following the user's choice, added `MSG_LIST_PAGE_WITH_SIZE = 36` with an extra `uint64_t total_size` per row; kept type 35 byte-compatible. Documented the protocol and resolved the size question in `docs/open-questions.md`.
+
+Tests:
+- Test first: isolated 600-row CLI integration failed because `list` was unknown.
+- After implementation the focused integration passed, checking rows 100..1 beyond the first 500, recorded sizes, and a filtered 50-row slice.
+- `cmake --build build -j` and full CTest passed 28/28. The focused integration is also the CLI smoke check.
+
+Open questions:
+- None for task 0.5.3.
+
+Next:
+- 0.6.1 Update `PROJECT_CONTEXT.md`.
