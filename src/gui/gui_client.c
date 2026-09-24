@@ -118,7 +118,7 @@ static int listener_thread_fn(void *arg) {
       dm_thread_sleep_ms(1000);
       if (g_listener_fd >= 0)
         ipc_client_disconnect(g_listener_fd);
-      g_listener_fd = ipc_client_connect();
+      g_listener_fd = ipc_client_connect_compatible(-1, NULL);
       if (g_listener_fd >= 0) {
         ipc_send_subscribe(g_listener_fd);
         if (!atomic_exchange(&g_was_connected, true)) {
@@ -170,11 +170,11 @@ static int listener_thread_fn(void *arg) {
 }
 
 bool gui_client_connect(void) {
-  g_cmd_fd = ipc_client_connect_timeout(GUI_CMD_TIMEOUT_MS);
+  g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, NULL);
   if (g_cmd_fd < 0)
     return false;
 
-  g_listener_fd = ipc_client_connect();
+  g_listener_fd = ipc_client_connect_compatible(-1, NULL);
   if (g_listener_fd < 0) {
     ipc_client_disconnect(g_cmd_fd);
     g_cmd_fd = -1;
@@ -230,7 +230,7 @@ typedef int (*FireAndForgetFn)(int sock, uint32_t id);
 static bool send_with_retry(FireAndForgetFn fn, uint32_t id) {
   for (int attempt = 0; attempt < 2; attempt++) {
     if (g_cmd_fd < 0) {
-      g_cmd_fd = ipc_client_connect_timeout(GUI_CMD_TIMEOUT_MS);
+      g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, NULL);
       if (g_cmd_fd < 0)
         continue;
       note_restored();
@@ -270,7 +270,7 @@ static bool client_add_download(const char *url, const char *dest,
                                 const IpcDownloadOptions *opts,
                                 uint32_t *out_id, bool auto_filename) {
   if (g_cmd_fd < 0) {
-    g_cmd_fd = ipc_client_connect_timeout(GUI_CMD_TIMEOUT_MS);
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, NULL);
     if (g_cmd_fd < 0) {
       note_lost();
       return false;
@@ -309,7 +309,7 @@ bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count) {
   *out_count = 0;
 
   if (g_cmd_fd < 0) {
-    g_cmd_fd = ipc_client_connect_timeout(GUI_CMD_TIMEOUT_MS);
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, NULL);
     if (g_cmd_fd < 0) {
       note_lost();
       return false;
@@ -380,7 +380,7 @@ bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count) {
 
 bool gui_client_get_details(uint32_t id, GuiDownloadDetails *out) {
   if (g_cmd_fd < 0) {
-    g_cmd_fd = ipc_client_connect_timeout(GUI_CMD_TIMEOUT_MS);
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, NULL);
     if (g_cmd_fd < 0) {
       note_lost();
       return false;

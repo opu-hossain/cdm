@@ -418,6 +418,7 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_LIST_ALL:
   case MSG_SUBSCRIBE:
   case MSG_RELOAD_CONFIG:
+  case MSG_HELLO:
     return header->length == 0;
   default:
     return false;
@@ -512,6 +513,11 @@ static uint32_t reserve_download(const char *url, const char *dest,
 /** Dispatch an incoming message. */
 static void handle_message(int client_fd, MsgHeader *hdr) {
   switch (hdr->type) {
+  case MSG_HELLO: {
+    uint16_t version = IPC_PROTOCOL_VERSION;
+    ipc_write_exact(client_fd, &version, sizeof(version));
+    break;
+  }
   case MSG_ADD_DOWNLOAD:
   case MSG_ADD_DOWNLOAD_AUTO: {
     char url[IPC_MAX_URL_LEN];
@@ -1156,6 +1162,47 @@ int ipc_client_connect_timeout(int timeout_ms) {
   tv.tv_usec = (timeout_ms % 1000) * 1000;
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+  return fd;
+}
+
+int ipc_client_hello(int sock, uint16_t *daemon_version) {
+  if (!daemon_version)
+    return -1;
+  MsgHeader hello = {.length = 0, .type = MSG_HELLO};
+  if (ipc_write_exact(sock, &hello, sizeof(hello)) != 0 ||
+      ipc_read_exact(sock, daemon_version, sizeof(*daemon_version)) != 0)
+    return -1;
+  return 0;
+}
+
+int ipc_client_connect_compatible(int timeout_ms, uint16_t *daemon_version) {
+  int hello_timeout_ms = timeout_ms < 0 ? 1500 : timeout_ms;
+  int fd = ipc_client_connect_timeout(hello_timeout_ms);
+  if (fd < 0)
+    return -1;
+  uint16_t version = 1;
+  if (ipc_client_hello(fd, &version) != 0) {
+    ipc_client_disconnect(fd);
+    fd = ipc_client_connect_timeout(hello_timeout_ms);
+    if (fd < 0)
+      return -1;
+    version = 1;
+  }
+  if (version != IPC_PROTOCOL_VERSION)
+    LOG_WARN("IPC daemon version %u differs from client version %u; using v1 messages",
+             (unsigned)version, (unsigned)IPC_PROTOCOL_VERSION);
+  if (daemon_version)
+    *daemon_version = version;
+  if (timeout_ms < 0) {
+    struct timeval blocking = {0};
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &blocking,
+                   sizeof(blocking)) != 0 ||
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &blocking,
+                   sizeof(blocking)) != 0) {
+      ipc_client_disconnect(fd);
+      return -1;
+    }
+  }
   return fd;
 }
 

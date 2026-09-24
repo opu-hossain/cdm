@@ -118,7 +118,7 @@ int run_cli(int argc, char **argv) {
   }
 
   /* ---------- connect to daemon ---------- */
-  int sock = ipc_client_connect();
+  int sock = ipc_client_connect_compatible(-1, NULL);
   if (sock < 0) {
     LOG_ERROR("Cannot connect to daemon");
     fprintf(stderr,

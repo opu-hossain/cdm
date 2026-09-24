@@ -81,6 +81,10 @@ void ipc_server_stop(void);
 int ipc_client_connect(void);
 void ipc_client_disconnect(int sock);
 int ipc_client_connect_timeout(int timeout_ms);
+/* Negotiates v2 on the v1 framing; reconnects in v1 mode for old daemons.
+ * timeout_ms < 0 restores blocking I/O after a bounded HELLO exchange. */
+int ipc_client_connect_compatible(int timeout_ms, uint16_t *daemon_version);
+int ipc_client_hello(int sock, uint16_t *daemon_version);
 
 /* High-level requests and responses. */
 uint32_t ipc_send_add_download(int sock, const char *url, const char *dest_path,

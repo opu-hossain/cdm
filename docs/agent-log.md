@@ -284,3 +284,23 @@ Open questions:
 
 Next:
 - 0.4.1 Add protocol version and handshake.
+
+## 2026-09-25 — Codex, task 0.4.1
+
+Branch: `cdm`
+Commit: `feat(ipc): add protocol version and HELLO handshake` (this entry's commit)
+
+Tasks completed:
+- 0.4.1 Add `MSG_HELLO` (41) with a uint16 version response. Keep the v1 `MsgHeader` at 8 bytes to honor the wire compatibility rule. CLI, GUI, browser popup, and native host negotiate on connect; they reconnect and use v1 messages when an older daemon rejects HELLO.
+- Long-lived GUI listener connections restore blocking reads after the bounded handshake.
+
+Tests:
+- Test first: the handshake test failed to compile before `IPC_PROTOCOL_VERSION` and `ipc_client_hello` existed.
+- Local IPC integration verifies version 2 and a legacy 8-byte `MSG_LIST` frame on the same connection, plus blocking reads for the compatible listener connection.
+- Full `cmake --build build -j` and CTest passed 27/27. CLI, native host, browser, and daemon integration tests exercise negotiated connections.
+
+Open questions:
+- None for task 0.4.1; the explicit wire compatibility rule takes precedence over the plan's request to add a raw field to `MsgHeader`.
+
+Next:
+- 0.4.2 Extend status event with rich fields.

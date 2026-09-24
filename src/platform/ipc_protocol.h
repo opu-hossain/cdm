@@ -32,9 +32,13 @@ typedef enum {
   /* Same payload as MSG_ADD_DOWNLOAD; daemon may resolve the provisional
    * URL-derived destination after probing response headers. */
   MSG_ADD_DOWNLOAD_AUTO = 32,
+  MSG_HELLO = 41, // v1 header, empty request; uint16_t version response.
 } MsgType;
 
-/* Every message on the wire starts with this header. */
+#define IPC_PROTOCOL_VERSION 2
+
+/* Keep the v1 frame header unchanged for legacy clients. Version negotiation
+ * uses MSG_HELLO; future versioned payloads use distinct message types. */
 typedef struct {
   uint32_t length;
   MsgType type;

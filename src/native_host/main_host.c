@@ -221,7 +221,7 @@ static bool handle_message(const char *json) {
     return send_error(offered.request_id, "too many pending downloads");
   if (!ensure_daemon_running())
     return send_error(offered.request_id, "cdm daemon could not start");
-  int daemon = ipc_client_connect_timeout(1500);
+  int daemon = ipc_client_connect_compatible(1500, NULL);
   if (daemon < 0)
     return send_error(offered.request_id, "cdm daemon is unavailable");
   IpcBrowserOffer registered = {0};
@@ -254,7 +254,7 @@ static bool poll_offers(void) {
     has_offers |= g_offers[i].offer.offer_id != 0;
   if (!has_offers)
     return true;
-  int daemon = ipc_client_connect_timeout(500);
+  int daemon = ipc_client_connect_compatible(500, NULL);
   if (daemon < 0) {
     bool notified = true;
     for (size_t i = 0; i < HOST_MAX_OFFERS; i++) {
@@ -289,7 +289,7 @@ static bool poll_offers(void) {
     if (current.state != IPC_BROWSER_CONFIRMED || !current.download_id)
       continue;
     IpcBrowserProgress snapshot = {0};
-    int progress_sock = ipc_client_connect_timeout(500);
+    int progress_sock = ipc_client_connect_compatible(500, NULL);
     if (progress_sock < 0)
       continue;
     int progress_result = ipc_browser_subscribe_progress(

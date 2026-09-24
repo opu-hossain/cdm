@@ -88,6 +88,27 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   int client = ipc_client_connect_timeout(1500);
   cr_assert_geq(client, 0);
 
+  uint16_t version = 0;
+  cr_assert_eq(ipc_client_hello(client, &version), 0);
+  cr_assert_eq(version, IPC_PROTOCOL_VERSION);
+  MsgHeader legacy = {.length = 0, .type = MSG_LIST};
+  cr_assert_eq(sizeof(legacy), 8);
+  cr_assert_eq(ipc_write_exact(client, &legacy, sizeof(legacy)), 0);
+  uint32_t count = UINT32_MAX;
+  cr_assert_eq(ipc_read_exact(client, &count, sizeof(count)), 0);
+  cr_assert_eq(count, 0);
+  uint16_t negotiated = 0;
+  int compatible = ipc_client_connect_compatible(-1, &negotiated);
+  cr_assert_geq(compatible, 0);
+  cr_assert_eq(negotiated, IPC_PROTOCOL_VERSION);
+  struct timeval receive_timeout;
+  socklen_t timeout_size = sizeof(receive_timeout);
+  cr_assert_eq(getsockopt(compatible, SOL_SOCKET, SO_RCVTIMEO,
+                          &receive_timeout, &timeout_size), 0);
+  cr_assert_eq(receive_timeout.tv_sec, 0);
+  cr_assert_eq(receive_timeout.tv_usec, 0);
+  ipc_client_disconnect(compatible);
+
   IpcBrowserOffer request = {0}, first = {0}, repeated = {0};
   strcpy(request.request_id, "ipc-test-offer-1");
   strcpy(request.url, "https://example.org/archive.tar.zst");

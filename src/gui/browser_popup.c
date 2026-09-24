@@ -211,7 +211,7 @@ static void update_progress(PopupState *state,
 }
 
 static void connect_progress(PopupState *state) {
-  int sock = ipc_client_connect_timeout(800);
+  int sock = ipc_client_connect_compatible(800, NULL);
   if (sock < 0)
     goto retry;
   IpcBrowserProgress initial = {0};
@@ -352,7 +352,7 @@ static void draw_progress(struct nk_context *ctx, PopupState *state,
 }
 
 int run_browser_popup(uint32_t offer_id) {
-  int daemon = ipc_client_connect_timeout(1500);
+  int daemon = ipc_client_connect_compatible(1500, NULL);
   if (daemon < 0)
     return 1;
   PopupState state = {.progress_sock = -1};
