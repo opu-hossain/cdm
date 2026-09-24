@@ -266,3 +266,21 @@ Open questions:
 
 Next:
 - 0.3.4 Stale-validator refusal path.
+
+## 2026-09-25 — Codex, task 0.3.4
+
+Branch: `cdm`
+Commit: `feat(engine): restart on validator mismatch instead of resuming` (this entry's commit)
+
+Tasks completed:
+- 0.3.4 Compare stored ETag and Last-Modified with fresh probe metadata before updating stored validators. On a mismatch, clear chunks and the partial file and begin a fresh download.
+
+Tests:
+- Test first: a local `127.0.0.1` server changed its ETag while preserving size and rejected resumed GETs; the existing engine failed.
+- After implementation, the focused test passed, showing a fresh GET at byte zero; full `cmake --build build -j` and CTest passed 27/27.
+
+Open questions:
+- None for task 0.3.4.
+
+Next:
+- 0.4.1 Add protocol version and handshake.

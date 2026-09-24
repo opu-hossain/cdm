@@ -217,6 +217,19 @@ int engine_run_download(struct Download *d) {
     snprintf(if_range, sizeof(if_range), "%s", validator);
   }
 
+  bool validator_changed =
+      d->chunk_count > 0 &&
+      ((d->etag[0] && strcmp(d->etag, info.etag) != 0) ||
+       (d->last_modified[0] &&
+        strcmp(d->last_modified, info.last_modified) != 0));
+  if (validator_changed) {
+    LOG_INFO("Download %u: validator changed; restarting from byte zero", d->id);
+    dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
+    dm_mutex_lock(mutex);
+    clear_resume_state(d, true);
+    dm_mutex_unlock(mutex);
+  }
+
   if (strcmp(d->etag, info.etag) != 0 ||
       strcmp(d->last_modified, info.last_modified) != 0) {
     dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();

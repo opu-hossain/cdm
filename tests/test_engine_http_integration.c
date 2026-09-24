@@ -140,7 +140,7 @@ static void start_unknown_size_server(void) {
   cr_assert_fail("unknown-size HTTP server did not become ready");
 }
 
-static void start_validator_server(bool stale) {
+static void start_validator_server(int mode) {
   g_server_root[0] = '\0';
   g_server_port = reserve_port();
   g_server_pid = fork();
@@ -150,14 +150,14 @@ static void start_validator_server(bool stale) {
         "import http.server,sys\n"
         "OLD=b'A'*64\n"
         "NEW=b'B'*64\n"
-        "STALE=sys.argv[2]=='1'\n"
+        "MODE=int(sys.argv[2])\n"
         "class H(http.server.BaseHTTPRequestHandler):\n"
         " def log_message(self,*args): pass\n"
         " def do_HEAD(self):\n"
         "  self.send_response(200)\n"
         "  self.send_header('Content-Length','64')\n"
         "  self.send_header('Accept-Ranges','bytes')\n"
-        "  self.send_header('ETag','\"old\"')\n"
+        "  self.send_header('ETag','\"new\"' if MODE==2 else '\"old\"')\n"
         "  self.end_headers()\n"
         " def do_GET(self):\n"
         "  value=self.headers.get('Range','')\n"
@@ -165,14 +165,16 @@ static void start_validator_server(bool stale) {
         "  if not value.startswith('bytes='):\n"
         "   self.send_error(400); return\n"
         "  start,end=map(int,value[6:].split('-'))\n"
+        "  if MODE==2 and (validator or start>0):\n"
+        "   self.send_error(400); return\n"
         "  if start>0 and validator!='\"old\"':\n"
         "   self.send_error(400); return\n"
-        "  if STALE and validator:\n"
+        "  if MODE==1 and validator:\n"
         "   self.send_response(200); body=NEW\n"
         "  else:\n"
         "   self.send_response(206)\n"
         "   self.send_header('Content-Range',f'bytes {start}-{end}/64')\n"
-        "   body=(NEW if STALE else OLD)[start:end+1]\n"
+        "   body=(NEW if MODE else OLD)[start:end+1]\n"
         "  self.send_header('Content-Length',str(len(body)))\n"
         "  self.end_headers()\n"
         "  try: self.wfile.write(body)\n"
@@ -186,8 +188,10 @@ static void start_validator_server(bool stale) {
       dup2(devnull, STDERR_FILENO);
       close(devnull);
     }
+    char mode_text[8];
+    snprintf(mode_text, sizeof(mode_text), "%d", mode);
     execlp("python3", "python3", "-c", script, port_text,
-           stale ? "1" : "0", (char *)NULL);
+           mode_text, (char *)NULL);
     _exit(127);
   }
   char url[160];
@@ -201,8 +205,8 @@ static void start_validator_server(bool stale) {
   cr_assert_fail("validator HTTP server did not become ready");
 }
 
-static void check_validator_resume(bool stale) {
-  start_validator_server(stale);
+static void check_validator_resume(int mode) {
+  start_validator_server(mode);
   snprintf(g_download_path, sizeof(g_download_path),
            "/tmp/cdm-validator-resume-%ld.bin", (long)getpid());
   FILE *file = fopen(g_download_path, "wb");
@@ -232,7 +236,7 @@ static void check_validator_resume(bool stale) {
   cr_assert_eq(fread(actual, 1, sizeof(actual), file), sizeof(actual));
   fclose(file);
   for (size_t i = 0; i < sizeof(actual); i++)
-    cr_assert_eq(actual[i], stale ? 'B' : 'A');
+    cr_assert_eq(actual[i], mode ? 'B' : 'A');
   stop_server();
 }
 
@@ -241,7 +245,11 @@ Test(engine_http_integration, matching_if_range_resumes) {
 }
 
 Test(engine_http_integration, stale_if_range_restarts_from_zero) {
-  check_validator_resume(true);
+  check_validator_resume(1);
+}
+
+Test(engine_http_integration, changed_head_validator_restarts_before_get) {
+  check_validator_resume(2);
 }
 
 static void setup_engine_http(void) {
