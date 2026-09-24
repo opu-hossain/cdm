@@ -148,6 +148,48 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   cr_assert_eq(ipc_read_exact(client, &event, sizeof(event)), 0);
   cr_assert_eq(event.download_id, download_id);
 
+  int v2_client = ipc_client_connect_compatible(1500, NULL);
+  cr_assert_geq(v2_client, 0);
+  cr_assert_eq(ipc_send_subscribe_v2(v2_client), 0);
+  MsgHeader barrier = {.length = 0, .type = MSG_LIST};
+  uint32_t ignored_count = 0;
+  cr_assert_eq(ipc_write_exact(v2_client, &barrier, sizeof(barrier)), 0);
+  cr_assert_eq(ipc_read_exact(v2_client, &ignored_count,
+                              sizeof(ignored_count)), 0);
+  int legacy_client = ipc_client_connect_timeout(1500);
+  cr_assert_geq(legacy_client, 0);
+  ipc_send_subscribe(legacy_client);
+  cr_assert_eq(ipc_write_exact(legacy_client, &barrier, sizeof(barrier)), 0);
+  cr_assert_eq(ipc_read_exact(legacy_client, &ignored_count,
+                              sizeof(ignored_count)), 0);
+  ipc_broadcast_status(download_id, "Downloading", 0.25f);
+  MsgHeader v2_header = {0}, fallback_header = {0};
+  IpcProgressV2 rich = {0};
+  cr_assert_eq(ipc_read_exact(v2_client, &v2_header, sizeof(v2_header)), 0);
+  cr_assert_eq(v2_header.type, MSG_STATUS_EVENT_V2);
+  cr_assert_eq(v2_header.length, sizeof(rich));
+  cr_assert_eq(ipc_read_exact(v2_client, &rich, sizeof(rich)), 0);
+  cr_assert_eq(rich.download_id, download_id);
+  cr_assert_eq(rich.total_bytes, 0);
+  cr_assert_eq(rich.speed_bps, 0);
+  cr_assert_eq(rich.eta_seconds, UINT64_MAX);
+  cr_assert_float_eq(rich.progress, -1.0f, 0.001f);
+  cr_assert_str_eq(rich.status, "Downloading");
+  cr_assert_eq(ipc_read_exact(v2_client, &fallback_header,
+                              sizeof(fallback_header)), 0);
+  cr_assert_eq(fallback_header.type, MSG_STATUS_EVENT);
+  char fallback[64];
+  cr_assert_leq(fallback_header.length, sizeof(fallback));
+  cr_assert_eq(ipc_read_exact(v2_client, fallback, fallback_header.length), 0);
+  ipc_client_disconnect(v2_client);
+  MsgHeader legacy_event = {0};
+  cr_assert_eq(ipc_read_exact(legacy_client, &legacy_event,
+                              sizeof(legacy_event)), 0);
+  cr_assert_eq(legacy_event.type, MSG_STATUS_EVENT);
+  cr_assert_leq(legacy_event.length, sizeof(fallback));
+  cr_assert_eq(ipc_read_exact(legacy_client, fallback, legacy_event.length), 0);
+  ipc_client_disconnect(legacy_client);
+
   strcpy(request.request_id, "ipc-test-offer-2");
   IpcBrowserOffer dismissed = {0};
   cr_assert_eq(ipc_browser_offer(client, &request, &dismissed), 0);

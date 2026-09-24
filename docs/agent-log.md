@@ -304,3 +304,24 @@ Open questions:
 
 Next:
 - 0.4.2 Extend status event with rich fields.
+
+## 2026-09-25 — Codex, task 0.4.2
+
+Branch: `cdm`
+Commit: `feat(ipc): add versioned progress event with speed and eta` (this entry's commit)
+
+Tasks completed:
+- 0.4.2 Add `IpcProgressV2` with received bytes, total bytes, speed, ETA, progress, status, and error fields. Emit it before the legacy status frame for clients that explicitly use `MSG_SUBSCRIBE_V2`; existing `MSG_SUBSCRIBE` clients receive only v1.
+- Assign `MSG_STATUS_EVENT_V2 = 33` and `MSG_SUBSCRIBE_V2 = 34` because type 32 already belongs to `MSG_ADD_DOWNLOAD_AUTO`; retain all existing numeric values.
+- Speed is zero and ETA is `UINT64_MAX` until task 0.4.3 computes these values. Unknown total produces indeterminate progress (-1).
+
+Tests:
+- Test first: the new v2 integration assertions failed to compile before the protocol types and subscribe function existed.
+- Local IPC test validates v2 fields, followed by a v1 fallback frame, and verifies a separate legacy subscriber receives only v1.
+- Full `cmake --build build -j` and CTest passed 27/27.
+
+Open questions:
+- None for task 0.4.2; type 33 preserves the already published type 32 assignment.
+
+Next:
+- 0.4.3 Compute speed and ETA in the daemon.

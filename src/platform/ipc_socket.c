@@ -163,6 +163,7 @@ static int g_listen_fd = -1;
 static int g_client_fds[MAX_CLIENTS];
 static int g_client_count = 0;
 static bool g_client_subscribed[MAX_CLIENTS];
+static bool g_client_v2_subscribed[MAX_CLIENTS];
 static uint32_t g_client_browser_download[MAX_CLIENTS];
 static unsigned char g_client_header[MAX_CLIENTS][sizeof(MsgHeader)];
 static size_t g_client_header_bytes[MAX_CLIENTS];
@@ -383,12 +384,14 @@ static void remove_client(int index) {
   for (int i = index; i < g_client_count - 1; i++) {
     g_client_fds[i] = g_client_fds[i + 1];
     g_client_subscribed[i] = g_client_subscribed[i + 1];
+    g_client_v2_subscribed[i] = g_client_v2_subscribed[i + 1];
     g_client_browser_download[i] = g_client_browser_download[i + 1];
     g_client_header_bytes[i] = g_client_header_bytes[i + 1];
     memcpy(g_client_header[i], g_client_header[i + 1], sizeof(MsgHeader));
   }
   g_client_fds[g_client_count - 1] = -1;
   g_client_subscribed[g_client_count - 1] = false;
+  g_client_v2_subscribed[g_client_count - 1] = false;
   g_client_browser_download[g_client_count - 1] = 0;
   g_client_header_bytes[g_client_count - 1] = 0;
   g_client_count--;
@@ -417,6 +420,7 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_LIST:
   case MSG_LIST_ALL:
   case MSG_SUBSCRIBE:
+  case MSG_SUBSCRIBE_V2:
   case MSG_RELOAD_CONFIG:
   case MSG_HELLO:
     return header->length == 0;
@@ -798,11 +802,13 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     }
     break;
   }
-  case MSG_SUBSCRIBE: {
+  case MSG_SUBSCRIBE:
+  case MSG_SUBSCRIBE_V2: {
     dm_mutex_lock(&g_client_mutex);
     for (int i = 0; i < g_client_count; i++) {
       if (g_client_fds[i] == client_fd) {
         g_client_subscribed[i] = true;
+        g_client_v2_subscribed[i] = hdr->type == MSG_SUBSCRIBE_V2;
         break;
       }
     }
@@ -984,6 +990,7 @@ void ipc_server_poll(void) {
       dm_mutex_lock(&g_client_mutex);
       if (g_client_count < MAX_CLIENTS) {
         g_client_subscribed[g_client_count] = false;
+        g_client_v2_subscribed[g_client_count] = false;
         g_client_browser_download[g_client_count] = 0;
         g_client_header_bytes[g_client_count] = 0;
         g_client_fds[g_client_count++] = new_fd;
@@ -1311,6 +1318,11 @@ void ipc_send_subscribe(int sock) {
   ipc_write_exact(sock, &hdr, sizeof(hdr));
 }
 
+int ipc_send_subscribe_v2(int sock) {
+  MsgHeader hdr = {.length = 0, .type = MSG_SUBSCRIBE_V2};
+  return ipc_write_exact(sock, &hdr, sizeof(hdr));
+}
+
 int ipc_send_reload_config(int sock) {
   MsgHeader hdr = {.length = 0, .type = MSG_RELOAD_CONFIG};
   if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0)
@@ -1487,6 +1499,22 @@ void ipc_broadcast_status(uint32_t download_id, const char *status,
   memcpy(browser_frame + sizeof(browser_hdr), &browser_event,
          sizeof(browser_event));
 
+  IpcProgressV2 rich_event;
+  memset(&rich_event, 0, sizeof(rich_event));
+  rich_event.download_id = download_id;
+  rich_event.bytes_received = browser_event.bytes_received;
+  rich_event.total_bytes = browser_event.total_bytes;
+  rich_event.eta_seconds = UINT64_MAX;
+  rich_event.progress = browser_event.total_bytes ? progress : -1.0f;
+  snprintf(rich_event.status, sizeof(rich_event.status), "%s", text);
+  snprintf(rich_event.error, sizeof(rich_event.error), "%s",
+           browser_event.error);
+  unsigned char rich_frame[sizeof(MsgHeader) + sizeof(rich_event)];
+  MsgHeader rich_hdr = {.length = sizeof(rich_event),
+                        .type = MSG_STATUS_EVENT_V2};
+  memcpy(rich_frame, &rich_hdr, sizeof(rich_hdr));
+  memcpy(rich_frame + sizeof(rich_hdr), &rich_event, sizeof(rich_event));
+
   dm_mutex_lock(&g_client_mutex);
   for (int i = 0; i < g_client_count; i++) {
     if (!g_client_subscribed[i] &&
@@ -1506,6 +1534,18 @@ void ipc_broadcast_status(uint32_t download_id, const char *status,
     size_t bytes_len = g_client_browser_download[i] == download_id
                            ? sizeof(browser_frame)
                            : offset;
+    if (g_client_v2_subscribed[i] &&
+        g_client_browser_download[i] != download_id) {
+      ssize_t rich_sent = send(g_client_fds[i], rich_frame,
+                               sizeof(rich_frame), flags);
+      if (rich_sent != (ssize_t)sizeof(rich_frame)) {
+        LOG_DEBUG("IPC: removing slow or disconnected v2 subscriber (fd=%d)",
+                  g_client_fds[i]);
+        remove_client(i);
+        i--;
+        continue;
+      }
+    }
     ssize_t sent = send(g_client_fds[i], bytes, bytes_len, flags);
     if (sent != (ssize_t)bytes_len) {
       LOG_DEBUG("IPC: removing slow or disconnected subscriber (fd=%d)",

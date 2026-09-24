@@ -32,6 +32,8 @@ typedef enum {
   /* Same payload as MSG_ADD_DOWNLOAD; daemon may resolve the provisional
    * URL-derived destination after probing response headers. */
   MSG_ADD_DOWNLOAD_AUTO = 32,
+  MSG_STATUS_EVENT_V2 = 33,
+  MSG_SUBSCRIBE_V2 = 34,
   MSG_HELLO = 41, // v1 header, empty request; uint16_t version response.
 } MsgType;
 
@@ -43,6 +45,19 @@ typedef struct {
   uint32_t length;
   MsgType type;
 } MsgHeader;
+
+/* Payload of MSG_STATUS_EVENT_V2. Numeric fields are native-endian, as in v1.
+ * This is a separate message so the existing v1 frame stays byte-compatible. */
+typedef struct {
+  uint32_t download_id;
+  uint64_t bytes_received;
+  uint64_t total_bytes; // 0 = unknown
+  uint64_t speed_bps; // 0 = unknown until scheduler sampling is available
+  uint64_t eta_seconds; // UINT64_MAX = unknown
+  float progress; // 0..1, -1 = indeterminate
+  char status[24];
+  char error[256];
+} IpcProgressV2;
 
 typedef enum {
   IPC_RESULT_OK = 0,

@@ -99,6 +99,7 @@ int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max);
 int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out);
 int ipc_send_reload_config(int sock);
 void ipc_send_subscribe(int sock);
+int ipc_send_subscribe_v2(int sock);
 int ipc_browser_offer(int sock, const IpcBrowserOffer *offer,
                       IpcBrowserOffer *out);
 int ipc_browser_get_offer(int sock, uint32_t offer_id, IpcBrowserOffer *out);
