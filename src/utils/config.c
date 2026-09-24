@@ -3,12 +3,15 @@
 
 #include "config.h"
 #include "../platform/file_io.h"
+#include "../platform/thread.h"
 #include "../vendor/tomlc17.h"
 #include "log.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <threads.h>
 
 /* Defaults */
 #define DEFAULT_MAX_CONCURRENT 3
@@ -24,6 +27,17 @@ static int g_retry_max_attempts = DEFAULT_RETRY_MAX_ATTEMPTS;
 static int g_retry_base_delay_sec = DEFAULT_RETRY_BASE_DELAY_SEC;
 static int g_retry_max_delay_sec = DEFAULT_RETRY_MAX_DELAY_SEC;
 static uint64_t g_max_speed_bps = DEFAULT_MAX_SPEED_BPS;
+static ProxyMode g_proxy_mode = PROXY_NONE;
+static char g_proxy_url[512];
+static char g_proxy_username[128];
+static char g_proxy_password[256];
+static dm_mutex_t g_proxy_mutex;
+static once_flag g_proxy_once = ONCE_FLAG_INIT;
+
+static void init_proxy_mutex(void) { dm_mutex_init(&g_proxy_mutex); }
+static void ensure_proxy_mutex(void) {
+  call_once(&g_proxy_once, init_proxy_mutex);
+}
 
 static void reset_defaults(void) {
   g_max_concurrent = DEFAULT_MAX_CONCURRENT;
@@ -31,6 +45,11 @@ static void reset_defaults(void) {
   g_retry_base_delay_sec = DEFAULT_RETRY_BASE_DELAY_SEC;
   g_retry_max_delay_sec = DEFAULT_RETRY_MAX_DELAY_SEC;
   g_max_speed_bps = DEFAULT_MAX_SPEED_BPS;
+  ensure_proxy_mutex();
+  dm_mutex_lock(&g_proxy_mutex);
+  g_proxy_mode = PROXY_NONE;
+  g_proxy_url[0] = g_proxy_username[0] = g_proxy_password[0] = '\0';
+  dm_mutex_unlock(&g_proxy_mutex);
 }
 
 static void get_config_path(char *out, size_t out_size) {
@@ -84,6 +103,52 @@ static void read_string(toml_datum_t tab, const char *key, char *out,
     out[out_size - 1] = '\0';
     /* tomlc17 owns the string memory; freed via toml_free() */
   }
+}
+
+static bool proxy_url_valid(const char *url) {
+  if (!url || !isalpha((unsigned char)url[0]))
+    return false;
+  const char *separator = strstr(url, "://");
+  if (!separator || separator == url)
+    return false;
+  for (const char *p = url; p < separator; p++)
+    if (!isalnum((unsigned char)*p) && *p != '+' && *p != '-' && *p != '.')
+      return false;
+  const char *host = separator + 3;
+  if (!*host || *host == ':' || *host == '/' || *host == '?' || *host == '#')
+    return false;
+  for (const char *p = host; *p; p++) {
+    if (isspace((unsigned char)*p) || (unsigned char)*p < 32 || *p == '@')
+      return false;
+    if (*p == '/' || *p == '?' || *p == '#')
+      break;
+  }
+  return true;
+}
+
+static bool write_toml_string(FILE *fp, const char *value) {
+  if (fputc('"', fp) == EOF)
+    return false;
+  for (const unsigned char *p = (const unsigned char *)value; *p; p++) {
+    const char *escape = NULL;
+    if (*p == '"')
+      escape = "\\\"";
+    else if (*p == '\\')
+      escape = "\\\\";
+    else if (*p == '\n')
+      escape = "\\n";
+    else if (*p == '\r')
+      escape = "\\r";
+    else if (*p == '\t')
+      escape = "\\t";
+    if (escape) {
+      if (fputs(escape, fp) == EOF)
+        return false;
+    } else if (*p < 32 || fputc(*p, fp) == EOF) {
+      return false;
+    }
+  }
+  return fputc('"', fp) != EOF;
 }
 
 static bool default_dir_is_usable(const char *path) {
@@ -158,6 +223,35 @@ void config_init(const char *path) {
   toml_datum_t throttle = toml_get(root, "throttle");
   read_u64(throttle, "max_speed_bytes_per_sec", &g_max_speed_bps);
 
+  toml_datum_t proxy = toml_get(root, "proxy");
+  ProxyMode proxy_mode = PROXY_NONE;
+  char proxy_url[sizeof(g_proxy_url)] = {0};
+  char proxy_username[sizeof(g_proxy_username)] = {0};
+  char proxy_password[sizeof(g_proxy_password)] = {0};
+  if (proxy.type == TOML_TABLE) {
+    toml_datum_t mode = toml_get(proxy, "mode");
+    if (mode.type == TOML_INT64) {
+      if (mode.u.int64 >= PROXY_NONE && mode.u.int64 <= PROXY_SOCKS5)
+        proxy_mode = (ProxyMode)mode.u.int64;
+      else
+        LOG_WARN("Invalid proxy mode; using no proxy");
+    }
+    read_string(proxy, "url", proxy_url, sizeof(proxy_url));
+    read_string(proxy, "username", proxy_username, sizeof(proxy_username));
+    read_string(proxy, "password", proxy_password, sizeof(proxy_password));
+    if (proxy_mode != PROXY_NONE && !proxy_url_valid(proxy_url)) {
+      LOG_WARN("Proxy URL needs a scheme and host; using no proxy");
+      proxy_mode = PROXY_NONE;
+    }
+  }
+  ensure_proxy_mutex();
+  dm_mutex_lock(&g_proxy_mutex);
+  g_proxy_mode = proxy_mode;
+  memcpy(g_proxy_url, proxy_url, sizeof(g_proxy_url));
+  memcpy(g_proxy_username, proxy_username, sizeof(g_proxy_username));
+  memcpy(g_proxy_password, proxy_password, sizeof(g_proxy_password));
+  dm_mutex_unlock(&g_proxy_mutex);
+
   toml_free(result);
 
   /* Defensive clamps — prevent a bad config from breaking the scheduler. */
@@ -189,6 +283,13 @@ void config_get(DownloadManagerConfig *out) {
   out->retry_base_delay_sec = g_retry_base_delay_sec;
   out->retry_max_delay_sec = g_retry_max_delay_sec;
   out->max_speed_bytes_per_sec = g_max_speed_bps;
+  ensure_proxy_mutex();
+  dm_mutex_lock(&g_proxy_mutex);
+  out->proxy_mode = g_proxy_mode;
+  memcpy(out->proxy_url, g_proxy_url, sizeof(out->proxy_url));
+  memcpy(out->proxy_username, g_proxy_username, sizeof(out->proxy_username));
+  memcpy(out->proxy_password, g_proxy_password, sizeof(out->proxy_password));
+  dm_mutex_unlock(&g_proxy_mutex);
 }
 
 bool config_save(const DownloadManagerConfig *config) {
@@ -197,7 +298,13 @@ bool config_save(const DownloadManagerConfig *config) {
       config->retry_base_delay_sec < 1 ||
       config->retry_max_delay_sec < config->retry_base_delay_sec ||
       config->default_download_dir[0] == '\0' ||
-      !default_dir_is_usable(config->default_download_dir))
+      !default_dir_is_usable(config->default_download_dir) ||
+      config->proxy_mode < PROXY_NONE || config->proxy_mode > PROXY_SOCKS5 ||
+      !memchr(config->proxy_url, '\0', sizeof(config->proxy_url)) ||
+      !memchr(config->proxy_username, '\0', sizeof(config->proxy_username)) ||
+      !memchr(config->proxy_password, '\0', sizeof(config->proxy_password)) ||
+      (config->proxy_mode != PROXY_NONE &&
+       !proxy_url_valid(config->proxy_url)))
     return false;
 
   char path[1024];
@@ -220,10 +327,20 @@ bool config_save(const DownloadManagerConfig *config) {
       config->retry_max_attempts, config->retry_base_delay_sec,
       config->retry_max_delay_sec,
       (unsigned long long)config->max_speed_bytes_per_sec);
-  bool saved = rc >= 0 && fclose(fp) == 0;
+  bool written = rc >= 0;
+  if (written)
+    written = fputs("\n[proxy]\nmode = ", fp) != EOF &&
+              fprintf(fp, "%d\nurl = ", (int)config->proxy_mode) >= 0 &&
+              write_toml_string(fp, config->proxy_url) &&
+              fputs("\nusername = ", fp) != EOF &&
+              write_toml_string(fp, config->proxy_username) &&
+              fputs("\npassword = ", fp) != EOF &&
+              write_toml_string(fp, config->proxy_password) &&
+              fputc('\n', fp) != EOF;
+  bool saved = written;
+  if (fclose(fp) != 0)
+    saved = false;
   if (saved)
     config_init(path);
-  else
-    fclose(fp);
   return saved;
 }

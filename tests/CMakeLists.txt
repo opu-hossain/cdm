@@ -16,6 +16,7 @@ set(TEST_SOURCES
     test_worker_pool.c
     test_path.c
     test_gui_controller.c
+    test_config.c
 )
 
 foreach(TEST_SOURCE ${TEST_SOURCES})

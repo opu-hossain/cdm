@@ -517,3 +517,21 @@ Open questions:
 
 Next:
 - 1.1.1 Extend config with proxy fields on the user-selected `cdm` branch; 0.6.3 remains deferred.
+
+## 2026-09-25 — Codex, task 1.1.1
+
+Branch: `cdm`
+Commit: `feat(config): add proxy settings` (this entry's commit)
+
+Tasks completed:
+- 1.1.1 Added HTTP and SOCKS5 proxy mode, URL, username, and password to the config model and TOML load/save path. Invalid mode or missing scheme/host falls back to no proxy. Proxy state is guarded by a mutex.
+
+Tests:
+- Test first: `test_config` failed to compile before the fields were implemented.
+- `cmake --build build -j` and full CTest passed 29/29. Focused `test_config` passed and exercises the config file save/load surface.
+
+Open questions:
+- None for this task. Existing GUI settings save needs to preserve or edit proxy values in task 1.1.3.
+
+Next:
+- 1.1.2 Apply proxy to all curl handles. Phase 0 merge gate 0.6.3 remains deferred as logged above.
