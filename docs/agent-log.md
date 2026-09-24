@@ -462,3 +462,22 @@ Open questions:
 
 Next:
 - 0.6.1 Update `PROJECT_CONTEXT.md`.
+
+## 2026-09-25 — Codex, task 0.6.1
+
+Branch: `cdm`
+Commit: `docs: refresh PROJECT_CONTEXT for phase 0` (this entry's commit)
+
+Tasks completed:
+- 0.6.1 Refreshed the self-contained project audit with the current branch/commit, complete current tracked-file inventory, v2 IPC including page types 35/36, validator and filename provenance columns, current engine/CLI/GUI behavior, test inventory, fixed-vs-open risks, and reconciliation of the seven supplied claims.
+- Kept the absent Claude report as `UNKNOWN` with instructions for verification. Phase 0 added no new config keys; the settings section states that explicitly.
+
+Tests:
+- Checked that all 146 files tracked before this document's commit appear in the inventory, plus this document; all 23 IPC enum names appear; all 23 required numbered sections and code fences are structurally present.
+- `cmake --build build -j` and full CTest passed 28/28.
+
+Open questions:
+- The original Claude report text was not provided; Appendix B remains `UNKNOWN`.
+
+Next:
+- 0.6.2 Add phase 0 release notes.
