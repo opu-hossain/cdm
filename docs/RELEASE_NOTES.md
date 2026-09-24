@@ -1,10 +1,20 @@
-# CDM 0.2.0-rc1 release notes (draft)
+# CDM release notes (draft)
 
 These notes describe the current source and packaging configuration. This draft does not state that a tag or downloadable package has been published.
 
+## Unreleased — phase 0 foundations
+
+- Metadata probing falls back from a failed HEAD to a bounded GET `Range: bytes=0-0` request. Automatic filenames now use a safe `Content-Disposition` name when available and decode URL percent escapes; explicitly chosen filenames stay unchanged.
+- Resume state stores ETag and Last-Modified. A changed validator restarts the download from byte zero; resumed ranges use `If-Range` when a suitable validator exists.
+- Fixed unknown-size whole-file transfers, stale chunk state after parallel fallback, and the rebalance callback race. The Windows mutex-destroy declaration now matches its implementation.
+- CLI add now fails when the daemon rejects it, and repeated `--header` values remain valid through IPC serialization.
+- Daemon progress events now include received bytes, total bytes, sampled speed, ETA and an error string. The GUI and browser popup display speed and ETA while retaining legacy daemon fallback.
+- History can be fetched in pages beyond the legacy 200-row list limit. The GUI loads a bounded window as the user scrolls; `cdm cli list` supports offset, limit and status filtering, with a daemon-recorded byte-size column.
+- Local debug build and full CTest passed 28/28 on 2026-09-25. Offscreen GUI startup with 600 completed history rows and popup progress-stream smoke checks passed; visual scrolling was not automated.
+
 ## Linux scope
 
-cdm provides a command-line interface, a background daemon, and an SDL2/Nuklear GUI. It downloads HTTP(S) URLs with segmented transfer and resume, stores its queue in SQLite, and supports per-user XDG login autostart. The CLI offers `add`, `pause`, `resume`, and `cancel` commands.
+cdm provides a command-line interface, a background daemon, and an SDL2/Nuklear GUI. It downloads HTTP(S) URLs with segmented transfer and resume, stores its queue in SQLite, and supports per-user XDG login autostart. The CLI offers `add`, `pause`, `resume`, `cancel`, and paginated `list` commands.
 
 Chrome, Chromium, and Firefox extensions can hand supported URL-only GET downloads to cdm through a native messaging host. The extensions require manual installation and per-user host registration. Browser cancellation is best effort; authenticated, POST, Blob, and data URL downloads are outside this integration's current scope. See [browser integration](browser-integration.md).
 
@@ -14,7 +24,7 @@ Windows and macOS are not yet supported.
 
 CMake can build DEB and RPM packages. The Arch PKGBUILD and local release helper can build an Arch package. All package targets install `cdm`, `cdm_native_host`, the desktop launcher, browser extension files, and an XDG autostart entry. The autostart entry starts the daemon at the next graphical login; it does not start it during package installation. See [daemon startup](daemon-autostart.md).
 
-The configured version is `0.2.0-rc1`. Local CPack artifacts use names such as `cdm-0.2.0-rc1-Linux.deb` and `cdm-0.2.0-rc1-Linux.rpm`. Release workflows copy them to architecture-specific names before upload. These names describe build output, not a published download URL.
+The configured version is `0.3.0-rc1` (CPack package version `0.3.0~rc1`). Local CPack artifacts use names such as `cdm-0.3.0-rc1-Linux.deb` and `cdm-0.3.0-rc1-Linux.rpm`. Release workflows copy them to architecture-specific names before upload. These names describe build output, not a published download URL.
 
 ## Verification before publication
 

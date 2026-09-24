@@ -481,3 +481,20 @@ Open questions:
 
 Next:
 - 0.6.2 Add phase 0 release notes.
+
+## 2026-09-25 — Codex, task 0.6.2
+
+Branch: `cdm`
+Commit: `docs: add phase 0 release notes` (this entry's commit)
+
+Tasks completed:
+- 0.6.2 Added an Unreleased section covering probe/naming/resume fixes, engine and CLI fixes, rich progress, paginated history, and current local verification. Corrected the draft package version to the configured 0.3.0-rc1 without claiming publication.
+
+Tests:
+- `cmake --build build -j` and full CTest passed 28/28. Reviewed the rendered Markdown structure and configured release version.
+
+Open questions:
+- None for task 0.6.2.
+
+Next:
+- 0.6.3 Merge phase 0: plan names `phase-0-foundations` into `dev`, but the user requested the `cdm` branch. Reconcile branch/merge instruction against the user's branch preference before changing branches.
