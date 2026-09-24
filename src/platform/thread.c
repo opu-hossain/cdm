@@ -73,9 +73,8 @@ int dm_mutex_unlock(dm_mutex_t *mutex) {
   LeaveCriticalSection(&mutex->cs);
   return 0;
 }
-int dm_mutex_destroy(dm_mutex_t *mutex) {
+void dm_mutex_destroy(dm_mutex_t *mutex) {
   DeleteCriticalSection(&mutex->cs);
-  return 0;
 }
 
 #else /* POSIX */
