@@ -84,7 +84,9 @@ int db_init(const char *db_path) {
       "  extra_headers   TEXT DEFAULT '',"
       "  expected_sha256 TEXT DEFAULT '',"
       "  speed_limit_bps INTEGER DEFAULT 0,"
-      "  reserved_file   INTEGER DEFAULT 0"
+      "  reserved_file   INTEGER DEFAULT 0,"
+      "  etag            TEXT DEFAULT '',"
+      "  last_modified   TEXT DEFAULT ''"
       ");"
       ""
       "CREATE TABLE IF NOT EXISTS chunks ("
@@ -106,10 +108,12 @@ int db_init(const char *db_path) {
 
   static const char *migration_names[] = {"cookie", "referrer", "extra_headers",
                                           "expected_sha256", "speed_limit_bps",
-                                          "reserved_file"};
+                                          "reserved_file", "etag",
+                                          "last_modified"};
   static const char *migration_types[] = {"TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
-                                          "INTEGER DEFAULT 0", "INTEGER DEFAULT 0"};
+                                          "INTEGER DEFAULT 0", "INTEGER DEFAULT 0",
+                                          "TEXT DEFAULT ''", "TEXT DEFAULT ''"};
 
   char *migration_error = NULL;
   rc = sqlite3_exec(g_db, "BEGIN;", NULL, NULL, &migration_error);
@@ -141,7 +145,7 @@ int db_init(const char *db_path) {
     sqlite3_free(migration_error);
   }
 
-  rc = sqlite3_exec(g_db, "PRAGMA user_version = 1; COMMIT;", NULL, NULL,
+  rc = sqlite3_exec(g_db, "PRAGMA user_version = 2; COMMIT;", NULL, NULL,
                     &migration_error);
   if (rc != SQLITE_OK) {
     LOG_ERROR("could not commit database migration: %s",

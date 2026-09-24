@@ -188,3 +188,21 @@ Open questions:
 
 Next:
 - 0.2.4 Wire filename resolution into engine and CLI.
+
+## 2026-09-24 — Codex, task 0.3.1
+
+Branch: `cdm`
+Commit: `feat(db): store etag and last_modified for resume validation` (this entry's commit)
+
+Tasks completed:
+- 0.3.1 Add default-empty `etag` and `last_modified` columns to fresh and migrated downloads tables; advance SQLite `user_version` to 2.
+
+Tests:
+- Test first: a legacy DB row migration test failed because the schema version was 1.
+- After fix: old row retained its status and gained empty validator columns; full `cmake --build build -j` and CTest passed 27/27.
+
+Open questions:
+- The 0.2.4 filename ownership question was answered by the user: daemon renames after probe for automatic names.
+
+Next:
+- Return to 0.2.4 with the selected daemon-side design.

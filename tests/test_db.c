@@ -115,12 +115,33 @@ Test(db, legacy_schema_migrates_transactionally) {
                    "total_size INTEGER DEFAULT 0, status TEXT DEFAULT 'QUEUED', "
                    "priority INTEGER DEFAULT 0, created_at INTEGER);"
                    "CREATE TABLE chunks (download_id INTEGER, range_start "
-                   "INTEGER, range_end INTEGER, bytes_done INTEGER);",
+                   "INTEGER, range_end INTEGER, bytes_done INTEGER);"
+                   "INSERT INTO downloads (id,url,dest_path,status) VALUES "
+                   "(7,'http://legacy/file','/tmp/legacy-file','PAUSED');",
                    NULL, NULL, NULL),
                SQLITE_OK);
   sqlite3_close(legacy);
 
   cr_assert_eq(db_init(path), 0);
+  sqlite3 *reader = NULL;
+  cr_assert_eq(sqlite3_open(path, &reader), SQLITE_OK);
+  sqlite3_stmt *statement = NULL;
+  cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
+                                  &statement, NULL), SQLITE_OK);
+  cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 2);
+  sqlite3_finalize(statement);
+
+  cr_assert_eq(sqlite3_prepare_v2(
+                   reader, "SELECT etag,last_modified,status FROM downloads "
+                           "WHERE id=7", -1, &statement, NULL), SQLITE_OK);
+  cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
+  cr_assert_str_eq((const char *)sqlite3_column_text(statement, 0), "");
+  cr_assert_str_eq((const char *)sqlite3_column_text(statement, 1), "");
+  cr_assert_str_eq((const char *)sqlite3_column_text(statement, 2), "PAUSED");
+  sqlite3_finalize(statement);
+  sqlite3_close(reader);
+
   RequestOptions options = {0};
   options.speed_limit_bps = 10;
   cr_assert_eq(db_insert_download(1, "http://legacy", "/tmp/legacy",
