@@ -7,15 +7,32 @@
 #include <criterion/criterion.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+static int fallback_scenario;
+static int fallback_call;
+static const uint64_t fallback_size = 4ULL * 1024ULL * 1024ULL;
+
+static void fill_file(const char *path, char value, uint64_t length) {
+  int fd = open(path, O_WRONLY);
+  cr_assert_geq(fd, 0);
+  char block[4096];
+  memset(block, value, sizeof(block));
+  for (uint64_t offset = 0; offset < length; offset += sizeof(block))
+    cr_assert_eq(pwrite(fd, block, sizeof(block), (off_t)offset),
+                 (ssize_t)sizeof(block));
+  close(fd);
+}
 
 /* Mocks for external dependencies */
 int curl_client_head(const char *url, const RequestContext *ctx, FileInfo *out) {
   (void)url;
   (void)ctx;
-  out->total_size = 1000;
+  out->total_size = fallback_scenario ? fallback_size : 1000;
   out->supports_ranges = true;
   return 0;
 }
@@ -38,6 +55,31 @@ WorkerPoolResult worker_pool_run(const char *url, const Range *ranges,
   (void)total_speed_limit_bps;
   (void)ctx_in;
   (void)rebalance;
+  if (fallback_scenario) {
+    fallback_call++;
+    WorkerPoolResult attempt = {.all_succeeded = false};
+    if (fallback_call == 1) {
+      cr_assert_gt(n_workers, 1);
+      atomic_store(chunk_progress_slots[0], 1024);
+      atomic_store(total_bytes_downloaded, 1024);
+      return attempt;
+    }
+    if (fallback_call == 2) {
+      cr_assert_eq(n_workers, 1);
+      cr_assert(ranges[0].whole_file);
+      cr_assert_eq(ranges[0].end, fallback_size - 1);
+      fill_file(dest_path, 'B', 4096);
+      atomic_store(total_bytes_downloaded, 4096);
+      return attempt;
+    }
+    cr_assert_eq(fallback_call, 3);
+    cr_assert_gt(n_workers, 1);
+    fill_file(dest_path, 'Z', fallback_size);
+    atomic_store(total_bytes_downloaded, fallback_size);
+    attempt.all_succeeded = true;
+    attempt.total_bytes_downloaded = fallback_size;
+    return attempt;
+  }
   WorkerPoolResult res = {.all_succeeded = true,
                           .total_bytes_downloaded = 1000};
   for (int i = 0; i < n_workers; i++) {
@@ -64,6 +106,8 @@ void rebalance_pool_destroy(RebalancePool *pool) { (void)pool; }
 
 /* Setup / teardown */
 static void setup_engine_test(void) {
+  fallback_scenario = 0;
+  fallback_call = 0;
   setenv("DOWNLOADMGR_ROOT", "/tmp", 1);
   db_init(":memory:"); // use in‑memory DB to avoid "out of memory" errors
 }
@@ -122,4 +166,37 @@ Test(engine_runner, missing_resume_file_is_terminal_and_clears_ranges) {
   cr_assert_eq(d.chunk_count, 0);
   cr_assert_eq(d.total_size, 0);
   cr_assert_eq(atomic_load(&d.bytes_downloaded), 0);
+}
+
+Test(engine_runner, failed_single_stream_fallback_restarts_with_fresh_plan) {
+  fallback_scenario = 1;
+  Download d = {0};
+  d.id = 88;
+  strcpy(d.url, "http://127.0.0.1/fallback.bin");
+  snprintf(d.dest_path, sizeof(d.dest_path), "/tmp/cdm-engine-fallback-%ld.bin",
+           (long)getpid());
+  unlink(d.dest_path);
+  cr_assert_eq(db_insert_download(d.id, d.url, d.dest_path, NULL), 0);
+
+  cr_assert_eq(engine_run_download(&d), -1);
+  cr_assert_eq(fallback_call, 2);
+  cr_assert_eq(d.chunk_count, 0);
+  DbChunkRow chunks[QM_MAX_CHUNKS];
+  cr_assert_eq(db_load_chunks(d.id, chunks, QM_MAX_CHUNKS), 0);
+  cr_assert_neq(access(d.dest_path, F_OK), 0);
+
+  cr_assert_eq(engine_run_download(&d), 0);
+  cr_assert_eq(fallback_call, 3);
+  cr_assert_eq(file_get_size(d.dest_path), fallback_size);
+  int fd = open(d.dest_path, O_RDONLY);
+  cr_assert_geq(fd, 0);
+  char block[4096], expected[4096];
+  memset(expected, 'Z', sizeof(expected));
+  for (uint64_t offset = 0; offset < fallback_size; offset += sizeof(block)) {
+    cr_assert_eq(pread(fd, block, sizeof(block), (off_t)offset),
+                 (ssize_t)sizeof(block));
+    cr_assert_eq(memcmp(block, expected, sizeof(block)), 0);
+  }
+  close(fd);
+  unlink(d.dest_path);
 }

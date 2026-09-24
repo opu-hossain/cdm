@@ -272,12 +272,23 @@ int engine_run_download(struct Download *d) {
       atomic_load(&d->cancel_requested) || atomic_load(&d->pause_requested);
 
   /* --- Fallback: single‑connection retry if parallel failed --- */
+  bool tried_single_fallback = false;
   if (!result.all_succeeded && n_ranges > 1 && !user_stopped) {
     LOG_ERROR(
         "Parallel download failed, retrying with a single connection...\n");
+    tried_single_fallback = true;
+    db_delete_chunks(d->id);
+    memset(d->chunks, 0, sizeof(d->chunks));
+    d->chunk_count = 0;
+    d->progress = 0.0f;
     atomic_store(&d->bytes_downloaded, 0);
+    for (int i = 0; i < QM_MAX_CHUNKS; i++)
+      atomic_store(&d->chunk_live_bytes[i], 0);
     Range single_range = {
-        .start = 0, .end = 0, .resume_offset = 0, .whole_file = true,
+        .start = 0,
+        .end = info.total_size ? info.total_size - 1 : 0,
+        .resume_offset = 0,
+        .whole_file = true,
         .unknown_size = info.total_size == 0};
     result =
         worker_pool_run(d->url, &single_range, 1, d->dest_path,
@@ -286,9 +297,14 @@ int engine_run_download(struct Download *d) {
   }
 
   if (!result.all_succeeded) {
+    if (tried_single_fallback && d->dest_path[0] != '\0')
+      unlink(d->dest_path);
     if (user_stopped) {
       LOG_WARN("Download %u %s by user\n", d->id,
                atomic_load(&d->cancel_requested) ? "canceled" : "paused");
+    } else if (tried_single_fallback) {
+      LOG_ERROR("Single-connection fallback failed; download %u will restart "
+                "from scratch\n", d->id);
     } else {
       LOG_ERROR("One or more workers failed — resume data retained "
                 "for download %u\n",

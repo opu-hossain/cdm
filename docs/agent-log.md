@@ -94,3 +94,22 @@ Open questions:
 
 Next:
 - 0.1.6 Reset the chunk plan before single-stream fallback.
+
+## 2026-09-24 — Codex, task 0.1.6
+
+Branch: `cdm`
+Commit: `fix(engine): reset chunk plan before single-stream fallback` (this entry's commit)
+
+Tasks completed:
+- 0.1.6 Delete persisted/in-memory segmented chunks before a whole-file fallback, set its known-size end correctly, and remove a failed fallback file so the retry starts fresh.
+
+Tests:
+- Test first: mocked parallel failure followed by a partial single-stream failure failed on the old `end=0` fallback range.
+- After fix: the focused test confirmed no stale chunks or file, then verified all 4 MiB of the fresh retry.
+- Full `cmake --build build -j` and CTest passed 27/27.
+
+Open questions:
+- None for task 0.1.6.
+
+Next:
+- 0.1.7 Protect rebalance split mutations with the queue mutex.
