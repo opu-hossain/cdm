@@ -26,3 +26,29 @@ with a versioned row that includes total size, or display local file size and
 
 Decision (user, 2026-09-25): Use the daemon's recorded total size via a new
 versioned IPC message. Task 0.5.3 adds type 36 and leaves type 35 unchanged.
+
+## Task 0.6.3 — Phase 0 merge gates and branch destination
+
+The user instructed work on branch `cdm` and said they will push only after the
+full plan; `PLAN.md` instead specifies merging `phase-0-foundations` into
+`dev` after phase 0. Do not merge or switch branches without reconciling that
+instruction. Continue subsequent independent work on `cdm` as requested.
+
+The phase 0 acceptance checklist asks for CTest count to increase by at least
+12; it rose from 24 at baseline to 28 (four additional targets). Inventing
+empty or duplicate tests merely to meet the count would not add coverage.
+The seven-item reconciliation also leaves plaintext cookies open; a privacy
+design and code TODO/defer decision are needed for the formal gate.
+
+Post-phase sanitizer check: the ASan build in `/tmp/cdm-asan-build` passed
+28/28. The TSan build compiled, and TSan-instrumented CLI list/browser daemon
+integrations completed, but Criterion targets crashed during harness setup
+inside `libcriterion`/nanomsg. Browser integration produced TSan reports
+inside uninstrumented GLib/GIO invoked by libnotify from
+`src/core/scheduler.c:86`. A focused TSan strategy or suppression/notification
+isolation needs review before claiming a clean TSan phase gate. The browser
+reports were written only in temporary build/test output, not committed.
+
+Task 0.6.3 remains unchecked. Clarify whether the `cdm` branch replaces the
+plan's per-phase merges and how to treat the quantitative test-count and TSan
+gates before any merge. No push is authorized by the user's latest preference.

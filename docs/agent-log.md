@@ -498,3 +498,22 @@ Open questions:
 
 Next:
 - 0.6.3 Merge phase 0: plan names `phase-0-foundations` into `dev`, but the user requested the `cdm` branch. Reconcile branch/merge instruction against the user's branch preference before changing branches.
+
+## 2026-09-25 — Codex, phase 0 post-check
+
+Branch: `cdm`
+Commit: `docs(plan): record phase 0 merge gate blockers` (this entry's commit)
+
+Tasks completed:
+- Audited task 0.6.3 without merging or pushing. It remains unchecked because the user requested continued work on `cdm`, CTest increased only from 24 to 28 against a +12 acceptance gate, plaintext cookies remain unresolved, and TSan cannot yet be called clean.
+- Recorded those issues and the sanitizer evidence in `docs/open-questions.md` so the next independent task can proceed.
+
+Tests:
+- Debug CTest 28/28 and ASan CTest 28/28 passed.
+- TSan build succeeded. Criterion-based TSan cases crashed in harness setup; daemon CLI list and browser integration completed, but browser integration emitted TSan reports in GLib/GIO through libnotify. No new cdm-source TSan race was isolated from that run.
+
+Open questions:
+- Task 0.6.3 merge destination, CTest +12 gate, plaintext-cookie defer/fix, and TSan gate strategy.
+
+Next:
+- 1.1.1 Extend config with proxy fields on the user-selected `cdm` branch; 0.6.3 remains deferred.
