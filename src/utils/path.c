@@ -175,20 +175,42 @@ bool path_filename_from_disposition(const char *header, char *out,
 void path_filename_from_url(const char *url, char *out, size_t out_size) {
   if (!out || out_size == 0)
     return;
-
-  const char *slash = strrchr(url, '/');
-  const char *name = slash ? slash + 1 : url;
   char temp[512];
-  strncpy(temp, name, sizeof(temp) - 1);
-  temp[sizeof(temp) - 1] = '\0';
+  size_t url_path_len = strcspn(url, "?#");
+  if (url_path_len >= sizeof(temp))
+    url_path_len = sizeof(temp) - 1;
+  memcpy(temp, url, url_path_len);
+  temp[url_path_len] = '\0';
 
-  char *query = strchr(temp, '?');
-  if (query)
-    *query = '\0';
-  if (temp[0] == '\0')
-    strncpy(temp, "download.bin", sizeof(temp) - 1);
+  const char *slash = strrchr(temp, '/');
+  const char *name = slash ? slash + 1 : temp;
+  if (!name[0])
+    name = "download.bin";
 
-  strncpy(out, temp, out_size - 1);
+  char decoded[512];
+  size_t n = 0;
+  for (size_t i = 0; name[i] && n + 1 < sizeof(decoded); i++) {
+    unsigned char ch = (unsigned char)name[i];
+    if (ch == '%' && name[i + 1] && name[i + 2]) {
+      int hi = hex_digit(name[i + 1]);
+      int lo = hex_digit(name[i + 2]);
+      if (hi >= 0 && lo >= 0) {
+        unsigned char escaped = (unsigned char)(hi * 16 + lo);
+        if (escaped >= 32 && escaped != 127 && escaped != '/' &&
+            escaped != '\\') {
+          ch = escaped;
+          i += 2;
+        }
+      }
+    }
+    decoded[n++] = (char)ch;
+  }
+  decoded[n] = '\0';
+
+  const char *chosen = safe_disposition_name(decoded) ? decoded : name;
+  if (!safe_disposition_name(chosen))
+    chosen = "download.bin";
+  strncpy(out, chosen, out_size - 1);
   out[out_size - 1] = '\0';
 }
 

@@ -170,3 +170,21 @@ Open questions:
 
 Next:
 - 0.2.3 Percent-decode URL-derived filenames.
+
+## 2026-09-24 — Codex, task 0.2.3
+
+Branch: `cdm`
+Commit: `feat(path): percent-decode URL-derived filenames safely` (this entry's commit)
+
+Tasks completed:
+- 0.2.3 Decode safe percent escapes once in the URL path segment after stripping query and fragment; preserve encoded separators and invalid escapes, and avoid traversal filenames.
+
+Tests:
+- Test first: a URL with `%20` failed the new filename test.
+- After fix: focused filename decoding passed; full `cmake --build build -j` and CTest passed 27/27.
+
+Open questions:
+- None for task 0.2.3.
+
+Next:
+- 0.2.4 Wire filename resolution into engine and CLI.

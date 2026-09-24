@@ -156,3 +156,24 @@ Test(path, rejects_unsafe_content_disposition_filenames) {
     cr_assert_eq(name[0], '\0');
   }
 }
+
+Test(path, decodes_safe_url_filename_escapes_once) {
+  struct {
+    const char *url;
+    const char *expected;
+  } cases[] = {
+      {"https://example.test/report%20one.txt?token=abc", "report one.txt"},
+      {"https://example.test/caf%C3%A9.txt#section", "caf\xC3\xA9.txt"},
+      {"https://example.test/a%2Fb.txt", "a%2Fb.txt"},
+      {"https://example.test/a%5Cb.txt", "a%5Cb.txt"},
+      {"https://example.test/%2e%2e", "%2e%2e"},
+      {"https://example.test/a%ZZb.txt", "a%ZZb.txt"},
+      {"https://example.test/a%2520b.txt", "a%20b.txt"},
+      {"https://example.test/file.txt?path=/wrong#fragment", "file.txt"},
+  };
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    char name[128];
+    path_filename_from_url(cases[i].url, name, sizeof(name));
+    cr_assert_str_eq(name, cases[i].expected, "case %zu", i);
+  }
+}
