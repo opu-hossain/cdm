@@ -29,6 +29,9 @@ typedef enum {
   MSG_BROWSER_DISMISS,
   MSG_BROWSER_SUBSCRIBE_PROGRESS,
   MSG_BROWSER_PROGRESS_EVENT,
+  /* Same payload as MSG_ADD_DOWNLOAD; daemon may resolve the provisional
+   * URL-derived destination after probing response headers. */
+  MSG_ADD_DOWNLOAD_AUTO = 32,
 } MsgType;
 
 /* Every message on the wire starts with this header. */

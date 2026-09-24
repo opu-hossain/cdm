@@ -40,6 +40,10 @@ int db_insert_download(uint32_t id, const char *url, const char *dest_path,
 int db_insert_reserved_download(uint32_t id, const char *url,
                                 const char *dest_path,
                                 const RequestOptions *opts);
+int db_insert_reserved_download_auto(uint32_t id, const char *url,
+                                     const char *dest_path,
+                                     const RequestOptions *opts);
+int db_update_resolved_destination(uint32_t id, const char *dest_path);
 bool db_destination_exists(const char *dest_path);
 int db_update_status(uint32_t id, const char *status);
 int db_update_total_size(uint32_t id, uint64_t total_size);

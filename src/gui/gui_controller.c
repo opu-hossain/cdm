@@ -24,6 +24,7 @@ typedef enum {
 typedef struct {
   GuiControllerCommandType type;
   uint32_t id;
+  bool auto_filename;
   char url[IPC_MAX_URL_LEN];
   char dest_path[IPC_MAX_PATH_LEN];
   IpcDownloadOptions options;
@@ -152,11 +153,13 @@ static bool dequeue_command(GuiControllerCommand *command) {
   return true;
 }
 
-bool gui_controller_enqueue_add(const char *url, const char *dest_path,
-                                const IpcDownloadOptions *options) {
+static bool enqueue_add(const char *url, const char *dest_path,
+                        const IpcDownloadOptions *options,
+                        bool auto_filename) {
   if (!url || !dest_path)
     return false;
   GuiControllerCommand command = {.type = GUI_CONTROLLER_COMMAND_ADD};
+  command.auto_filename = auto_filename;
   strncpy(command.url, url, sizeof(command.url) - 1);
   strncpy(command.dest_path, dest_path, sizeof(command.dest_path) - 1);
   if (options) {
@@ -182,6 +185,16 @@ bool gui_controller_enqueue_add(const char *url, const char *dest_path,
     }
   }
   return enqueue_command(&command);
+}
+
+bool gui_controller_enqueue_add(const char *url, const char *dest_path,
+                                const IpcDownloadOptions *options) {
+  return enqueue_add(url, dest_path, options, false);
+}
+
+bool gui_controller_enqueue_add_auto(const char *url, const char *dest_path,
+                                     const IpcDownloadOptions *options) {
+  return enqueue_add(url, dest_path, options, true);
 }
 
 static bool enqueue_id_command(GuiControllerCommandType type, uint32_t id) {
@@ -269,7 +282,8 @@ static void process_command(const GuiControllerCommand *command) {
   switch (command->type) {
   case GUI_CONTROLLER_COMMAND_ADD: {
     uint32_t id = 0;
-    succeeded = gui_client_add_download(
+    succeeded = (command->auto_filename ? gui_client_add_download_auto
+                                        : gui_client_add_download)(
         command->url, command->dest_path,
         command->options.cookie || command->options.referrer ||
                 command->options.extra_headers ||

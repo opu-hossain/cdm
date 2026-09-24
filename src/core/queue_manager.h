@@ -60,6 +60,7 @@ typedef struct Download {
   DownloadChunk chunks[QM_MAX_CHUNKS];
   int chunk_count;
   bool reserved_file;
+  _Atomic bool auto_filename; // daemon may replace URL-derived name after probe
   int retry_count;
   time_t next_retry_at;
 
@@ -93,6 +94,8 @@ typedef struct {
 /** Add a new download to the queue. Returns its ID (0 on failure). */
 uint32_t queue_manager_add(const char *url, const char *dest_path,
                            const RequestOptions *opts);
+uint32_t queue_manager_add_auto(const char *url, const char *dest_path,
+                                const RequestOptions *opts);
 
 /** Insert an already-constructed Download (used on daemon restore). */
 void queue_manager_add_existing(Download *d);

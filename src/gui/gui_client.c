@@ -266,8 +266,9 @@ bool gui_client_reload_config(void) {
   return send_with_retry(send_reload_config, 0);
 }
 
-bool gui_client_add_download(const char *url, const char *dest,
-                             const IpcDownloadOptions *opts, uint32_t *out_id) {
+static bool client_add_download(const char *url, const char *dest,
+                                const IpcDownloadOptions *opts,
+                                uint32_t *out_id, bool auto_filename) {
   if (g_cmd_fd < 0) {
     g_cmd_fd = ipc_client_connect_timeout(GUI_CMD_TIMEOUT_MS);
     if (g_cmd_fd < 0) {
@@ -277,7 +278,9 @@ bool gui_client_add_download(const char *url, const char *dest,
     note_restored();
   }
 
-  uint32_t id = ipc_send_add_download(g_cmd_fd, url, dest, opts);
+  uint32_t id = auto_filename
+                    ? ipc_send_add_download_auto(g_cmd_fd, url, dest, opts)
+                    : ipc_send_add_download(g_cmd_fd, url, dest, opts);
   // Do not retry an add after an IPC failure: the request may have reached the
   // daemon even if its response was lost, and retrying could create a
   // duplicate.
@@ -288,6 +291,17 @@ bool gui_client_add_download(const char *url, const char *dest,
     note_lost();
   }
   return id != 0;
+}
+
+bool gui_client_add_download(const char *url, const char *dest,
+                             const IpcDownloadOptions *opts, uint32_t *out_id) {
+  return client_add_download(url, dest, opts, out_id, false);
+}
+
+bool gui_client_add_download_auto(const char *url, const char *dest,
+                                  const IpcDownloadOptions *opts,
+                                  uint32_t *out_id) {
+  return client_add_download(url, dest, opts, out_id, true);
 }
 
 bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count) {

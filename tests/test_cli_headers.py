@@ -23,6 +23,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.send_response(200)
         self.send_header("Content-Length", "1")
+        self.send_header("Content-Disposition", "attachment; filename=server-name.bin")
         self.end_headers()
 
     def do_GET(self):
@@ -91,6 +92,12 @@ def main(cdm: str) -> None:
             assert cookie == referrer == sha256 == ""
             assert speed == 0
             assert headers == "X-Test: 1\nX-Test: 1", repr(headers)
+            final_path = root / "server-name.bin"
+            deadline = time.monotonic() + 10
+            while not final_path.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert final_path.read_bytes() == b"x"
+            assert not (root / "sample.bin").exists()
         finally:
             daemon.send_signal(signal.SIGTERM)
             try:

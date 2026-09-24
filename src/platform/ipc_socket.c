@@ -400,6 +400,7 @@ static bool valid_message_header(const MsgHeader *header) {
 
   switch (header->type) {
   case MSG_ADD_DOWNLOAD:
+  case MSG_ADD_DOWNLOAD_AUTO:
   case MSG_BROWSER_OFFER:
     return header->length <= IPC_MAX_FRAME_SIZE;
   case MSG_PAUSE:
@@ -474,13 +475,15 @@ static void send_command_result(int client_fd, IpcResult result) {
 }
 
 static uint32_t reserve_download(const char *url, const char *dest,
-                                 const RequestOptions *opts) {
+                                 const RequestOptions *opts,
+                                 bool auto_filename) {
   char unique_dest[IPC_MAX_PATH_LEN];
   uint32_t id = 0;
   for (unsigned int attempt = 0; attempt < 1000000; attempt++) {
     if (!path_make_unique(dest, unique_dest, sizeof(unique_dest)))
       break;
-    id = queue_manager_add(url, unique_dest, opts);
+    id = auto_filename ? queue_manager_add_auto(url, unique_dest, opts)
+                       : queue_manager_add(url, unique_dest, opts);
     if (id == 0)
       break;
     int claim = file_preallocate(unique_dest, 0);
@@ -488,7 +491,11 @@ static uint32_t reserve_download(const char *url, const char *dest,
       Download *download = queue_manager_find_by_id(id);
       if (download)
         download->reserved_file = true;
-      if (db_insert_reserved_download(id, url, unique_dest, opts) == 0)
+      int saved = auto_filename
+                      ? db_insert_reserved_download_auto(id, url, unique_dest,
+                                                         opts)
+                      : db_insert_reserved_download(id, url, unique_dest, opts);
+      if (saved == 0)
         break;
       unlink(unique_dest);
     }
@@ -505,7 +512,8 @@ static uint32_t reserve_download(const char *url, const char *dest,
 /** Dispatch an incoming message. */
 static void handle_message(int client_fd, MsgHeader *hdr) {
   switch (hdr->type) {
-  case MSG_ADD_DOWNLOAD: {
+  case MSG_ADD_DOWNLOAD:
+  case MSG_ADD_DOWNLOAD_AUTO: {
     char url[IPC_MAX_URL_LEN];
     char dest[IPC_MAX_PATH_LEN];
     char options_json[8192];
@@ -543,7 +551,8 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       }
     }
 
-    uint32_t id = reserve_download(url, dest, &opts);
+    uint32_t id = reserve_download(url, dest, &opts,
+                                   hdr->type == MSG_ADD_DOWNLOAD_AUTO);
     LOG_INFO("MSG_ADD_DOWNLOAD: queue_manager_add returned id=%u", id);
 
     ipc_write_exact(client_fd, &id, sizeof(id));
@@ -626,7 +635,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         RequestOptions opts = {0};
         snprintf(opts.referrer, sizeof(opts.referrer), "%s",
                  slot->offer.referrer);
-        download_id = reserve_download(slot->offer.url, dest, &opts);
+        download_id = reserve_download(slot->offer.url, dest, &opts, false);
         if (download_id) {
           slot->offer.download_id = download_id;
           slot->offer.state = IPC_BROWSER_CONFIRMED;
@@ -1068,8 +1077,9 @@ void ipc_client_disconnect(int fd) {
 
 /* High‑level request / response */
 
-uint32_t ipc_send_add_download(int sock, const char *url, const char *dest_path,
-                               const IpcDownloadOptions *options) {
+static uint32_t send_add_download(int sock, MsgType type, const char *url,
+                                  const char *dest_path,
+                                  const IpcDownloadOptions *options) {
   if (sock < 0 || !url || !dest_path)
     return 0;
 
@@ -1097,7 +1107,7 @@ uint32_t ipc_send_add_download(int sock, const char *url, const char *dest_path,
                      (uint32_t)strlen(dest_path) + 4 +
                      (uint32_t)strlen(json_str);
 
-  MsgHeader hdr = {.length = payload, .type = MSG_ADD_DOWNLOAD};
+  MsgHeader hdr = {.length = payload, .type = type};
   bool sent = ipc_write_exact(sock, &hdr, sizeof(hdr)) == 0;
   if (sent)
     sent = ipc_write_exact(sock, &(uint32_t){(uint32_t)strlen(url)},
@@ -1122,6 +1132,18 @@ uint32_t ipc_send_add_download(int sock, const char *url, const char *dest_path,
   if (options_json)
     cJSON_free(options_json);
   return sent ? id : 0;
+}
+
+uint32_t ipc_send_add_download(int sock, const char *url, const char *dest_path,
+                               const IpcDownloadOptions *options) {
+  return send_add_download(sock, MSG_ADD_DOWNLOAD, url, dest_path, options);
+}
+
+uint32_t ipc_send_add_download_auto(int sock, const char *url,
+                                    const char *dest_path,
+                                    const IpcDownloadOptions *options) {
+  return send_add_download(sock, MSG_ADD_DOWNLOAD_AUTO, url, dest_path,
+                           options);
 }
 
 int ipc_client_connect_timeout(int timeout_ms) {

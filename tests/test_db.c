@@ -1,6 +1,7 @@
 #include "../src/persistence/db.h"
 #include <sqlite3.h>
 #include <criterion/criterion.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -129,16 +130,17 @@ Test(db, legacy_schema_migrates_transactionally) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 2);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 3);
   sqlite3_finalize(statement);
 
   cr_assert_eq(sqlite3_prepare_v2(
-                   reader, "SELECT etag,last_modified,status FROM downloads "
+                   reader, "SELECT etag,last_modified,auto_filename,status FROM downloads "
                            "WHERE id=7", -1, &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
   cr_assert_str_eq((const char *)sqlite3_column_text(statement, 0), "");
   cr_assert_str_eq((const char *)sqlite3_column_text(statement, 1), "");
-  cr_assert_str_eq((const char *)sqlite3_column_text(statement, 2), "PAUSED");
+  cr_assert_eq(sqlite3_column_int(statement, 2), 0);
+  cr_assert_str_eq((const char *)sqlite3_column_text(statement, 3), "PAUSED");
   sqlite3_finalize(statement);
   sqlite3_close(reader);
 
@@ -147,6 +149,40 @@ Test(db, legacy_schema_migrates_transactionally) {
   cr_assert_eq(db_insert_download(1, "http://legacy", "/tmp/legacy",
                                   &options),
                0);
+  db_close();
+  unlink(path);
+}
+
+Test(db, automatic_filename_mode_survives_restart) {
+  char path[128];
+  char initial_path[128];
+  char resolved_path[128];
+  snprintf(path, sizeof(path), "/tmp/cdm-auto-mode-%ld.db", (long)getpid());
+  snprintf(initial_path, sizeof(initial_path), "/tmp/cdm-auto-%ld.tmp",
+           (long)getpid());
+  snprintf(resolved_path, sizeof(resolved_path), "/tmp/cdm-auto-%ld.bin",
+           (long)getpid());
+  unlink(path);
+  db_close();
+  cr_assert_eq(db_init(path), 0);
+  cr_assert_eq(db_insert_reserved_download_auto(
+                   81, "http://127.0.0.1/file", initial_path, NULL), 0);
+  db_close();
+  cr_assert_eq(db_init(path), 0);
+  cr_assert_eq(db_restore_queue(), 0);
+  Download *download = queue_manager_find_by_id(81);
+  cr_assert_not_null(download);
+  cr_assert(atomic_load(&download->auto_filename));
+  cr_assert_eq(db_update_resolved_destination(81, resolved_path), 0);
+  queue_manager_remove(81);
+  db_close();
+  cr_assert_eq(db_init(path), 0);
+  cr_assert_eq(db_restore_queue(), 0);
+  download = queue_manager_find_by_id(81);
+  cr_assert_not_null(download);
+  cr_assert(!atomic_load(&download->auto_filename));
+  cr_assert_str_eq(download->dest_path, resolved_path);
+  queue_manager_remove(81);
   db_close();
   unlink(path);
 }

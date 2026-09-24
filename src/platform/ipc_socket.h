@@ -85,6 +85,9 @@ int ipc_client_connect_timeout(int timeout_ms);
 /* High-level requests and responses. */
 uint32_t ipc_send_add_download(int sock, const char *url, const char *dest_path,
                                const IpcDownloadOptions *options);
+uint32_t ipc_send_add_download_auto(int sock, const char *url,
+                                    const char *dest_path,
+                                    const IpcDownloadOptions *options);
 int ipc_send_pause(int sock, uint32_t id);
 int ipc_send_resume(int sock, uint32_t id);
 int ipc_send_cancel(int sock, uint32_t id);

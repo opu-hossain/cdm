@@ -126,8 +126,8 @@ static void ensure_mutex(void) { call_once(&g_mutex_once, initialize_mutex); }
 
 /* Lifecycle */
 
-uint32_t queue_manager_add(const char *url, const char *dest_path,
-                           const RequestOptions *opts) {
+static uint32_t add_download(const char *url, const char *dest_path,
+                             const RequestOptions *opts, bool auto_filename) {
   ensure_mutex();
 
   if (!is_safe_dest_path(dest_path))
@@ -141,6 +141,7 @@ uint32_t queue_manager_add(const char *url, const char *dest_path,
   d->url[sizeof(d->url) - 1] = '\0';
   strncpy(d->dest_path, dest_path, sizeof(d->dest_path) - 1);
   d->dest_path[sizeof(d->dest_path) - 1] = '\0';
+  atomic_store(&d->auto_filename, auto_filename);
 
   if (request_options_present(opts)) {
     d->request = malloc(sizeof(*d->request));
@@ -161,6 +162,16 @@ uint32_t queue_manager_add(const char *url, const char *dest_path,
   dm_mutex_unlock(&g_mutex);
 
   return d->id;
+}
+
+uint32_t queue_manager_add(const char *url, const char *dest_path,
+                           const RequestOptions *opts) {
+  return add_download(url, dest_path, opts, false);
+}
+
+uint32_t queue_manager_add_auto(const char *url, const char *dest_path,
+                                const RequestOptions *opts) {
+  return add_download(url, dest_path, opts, true);
 }
 
 void queue_manager_add_existing(Download *d) {

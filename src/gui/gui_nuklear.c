@@ -328,8 +328,8 @@ static bool add_download(const char *url, const char *folder,
   bool has_options = options.cookie || options.referrer ||
                      options.extra_headers || options.expected_sha256 ||
                      options.speed_limit_bps > 0;
-  return gui_controller_enqueue_add(url, unique_path,
-                                    has_options ? &options : NULL);
+  return gui_controller_enqueue_add_auto(url, unique_path,
+                                         has_options ? &options : NULL);
 }
 
 /* SDL dispatches file URIs through the desktop on Linux, Windows and macOS.

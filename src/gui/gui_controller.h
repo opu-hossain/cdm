@@ -77,6 +77,8 @@ bool gui_controller_poll(GuiControllerEvent *event);
 
 bool gui_controller_enqueue_add(const char *url, const char *dest_path,
                                 const IpcDownloadOptions *options);
+bool gui_controller_enqueue_add_auto(const char *url, const char *dest_path,
+                                     const IpcDownloadOptions *options);
 bool gui_controller_enqueue_pause(uint32_t id);
 bool gui_controller_enqueue_resume(uint32_t id);
 bool gui_controller_enqueue_cancel(uint32_t id);

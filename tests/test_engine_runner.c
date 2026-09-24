@@ -11,10 +11,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static int fallback_scenario;
 static int fallback_call;
+static bool filename_scenario;
 static const uint64_t fallback_size = 4ULL * 1024ULL * 1024ULL;
 
 static void fill_file(const char *path, char value, uint64_t length) {
@@ -32,8 +34,12 @@ static void fill_file(const char *path, char value, uint64_t length) {
 int curl_client_head(const char *url, const RequestContext *ctx, FileInfo *out) {
   (void)url;
   (void)ctx;
+  memset(out, 0, sizeof(*out));
   out->total_size = fallback_scenario ? fallback_size : 1000;
   out->supports_ranges = true;
+  if (filename_scenario)
+    strcpy(out->content_disposition,
+           "attachment; filename=\"server-name.bin\"");
   return 0;
 }
 
@@ -85,7 +91,8 @@ WorkerPoolResult worker_pool_run(const char *url, const Range *ranges,
   for (int i = 0; i < n_workers; i++) {
     res.chunk_succeeded[i] = true;
   }
-  file_preallocate(dest_path, 1000);
+  if (!filename_scenario)
+    file_preallocate(dest_path, 1000);
   return res;
 }
 
@@ -113,6 +120,7 @@ void rebalance_pool_destroy(RebalancePool *pool) { (void)pool; }
 static void setup_engine_test(void) {
   fallback_scenario = 0;
   fallback_call = 0;
+  filename_scenario = false;
   setenv("DOWNLOADMGR_ROOT", "/tmp", 1);
   db_init(":memory:"); // use in‑memory DB to avoid "out of memory" errors
 }
@@ -135,6 +143,53 @@ Test(engine_runner, run_success) {
 
   uint64_t size = file_get_size("/tmp/test_engine_out");
   cr_assert_eq(size, 1000, "Output file should be 1000 bytes");
+}
+
+Test(engine_runner, renames_automatic_destination_after_probe) {
+  char dir[128];
+  snprintf(dir, sizeof(dir), "/tmp/cdm-auto-name-%ld", (long)getpid());
+  cr_assert_eq(mkdir(dir, 0700), 0);
+  Download d = {.id = 77, .auto_filename = true, .reserved_file = true};
+  strcpy(d.url, "http://127.0.0.1/download.php?id=5");
+  snprintf(d.dest_path, sizeof(d.dest_path), "%s/download.php", dir);
+  cr_assert_eq(file_preallocate(d.dest_path, 0), 0);
+  cr_assert_eq(db_insert_download(d.id, d.url, d.dest_path, NULL), 0);
+  filename_scenario = true;
+
+  cr_assert_eq(engine_run_download(&d), 0);
+  char expected[256];
+  snprintf(expected, sizeof(expected), "%s/server-name.bin", dir);
+  cr_assert_str_eq(d.dest_path, expected);
+  cr_assert(!atomic_load(&d.auto_filename));
+  cr_assert_eq(file_get_size(expected), 1000);
+  char old[256];
+  snprintf(old, sizeof(old), "%s/download.php", dir);
+  cr_assert_neq(access(old, F_OK), 0);
+  DbDownloadRow rows[1] = {0};
+  cr_assert_eq(db_list_all_downloads(rows, 1), 1);
+  cr_assert_str_eq(rows[0].dest_path, expected);
+  unlink(expected);
+  rmdir(dir);
+}
+
+Test(engine_runner, keeps_explicit_destination_after_probe) {
+  char dir[128];
+  snprintf(dir, sizeof(dir), "/tmp/cdm-explicit-name-%ld", (long)getpid());
+  cr_assert_eq(mkdir(dir, 0700), 0);
+  Download d = {.id = 78, .reserved_file = true};
+  strcpy(d.url, "http://127.0.0.1/download.php?id=5");
+  snprintf(d.dest_path, sizeof(d.dest_path), "%s/chosen.bin", dir);
+  cr_assert_eq(file_preallocate(d.dest_path, 0), 0);
+  cr_assert_eq(db_insert_download(d.id, d.url, d.dest_path, NULL), 0);
+  filename_scenario = true;
+
+  cr_assert_eq(engine_run_download(&d), 0);
+  char chosen[256];
+  snprintf(chosen, sizeof(chosen), "%s/chosen.bin", dir);
+  cr_assert_str_eq(d.dest_path, chosen);
+  cr_assert_eq(file_get_size(chosen), 1000);
+  unlink(chosen);
+  rmdir(dir);
 }
 
 Test(engine_runner, fills_claimed_file) {

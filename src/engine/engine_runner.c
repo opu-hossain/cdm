@@ -10,6 +10,7 @@
 #include "../platform/thread.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
+#include "../utils/path.h"
 #include "finalize.h"
 #include "segmenter.h"
 #include "worker_pool.h"
@@ -17,6 +18,7 @@
 #include <errno.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -83,6 +85,68 @@ static bool chunk_is_complete(const DownloadChunk *c) {
   return c->bytes_done >= (c->range_end - c->range_start + 1);
 }
 
+static int resolve_auto_filename(struct Download *d, const FileInfo *info) {
+  if (!atomic_load(&d->auto_filename) || d->chunk_count > 0)
+    return 0;
+
+  char old_path[sizeof(d->dest_path)];
+  memcpy(old_path, d->dest_path, sizeof(old_path));
+  char resolved[sizeof(d->dest_path)];
+  memcpy(resolved, old_path, sizeof(resolved));
+  char from_header[512];
+  char from_url[512];
+  path_filename_from_url(d->url, from_url, sizeof(from_url));
+  bool header_name = path_filename_from_disposition(
+      info->content_disposition, from_header, sizeof(from_header));
+
+  if (header_name && strcmp(from_header, from_url) != 0) {
+    const char *slash = strrchr(old_path, '/');
+    if (slash) {
+      char directory[sizeof(old_path)];
+      size_t length = slash == old_path ? 1 : (size_t)(slash - old_path);
+      memcpy(directory, old_path, length);
+      directory[length] = '\0';
+      char requested[sizeof(old_path)];
+      if (path_join(directory, from_header, requested, sizeof(requested)) &&
+          strcmp(requested, old_path) != 0) {
+        bool linked = !d->reserved_file;
+        for (int attempt = 0; attempt < 1000000; attempt++) {
+          if (!path_make_unique(requested, resolved, sizeof(resolved)))
+            return -1;
+          if (!d->reserved_file)
+            break;
+          if (link(old_path, resolved) == 0) {
+            linked = true;
+            break;
+          }
+          if (errno != EEXIST)
+            return -1;
+        }
+        if (!linked)
+          return -1;
+      }
+    }
+  }
+
+  bool moved = strcmp(old_path, resolved) != 0;
+  dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
+  dm_mutex_lock(mutex);
+  int persisted = db_update_resolved_destination(d->id, resolved);
+  if (persisted == 0) {
+    snprintf(d->dest_path, sizeof(d->dest_path), "%s", resolved);
+    atomic_store(&d->auto_filename, false);
+  }
+  dm_mutex_unlock(mutex);
+  if (persisted != 0) {
+    if (moved && d->reserved_file)
+      unlink(resolved);
+    return -1;
+  }
+  if (moved && d->reserved_file && unlink(old_path) != 0)
+    LOG_WARN("Could not remove old reserved destination: %s", old_path);
+  return 0;
+}
+
 /**
  * Discard all chunk state for a download.  If `also_delete_file` is true
  * the destination file is removed from disk.
@@ -138,6 +202,9 @@ int engine_run_download(struct Download *d) {
     LOG_ERROR("Metadata probe failed for: %s\n", d->url);
     return -1;
   }
+
+  if (resolve_auto_filename(d, &info) != 0)
+    return -1;
 
   LOG_INFO("Size: %llu bytes, Ranges: %s\n",
            (unsigned long long)info.total_size,

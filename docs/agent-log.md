@@ -206,3 +206,25 @@ Open questions:
 
 Next:
 - Return to 0.2.4 with the selected daemon-side design.
+
+## 2026-09-24 — Codex, task 0.2.4
+
+Branch: `cdm`
+Commit: `feat(engine): use Content-Disposition and decoded URL for names` (this entry's commit)
+
+Tasks completed:
+- 0.2.4 Add `MSG_ADD_DOWNLOAD_AUTO` (type 32, same payload as add) for CLI and normal GUI adds; browser-confirmed and retry paths keep their explicit filenames.
+- Persist automatic filename provenance (`auto_filename`, schema version 3), resolve a safe `Content-Disposition` name after daemon probing, claim the new path without overwriting an existing file, and update DB and in-memory destination together under the queue mutex.
+- CLI reports its path as provisional because the final name can change after probing.
+
+Tests:
+- Test first: an engine test for a reserved automatic destination failed to compile before the provenance field existed.
+- Engine tests cover automatic rename and explicit-name preservation; SQLite test covers provenance across restart and clearing after resolution.
+- CLI integration uses 127.0.0.1 and verifies the final file appears under the server name while the provisional URL name disappears.
+- Full `cmake --build build -j` and CTest passed 27/27.
+
+Open questions:
+- None for task 0.2.4; the user selected daemon-side rename.
+
+Next:
+- 0.3.2 Capture validators during probe.
