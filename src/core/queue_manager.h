@@ -83,6 +83,7 @@ typedef struct {
   DownloadStatus status;
   uint64_t total_size;
   uint64_t bytes_downloaded;
+  char dest_path[1024];
   int chunk_count;
   DownloadChunk chunks[QM_MAX_CHUNKS];
 } DownloadRuntimeSnapshot;

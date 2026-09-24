@@ -18,3 +18,30 @@ packaging/arch/PKGBUILD.bak
 # Release sidecars
 SHA256SUMS.txt
 SHA256SUMS.txt.sig
+
+# Build trees
+build*/
+compile_commands.json
+.cache/
+__pycache__/
+*.py[cod]
+
+# Package artifacts
+*.tar.gz
+
+# Release sidecars
+cosign.key
+
+# Test scratch output
+docs/ui/verification/
+
+# Local task notes
+AGENT_TASK.md
+AGENT_PROMPT.md
+
+# Editor and OS files
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

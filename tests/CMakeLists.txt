@@ -49,6 +49,26 @@ endforeach()
 if(UNIX AND NOT WIN32)
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME test_native_host_protocol
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_native_host_protocol.py
+                         $<TARGET_FILE:cdm_native_host>)
+        add_test(NAME test_browser_install
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_browser_install.py
+                         $<TARGET_FILE:cdm>)
+        add_test(NAME test_browser_end_to_end
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_browser_end_to_end.py
+                         $<TARGET_FILE:cdm> $<TARGET_FILE:cdm_native_host>)
+        add_test(NAME test_browser_autostart
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_browser_autostart.py
+                         $<TARGET_FILE:cdm_native_host>)
+        add_test(NAME test_daemon_lifecycle
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_daemon_lifecycle.py
+                         $<TARGET_FILE:cdm>)
         add_executable(test_curl_http_integration test_curl_http_integration.c)
         downloadmgr_enable_warnings(test_curl_http_integration)
         downloadmgr_enable_sanitizer(test_curl_http_integration)
@@ -57,6 +77,15 @@ if(UNIX AND NOT WIN32)
         add_test(NAME test_curl_http_integration
                  COMMAND test_curl_http_integration)
     endif()
+endif()
+
+find_program(NODE_EXECUTABLE node)
+if(NODE_EXECUTABLE)
+    add_test(NAME test_browser_extensions
+             COMMAND ${NODE_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_browser_extensions.js
+                     ${CMAKE_SOURCE_DIR}/browser/chromium/service_worker.js
+                     ${CMAKE_SOURCE_DIR}/browser/firefox/background.js)
 endif()
 
 if(UNIX AND NOT WIN32)

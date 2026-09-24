@@ -25,6 +25,9 @@ void get_self_exe_path(char *buf, size_t buf_size);
  */
 int spawn_daemon_detached(const char *exe_path);
 
+/** Launch a separate cdm SDL/Nuklear popup for a browser offer. */
+int spawn_browser_popup_detached(const char *exe_path, unsigned int offer_id);
+
 #ifdef __cplusplus
 }
 #endif

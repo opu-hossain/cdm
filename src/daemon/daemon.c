@@ -15,10 +15,12 @@
 #include "../utils/notify.h"
 
 #include <curl/curl.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -92,6 +94,41 @@ static void daemonize(void) {
 /* Public API */
 
 int run_daemon(void) {
+  int lock_fd = -1;
+  int lock_result = ipc_daemon_lock_acquire(&lock_fd);
+  if (lock_result == 1) {
+    pid_t existing_pid = 0;
+    int probe = ipc_server_get_pid(&existing_pid);
+    if (probe == 1)
+      fprintf(stderr, "cdm daemon: already running (pid %ld)\n",
+              (long)existing_pid);
+    else if (probe == 0)
+      fprintf(stderr, "cdm daemon: already starting\n");
+    else
+      fprintf(stderr, "cdm daemon: another daemon holds the lock; "
+                      "could not determine its PID: %s\n", strerror(errno));
+    return 1;
+  }
+  if (lock_result != 0) {
+    fprintf(stderr, "cdm daemon: could not acquire daemon lock\n");
+    return 1;
+  }
+
+  pid_t existing_pid = 0;
+  int probe = ipc_server_get_pid(&existing_pid);
+  if (probe == 1) {
+    fprintf(stderr, "cdm daemon: already running (pid %ld)\n",
+            (long)existing_pid);
+    close(lock_fd);
+    return 1;
+  }
+  if (probe < 0) {
+    fprintf(stderr, "cdm daemon: could not inspect IPC listener: %s\n",
+            strerror(errno));
+    close(lock_fd);
+    return 1;
+  }
+
   /* Daemonise if stdin is not a terminal (i.e. launched from a
      service manager or background shell). */
   if (!isatty(STDIN_FILENO))
@@ -121,7 +158,8 @@ int run_daemon(void) {
   /* Guard against multiple instances. */
   if (ipc_server_is_running()) {
     LOG_ERROR("Daemon is already running");
-    return 0;
+    close(lock_fd);
+    return 1;
   }
 
   /* Open (or create) the database. */
@@ -129,6 +167,7 @@ int run_daemon(void) {
   snprintf(db_path, sizeof(db_path), "%s/downloads.db", get_data_dir());
   if (db_init(db_path) != 0) {
     LOG_ERROR("Failed to initialize database at %s", db_path);
+    close(lock_fd);
     return 1;
   }
 
@@ -143,6 +182,7 @@ int run_daemon(void) {
     LOG_ERROR("Failed to start IPC server");
     curl_global_cleanup();
     db_close();
+    close(lock_fd);
     return 1;
   }
 
@@ -175,5 +215,6 @@ int run_daemon(void) {
   curl_global_cleanup();
   dm_notify_shutdown();
   log_close();
+  close(lock_fd);
   return 0;
 }

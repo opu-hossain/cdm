@@ -1,59 +1,28 @@
-# CDM v0.1.0 release notes
+# CDM 0.2.0-rc1 release notes (draft)
 
-## Overview
-This is the first public Linux-first release of Core Download Manager (CDM).
+These notes describe the current source and packaging configuration. This draft does not state that a tag or downloadable package has been published.
 
-The initial release focuses on the core desktop workflow needed for a practical Linux download manager:
-- CLI interface
-- background daemon
-- GUI shell
-- SQLite-backed queue persistence
-- resumable downloads
-- safe destination validation
-- local HTTP integration and retry logic
+## Linux scope
 
-## Included in this release
-- Debian package generation for Linux
-- daemon startup and lifecycle handling
-- GUI asset lookup that works from an installed prefix
-- IPC socket path isolation for user runtime directories
-- engine resume and partial-file validation
-- queue safety checks for duplicate or unsafe destinations
-- CI validation through CTest
+cdm provides a command-line interface, a background daemon, and an SDL2/Nuklear GUI. It downloads HTTP(S) URLs with segmented transfer and resume, stores its queue in SQLite, and supports per-user XDG login autostart. The CLI offers `add`, `pause`, `resume`, and `cancel` commands.
 
-## Supported scope
-This release is intended for Linux desktop use and is supported in the form of a Debian package.
+Chrome, Chromium, and Firefox extensions can hand supported URL-only GET downloads to cdm through a native messaging host. The extensions require manual installation and per-user host registration. Browser cancellation is best effort; authenticated, POST, Blob, and data URL downloads are outside this integration's current scope. See [browser integration](browser-integration.md).
 
-The following are not part of the current public guarantee:
-- Windows support
-- macOS support
-- browser extension packaging
-- remote/hosted service features
-- broader platform compatibility beyond Linux
+Windows and macOS are not yet supported.
 
-## Installation
-```bash
-curl -LO https://github.com/<OWNER>/<REPO>/releases/download/v0.1.0/cdm-0.1.0-Linux.deb
-sha256sum -c SHA256SUMS.txt
-sudo dpkg -i cdm-0.1.0-Linux.deb
-```
+## Packaging
 
-## First-run usage
-```bash
-cdm gui
-cdm daemon
-cdm cli
-```
+CMake can build DEB and RPM packages. The Arch PKGBUILD and local release helper can build an Arch package. All package targets install `cdm`, `cdm_native_host`, the desktop launcher, browser extension files, and an XDG autostart entry. The autostart entry starts the daemon at the next graphical login; it does not start it during package installation. See [daemon startup](daemon-autostart.md).
+
+The configured version is `0.2.0-rc1`. Local CPack artifacts use names such as `cdm-0.2.0-rc1-Linux.deb` and `cdm-0.2.0-rc1-Linux.rpm`. Release workflows copy them to architecture-specific names before upload. These names describe build output, not a published download URL.
+
+## Verification before publication
+
+Use the [release checklist](RELEASE_CHECKLIST.md) to record build, test, package, runtime, and install checks on Debian or Ubuntu, Fedora, and Arch. Create checksums from the exact artifacts being published. The PKGBUILD currently uses `sha256sums=('SKIP')` and needs a reviewed checksum before publication.
 
 ## Known limitations
-- Packaging and runtime validation are focused on Linux-first usage.
-- GUI and daemon integration should be used in a standard desktop session.
-- Additional distribution packages and platform support remain future work.
 
-## Verification
-The project test suite passes before release:
-```bash
-ctest --test-dir build --output-on-failure
-```
-
-The installed-prefix contract is also verified for the Debian package layout and CLI startup path outside the build tree.
+- Browser extension setup is manual; Firefox temporary add-ons must be reloaded after restart unless signed and installed persistently.
+- Browser download cancellation can leave a partial browser file.
+- Graphical login autostart requires a session that implements XDG autostart. Manual and on-demand daemon startup remain available without it.
+- Public release availability and target-distro acceptance are not established by these draft notes.

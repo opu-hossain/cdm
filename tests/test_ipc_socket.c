@@ -1,7 +1,14 @@
 #include "../src/platform/ipc_socket.h"
+#include "../src/core/queue_manager.h"
+#include "../src/persistence/db.h"
 #include "../src/utils/log.h"
 #include <criterion/criterion.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/socket.h>
+#include <threads.h>
 #include <unistd.h>
 
 static void setup_ipc(void) {
@@ -57,4 +64,98 @@ Test(ipc, client_connect_send_receive, .disabled = true) {
 
   ipc_client_disconnect(client_fd);
   ipc_server_stop();
+}
+
+static atomic_bool browser_server_running;
+
+static int browser_server_thread(void *unused) {
+  (void)unused;
+  while (atomic_load(&browser_server_running))
+    ipc_server_poll();
+  return 0;
+}
+
+Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
+  char dir[] = "/tmp/cdm-browser-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  setenv("DOWNLOADMGR_ROOT", dir, 1);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_timeout(1500);
+  cr_assert_geq(client, 0);
+
+  IpcBrowserOffer request = {0}, first = {0}, repeated = {0};
+  strcpy(request.request_id, "ipc-test-offer-1");
+  strcpy(request.url, "https://example.org/archive.tar.zst");
+  strcpy(request.filename, "archive.tar.zst");
+  request.total_bytes = 1234;
+  cr_assert_eq(ipc_browser_offer(client, &request, &first), 0);
+  cr_assert_neq(first.offer_id, 0);
+  cr_assert_eq(first.state, IPC_BROWSER_WAITING);
+  cr_assert_eq(queue_manager_count_by_status(DOWNLOAD_QUEUED), 0);
+  cr_assert_eq(ipc_browser_offer(client, &request, &repeated), 0);
+  cr_assert_eq(repeated.offer_id, first.offer_id);
+
+  char dest[1024];
+  snprintf(dest, sizeof(dest), "%s/archive.tar.zst", dir);
+  uint32_t download_id = 0, second_id = 0;
+  cr_assert_eq(ipc_browser_confirm(client, first.offer_id, dest,
+                                   &download_id), 0);
+  cr_assert_neq(download_id, 0);
+  cr_assert_eq(ipc_browser_confirm(client, first.offer_id, dest,
+                                   &second_id), 0);
+  cr_assert_eq(second_id, download_id);
+  cr_assert_eq(queue_manager_count_by_status(DOWNLOAD_QUEUED), 1);
+  cr_assert_neq(ipc_browser_dismiss(client, first.offer_id), 0);
+
+  IpcBrowserProgress initial = {0};
+  cr_assert_eq(ipc_browser_subscribe_progress(client, download_id, &initial),
+               0);
+  cr_assert_eq(initial.download_id, download_id);
+  cr_assert_str_eq(initial.status, "QUEUED");
+  cr_assert_str_eq(initial.dest_path, dest);
+  ipc_broadcast_status(download_id, "Downloading", 0.0f);
+  MsgHeader event_header = {0};
+  IpcBrowserProgress event = {0};
+  cr_assert_eq(ipc_read_exact(client, &event_header, sizeof(event_header)), 0);
+  cr_assert_eq(event_header.type, MSG_BROWSER_PROGRESS_EVENT);
+  cr_assert_eq(event_header.length, sizeof(event));
+  cr_assert_eq(ipc_read_exact(client, &event, sizeof(event)), 0);
+  cr_assert_eq(event.download_id, download_id);
+
+  strcpy(request.request_id, "ipc-test-offer-2");
+  IpcBrowserOffer dismissed = {0};
+  cr_assert_eq(ipc_browser_offer(client, &request, &dismissed), 0);
+  cr_assert_eq(ipc_browser_dismiss(client, dismissed.offer_id), 0);
+  cr_assert_neq(ipc_browser_confirm(client, dismissed.offer_id, dest,
+                                    &second_id), 0);
+  cr_assert_eq(queue_manager_count_by_status(DOWNLOAD_QUEUED), 1);
+
+  IpcBrowserOffer invalid = request, ignored = {0};
+  strcpy(invalid.request_id, "ipc-test-invalid");
+  strcpy(invalid.url, "file:///etc/passwd");
+  cr_assert_neq(ipc_browser_offer(client, &invalid, &ignored), 0);
+  cr_assert_eq(queue_manager_count_by_status(DOWNLOAD_QUEUED), 1);
+
+  int oversized = ipc_client_connect_timeout(1500);
+  cr_assert_geq(oversized, 0);
+  MsgHeader bad_header = {.length = IPC_MAX_FRAME_SIZE + 1,
+                          .type = MSG_BROWSER_OFFER};
+  cr_assert_eq(ipc_write_exact(oversized, &bad_header, sizeof(bad_header)), 0);
+  char rejected = 0;
+  cr_assert_eq(read(oversized, &rejected, 1), 0);
+  ipc_client_disconnect(oversized);
+
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  queue_manager_remove(download_id);
+  db_close();
+  rmdir(dir);
+  unsetenv("DOWNLOADMGR_ROOT");
 }

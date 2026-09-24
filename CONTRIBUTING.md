@@ -1,247 +1,49 @@
 # Contributing to Core Download Manager
 
-Thank you for your interest in contributing to **Core Download Manager (CDM)**.
+cdm currently builds and packages for Linux. Windows and macOS are not yet supported. Contributions should include a focused change, a description of its behavior, and the commands used to verify it.
 
-CDM is built with the goal of creating a modern, reliable, and community-driven open-source download manager. Contributions of all kinds are welcome — from fixing bugs and improving documentation to implementing new features.
+## Development dependencies
 
-This document explains how to set up your development environment, submit changes, and follow the project's development practices.
+- A C11 compiler (GCC or Clang), CMake 3.20+, Python 3, and pkg-config.
+- Development files for libcurl 7.60+, SQLite 3.24+, libnotify, SDL2, libepoxy, and OpenGL.
+- Criterion when configuring with `-DBUILD_TESTING=ON`.
+- Git to clone the repository.
 
----
+The distro dependency scripts show the package names for [Debian and Ubuntu](packaging/deps/deb.sh), [Fedora](packaging/deps/rpm.sh), and [Arch](packaging/deps/arch.sh). Run a script only if you want it to install packages on your machine. The RPM and Arch scripts prepare package builds without Criterion; install that library separately to run the C test suite.
 
-## Ways to Contribute
+## Clone, build, and test
 
-There are many ways to contribute:
-
-- Report bugs
-- Suggest features
-- Improve documentation
-- Write tests
-- Fix issues
-- Improve performance
-- Add platform support
-- Review pull requests
-- Improve the user interface
-
-Not every contribution needs to be code.
-
----
-
-## Development Setup
-
-### Requirements
-
-You need:
-
-- C11 compatible compiler
-    - GCC
-    - Clang
-    - MSVC
-- CMake 3.20+
-- Git
-
-Optional:
-
-- Ninja build system
-- clang-format
-- clang-tidy
-- cppcheck
-
----
-
-### Clone the Repository
-
-```bash
-git clone https://github.com/<username>/cdm.git
+```sh
+git clone https://github.com/opu-hossain/cdm.git
 cd cdm
-```
-
-### Configure Build
-
-```bash
 cmake -S . -B build -DBUILD_TESTING=ON
-
-```
-
-For a debug build:
-
-```bash
-cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
-
-```
-
-### Build
-
-```bash
 cmake --build build
-
-```
-
-### Run Tests
-
-```bash
 ctest --test-dir build --output-on-failure
 ```
 
-### Create the first Debian package
+Use `-DCMAKE_BUILD_TYPE=Debug` for a debug build. Project warnings are on by default and can be disabled with `-DDOWNLOADMGR_ENABLE_WARNINGS=OFF`. GCC and Clang builds accept `-DDOWNLOADMGR_SANITIZER=address`, `undefined`, or `thread`.
 
-```bash
-cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j"$(nproc)"
-ctest --test-dir build --output-on-failure
+The executable is `build/cdm`; the native messaging host is `build/cdm_native_host`. To install from source using the configured prefix:
+
+```sh
+cmake --install build --prefix /usr/local
+```
+
+The XDG autostart entry is installed under `/etc/xdg/autostart`, so a system-wide install may require elevated privileges. See [daemon startup](docs/daemon-autostart.md).
+
+## Build packages
+
+Configure with `-DCMAKE_INSTALL_PREFIX=/usr` before making distro packages. `CMakeLists.txt` defines the DEB and RPM generators; the Arch PKGBUILD uses `makepkg`. Package output names follow `.release.toml`, currently `0.2.0-rc1`.
+
+```sh
+cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_TESTING=OFF
+cmake --build build
 cpack --config build/CPackConfig.cmake -G DEB
-sha256sum *.deb > SHA256SUMS.txt
+cpack --config build/CPackConfig.cmake -G RPM
 ```
 
-For AddressSanitizer validation:
+Build the Arch package from the local checkout with `./scripts/cdm-release arch` on an Arch system with the tools in `packaging/deps/arch.sh`. The public PKGBUILD fetches a tagged source archive and requires that tag to exist. Do not publish a PKGBUILD with `sha256sums=('SKIP')` without generating and reviewing a checksum.
 
-```bash
-cmake -S . -B build-asan -DBUILD_TESTING=ON \
-    -DDOWNLOADMGR_SANITIZER=address
-cmake --build build-asan
-ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build-asan --output-on-failure
-```
+## Submit a change
 
----
-
-## Project Structure
-
-```text
-src/
-├── cli/
-├── core/
-├── daemon/
-├── engine/
-├── gui/
-├── native_host/
-├── persistence/
-├── platform/
-└── utils/
-
-```
-
-Each module has a specific responsibility. Avoid placing unrelated functionality into existing modules.
-
----
-
-## Branch Guidelines
-
-Create branches from `main`. Recommended naming conventions:
-
-* `feature/add-download-scheduler`
-* `bugfix/fix-resume-crash`
-* `docs/update-install-guide`
-* `refactor/improve-worker-pool`
-
-Keep branches focused on one purpose.
-
----
-
-## Commit Guidelines
-
-Use clear commit messages.
-
-**Good:**
-
-* `engine: add segmented download scheduler`
-* `gui: fix download list rendering`
-* `database: improve migration handling`
-
-**Avoid:**
-
-* `fixed stuff`
-* `changes`
-* `update`
-
----
-
-## Pull Requests
-
-Before opening a pull request:
-
-* Make sure the project builds successfully.
-* Test your changes.
-* Update documentation if necessary.
-* Keep commits clean.
-* Explain what changed and why.
-
-A good pull request contains:
-
-* **Description:** What does this change do?
-* **Motivation:** Why is this change needed?
-* **Testing:** How was it tested?
-
----
-
-## Code Review
-
-All changes are reviewed before merging. Review focuses on:
-
-* Correctness
-* Maintainability
-* Performance
-* Portability
-* Security
-* Code style
-
-Suggestions during review are meant to improve the project.
-
----
-
-## Coding Expectations
-
-CDM follows these principles:
-
-* Prefer simple solutions.
-* Avoid unnecessary dependencies.
-* Keep modules independent.
-* Write portable C whenever possible.
-* Handle errors explicitly.
-* Document non-obvious code.
-
----
-
-## Reporting Bugs
-
-Before opening an issue:
-
-* Check existing issues.
-* Make sure the problem is reproducible.
-* Include system information.
-* Include logs if available.
-
-Useful information to include in your bug report:
-
-* **Operating System:**
-* **Compiler:**
-* **CMake Version:**
-* **CDM Version:**
-* **Steps to reproduce:**
-* **Expected behavior:**
-* **Actual behavior:**
-
----
-
-## Feature Requests
-
-Feature requests should explain:
-
-* The problem being solved.
-* Why the feature is useful.
-* Possible implementation ideas.
-
-Large features should be discussed before implementation.
-
----
-
-## First Contributions
-
-New contributors are welcome! Good starting points include:
-
-* Documentation improvements
-* Small bug fixes
-* Tests
-* UI improvements
-* Platform testing
-
-Look for issues tagged with `good first issue` or `help wanted`.
-
+Keep commits focused and update documentation when behavior changes. Before opening a pull request, build the affected targets and run relevant tests. Describe what changed, why, and how it was checked. For security reports, use the private route in [SECURITY.md](SECURITY.md) instead of a public issue.

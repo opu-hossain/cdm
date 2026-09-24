@@ -184,7 +184,7 @@ build_arch() {
     trap 'mv -f "'"$bak"'" "'"$pkgdir"'/PKGBUILD" 2>/dev/null || true' EXIT
 
     sed -i "s|^source=.*|source=(\"${tarball_name}::file://${tarball_path}\")|" "$pkgdir/PKGBUILD"
-    sed -i "s|^pkgver=.*|pkgver=$(release_version)|"                      "$pkgdir/PKGBUILD"
+    sed -i "s|^pkgver=.*|pkgver=${TAG_VERSION/-rc/rc}|"                    "$pkgdir/PKGBUILD"
     sed -i "s|^pkgrel=.*|pkgrel=1|"                                       "$pkgdir/PKGBUILD"
 
     ( cd "$pkgdir" \

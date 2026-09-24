@@ -131,9 +131,11 @@ target_include_directories(cdm_vendor PUBLIC src/vendor)
 set(PLATFORM_SOURCES
     src/platform/bandwidth.c
     src/platform/curl_client.c
+    src/platform/daemon_autostart.c
     src/platform/diskspace.c
     src/platform/file_io.c
     src/platform/ipc_socket.c
+    src/platform/open_path.c
     src/platform/sha256.c
     src/platform/spawn.c
     src/platform/thread.c
@@ -182,7 +184,7 @@ target_link_libraries(downloadmgr_core PUBLIC
 )
 
 if(WIN32)
-    target_link_libraries(downloadmgr_core PUBLIC ws2_32 comdlg32 ole32)
+    target_link_libraries(downloadmgr_core PUBLIC ws2_32 comdlg32 ole32 shell32)
 elseif(UNIX)
     target_link_libraries(downloadmgr_core PUBLIC pthread)
 endif()
@@ -208,6 +210,8 @@ add_executable(cdm
     src/main.c
     src/cli/cli.c
     src/gui/gui_backend_sdl.c
+    src/gui/browser_popup.c
+    src/native_host/browser_install.c
     src/gui/gui_controller.c
     src/gui/gui_nuklear.c
     src/gui/gui_client.c
@@ -242,23 +246,71 @@ downloadmgr_enable_sanitizer(cdm_native_host)
 
 target_link_libraries(cdm_native_host PRIVATE downloadmgr_core)
 
+add_custom_target(browser_extension_validate ALL
+    COMMAND "${CMAKE_COMMAND}" "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ValidateBrowserExtensions.cmake"
+    DEPENDS browser/chromium/manifest.json browser/chromium/service_worker.js
+            browser/firefox/manifest.json browser/firefox/background.js
+    VERBATIM
+)
+
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(_browser_bundle_dir "${CMAKE_CURRENT_BINARY_DIR}/browser")
+foreach(_browser IN ITEMS chromium firefox)
+    set(_browser_zip "${_browser_bundle_dir}/cdm-${_browser}.zip")
+    if(_browser STREQUAL "chromium")
+        set(_browser_script service_worker.js)
+    else()
+        set(_browser_script background.js)
+    endif()
+    add_custom_command(OUTPUT "${_browser_zip}"
+        COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/cmake/BundleBrowserExtension.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/browser/${_browser}"
+                "${_browser_zip}"
+        DEPENDS browser/${_browser}/manifest.json
+                browser/${_browser}/${_browser_script}
+                browser/${_browser}/README.md
+                cmake/BundleBrowserExtension.py
+        VERBATIM
+    )
+    list(APPEND _browser_bundles "${_browser_zip}")
+    install(DIRECTORY "browser/${_browser}"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/cdm/browser")
+endforeach()
+add_custom_target(browser_extension_bundle ALL DEPENDS ${_browser_bundles})
+add_dependencies(browser_extension_bundle browser_extension_validate)
+
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
 
-install(TARGETS cdm
+install(TARGETS cdm cdm_native_host
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+install(FILES ${_browser_bundles}
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/cdm/browser")
+install(DIRECTORY resources/native-messaging/
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/cdm/browser/manifests")
+install(FILES docs/browser-integration.md
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/cdm")
+install(FILES docs/daemon-autostart.md
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/cdm")
 install(FILES resources/cdm.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
 )
+set(CDM_INSTALL_EXECUTABLE "${CMAKE_INSTALL_FULL_BINDIR}/cdm")
+configure_file(resources/autostart/cdm-daemon.desktop.in
+    "${CMAKE_CURRENT_BINARY_DIR}/cdm-daemon.desktop" @ONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/cdm-daemon.desktop"
+    DESTINATION /etc/xdg/autostart)
 
 # CPack – DEB + RPM
 set(CPACK_PACKAGE_NAME "cdm")
 set(CPACK_PACKAGE_VENDOR "Core Download Manager")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Core Download Manager")
 set(CPACK_PACKAGE_DESCRIPTION
-    "Core Download Manager (cdm) is a segmented download manager with a CLI, an SDL2/Nuklear GUI, and a resident daemon.")
+    "Core Download Manager (cdm) is a segmented download manager with a CLI, an SDL2/Nuklear GUI, a resident daemon, and optional Chromium/Firefox browser integration.")
 set(CPACK_PACKAGE_CONTACT "Core Download Manager maintainers")
 set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/opu-hossain/cdm")
 
@@ -314,6 +366,8 @@ message(STATUS "Package file name: ${CPACK_PACKAGE_FILE_NAME}")
 
 # Generators are selectable via -DCPACK_GENERATOR=DEB / RPM
 set(CPACK_GENERATOR "DEB;RPM")
+set(CPACK_SET_DESTDIR ON)
+set(CPACK_PACKAGE_RELOCATABLE OFF)
 
 # Debian.
 # libcurl4t64 on Ubuntu 24.04+; libcurl4 on older. SHLIBDEPS picks the right
@@ -325,6 +379,8 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
 set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/opu-hossain/cdm")
 set(CPACK_DEBIAN_PACKAGE_DESCRIPTION "${CPACK_PACKAGE_DESCRIPTION}")
+set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+    "${CMAKE_CURRENT_SOURCE_DIR}/packaging/deb/conffiles")
 
 # RPM.
 set(CPACK_RPM_PACKAGE_LICENSE "MIT")
@@ -333,5 +389,7 @@ set(CPACK_RPM_PACKAGE_REQUIRES "libnotify, SDL2, libepoxy, mesa-libGL")
 set(CPACK_RPM_PACKAGE_RELEASE 1)
 set(CPACK_RPM_PACKAGE_AUTOREQ ON)
 set(CPACK_RPM_PACKAGE_SUMMARY "Core Download Manager")
+set(CPACK_RPM_USER_FILELIST
+    "%config(noreplace) /etc/xdg/autostart/cdm-daemon.desktop")
 
 include(CPack)

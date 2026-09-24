@@ -13,12 +13,15 @@
 #include "thread.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <threads.h>
@@ -28,6 +31,8 @@
 /* Constants */
 #define MAX_CLIENTS 16
 #define IPC_POLL_TIMEOUT_US 20000 /* 20 ms */
+#define MAX_BROWSER_OFFERS 64
+#define BROWSER_OFFER_TTL_SECONDS 600
 
 static bool join_path(char *out, size_t out_size, const char *base,
                       const char *suffix) {
@@ -40,6 +45,24 @@ static bool join_path(char *out, size_t out_size, const char *base,
   return true;
 }
 
+typedef enum { IPC_BASE_RUNTIME, IPC_BASE_HOME, IPC_BASE_TMP } IpcBaseKind;
+
+/* Socket and lock must make the same runtime/home/tmp choice. */
+static int get_ipc_base(char *out, size_t size, IpcBaseKind *kind) {
+  const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
+  const char *home = getenv("HOME");
+  if (runtime_dir && runtime_dir[0] == '/') {
+    *kind = IPC_BASE_RUNTIME;
+    return snprintf(out, size, "%s", runtime_dir) < (int)size ? 0 : -1;
+  }
+  if (home && home[0] == '/') {
+    *kind = IPC_BASE_HOME;
+    return join_path(out, size, home, "/.local/share") ? 0 : -1;
+  }
+  *kind = IPC_BASE_TMP;
+  return snprintf(out, size, "/tmp") < (int)size ? 0 : -1;
+}
+
 /** Get user-isolated IPC socket path (XDG_RUNTIME_DIR,
  * ~/.local/share/cdm, or /tmp/cdm_UID.sock). */
 static void get_socket_path(char *out, size_t out_size) {
@@ -50,29 +73,67 @@ static void get_socket_path(char *out, size_t out_size) {
     return;
   }
 
-  const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
-  if (runtime_dir && runtime_dir[0] != '\0') {
-    if (!join_path(cached_path, sizeof(cached_path), runtime_dir,
-                   "/cdm.sock"))
-      cached_path[0] = '\0';
-  } else {
-    const char *home = getenv("HOME");
-    if (home && home[0] != '\0') {
-      char dir[1024];
-      if (join_path(dir, sizeof(dir), home, "/.local/share/cdm") &&
-          join_path(cached_path, sizeof(cached_path), dir, "/ipc.sock")) {
-        file_ensure_directory(dir);
-      } else {
-        cached_path[0] = '\0';
-      }
-    } else {
-      snprintf(cached_path, sizeof(cached_path), "/tmp/cdm_%u.sock",
-               (unsigned int)getuid());
-    }
+  char base[1024];
+  IpcBaseKind kind;
+  if (get_ipc_base(base, sizeof(base), &kind) != 0) {
+    out[0] = '\0';
+    return;
   }
+  if (kind == IPC_BASE_RUNTIME)
+    join_path(cached_path, sizeof(cached_path), base, "/cdm.sock");
+  else if (kind == IPC_BASE_HOME)
+    /* Probing clients must not create the new directory before migration. */
+    join_path(cached_path, sizeof(cached_path), base, "/cdm/ipc.sock");
+  else
+    snprintf(cached_path, sizeof(cached_path), "%s/cdm_%u.sock", base,
+             (unsigned)getuid());
 
   strncpy(out, cached_path, out_size - 1);
   out[out_size - 1] = '\0';
+}
+
+int ipc_daemon_lock_acquire(int *fd_out) {
+  if (!fd_out)
+    return -1;
+  *fd_out = -1;
+  char path[1024];
+  char base[1024];
+  IpcBaseKind kind;
+  if (get_ipc_base(base, sizeof(base), &kind) != 0 ||
+      (kind == IPC_BASE_HOME && file_ensure_directory(base) != 0))
+    return -1;
+  if (kind == IPC_BASE_TMP)
+    snprintf(path, sizeof(path), "%s/cdm_%u.lock", base,
+             (unsigned)getuid());
+  else if (!join_path(path, sizeof(path), base, "/cdm.lock"))
+    return -1;
+  int fd = open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
+  if (fd < 0) {
+    LOG_ERROR("Daemon lock: open %s: %s", path, strerror(errno));
+    return -1;
+  }
+  struct stat info;
+  if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) ||
+      info.st_uid != getuid()) {
+    LOG_ERROR("Daemon lock: unsafe file at %s", path);
+    close(fd);
+    return -1;
+  }
+  if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+    int saved_errno = errno;
+    close(fd);
+    if (saved_errno == EWOULDBLOCK || saved_errno == EAGAIN)
+      return 1;
+    LOG_ERROR("Daemon lock: flock %s: %s", path, strerror(saved_errno));
+    return -1;
+  }
+  if (fchmod(fd, 0600) != 0) {
+    LOG_ERROR("Daemon lock: chmod %s: %s", path, strerror(errno));
+    close(fd);
+    return -1;
+  }
+  *fd_out = fd;
+  return 0;
 }
 
 /* Server state */
@@ -80,10 +141,145 @@ static int g_listen_fd = -1;
 static int g_client_fds[MAX_CLIENTS];
 static int g_client_count = 0;
 static bool g_client_subscribed[MAX_CLIENTS];
+static uint32_t g_client_browser_download[MAX_CLIENTS];
 static unsigned char g_client_header[MAX_CLIENTS][sizeof(MsgHeader)];
 static size_t g_client_header_bytes[MAX_CLIENTS];
 static dm_mutex_t g_client_mutex;
 static once_flag g_client_mutex_once = ONCE_FLAG_INIT;
+
+typedef struct {
+  IpcBrowserOffer offer;
+  time_t touched_at;
+} BrowserOfferSlot;
+
+/* Only the daemon's IPC poll thread reads or mutates these slots. */
+static BrowserOfferSlot g_browser_offers[MAX_BROWSER_OFFERS];
+static const char *status_to_string(DownloadStatus s);
+static float snapshot_progress(const DownloadRuntimeSnapshot *snapshot);
+
+static void browser_expire_offers(void) {
+  time_t now = time(NULL);
+  for (size_t i = 0; i < MAX_BROWSER_OFFERS; i++) {
+    BrowserOfferSlot *slot = &g_browser_offers[i];
+    if (!slot->offer.offer_id)
+      continue;
+    if (now - slot->touched_at <= BROWSER_OFFER_TTL_SECONDS)
+      continue;
+    if (slot->offer.state == IPC_BROWSER_CONFIRMED) {
+      DownloadStatus status;
+      if (queue_manager_get_status(slot->offer.download_id, &status) &&
+          status != DOWNLOAD_DONE && status != DOWNLOAD_ERROR &&
+          status != DOWNLOAD_CANCELED)
+        continue;
+    }
+    memset(slot, 0, sizeof(*slot));
+  }
+}
+
+static BrowserOfferSlot *browser_find_offer(uint32_t id) {
+  for (size_t i = 0; i < MAX_BROWSER_OFFERS; i++)
+    if (id && g_browser_offers[i].offer.offer_id == id)
+      return &g_browser_offers[i];
+  return NULL;
+}
+
+static BrowserOfferSlot *browser_find_request(const char *request_id) {
+  for (size_t i = 0; i < MAX_BROWSER_OFFERS; i++)
+    if (g_browser_offers[i].offer.offer_id &&
+        strcmp(g_browser_offers[i].offer.request_id, request_id) == 0)
+      return &g_browser_offers[i];
+  return NULL;
+}
+
+static uint32_t browser_random_id(void) {
+  int fd = open("/dev/urandom", O_RDONLY);
+  if (fd < 0)
+    return 0;
+  uint32_t id = 0;
+  ssize_t n = read(fd, &id, sizeof(id));
+  close(fd);
+  return n == (ssize_t)sizeof(id) ? id : 0;
+}
+
+static bool browser_json_string(const cJSON *root, const char *key,
+                                char *out, size_t capacity, bool required) {
+  const cJSON *value = cJSON_GetObjectItemCaseSensitive(root, key);
+  if (!value && !required) {
+    out[0] = '\0';
+    return true;
+  }
+  if (!cJSON_IsString(value) || !value->valuestring ||
+      (required && !value->valuestring[0]) ||
+      strlen(value->valuestring) >= capacity)
+    return false;
+  strcpy(out, value->valuestring);
+  return true;
+}
+
+static bool browser_parse_offer(const char *json, IpcBrowserOffer *out) {
+  cJSON *root = cJSON_Parse(json);
+  if (!root)
+    return false;
+  memset(out, 0, sizeof(*out));
+  bool valid = browser_json_string(root, "request_id", out->request_id,
+                                   sizeof(out->request_id), true) &&
+               browser_json_string(root, "url", out->url,
+                                   sizeof(out->url), true) &&
+               browser_json_string(root, "filename", out->filename,
+                                   sizeof(out->filename), false) &&
+               browser_json_string(root, "mime", out->mime,
+                                   sizeof(out->mime), false) &&
+               browser_json_string(root, "referrer", out->referrer,
+                                   sizeof(out->referrer), false);
+  const cJSON *total = cJSON_GetObjectItemCaseSensitive(root, "total_bytes");
+  if (total) {
+    if (!cJSON_IsNumber(total) || total->valuedouble < 0 ||
+        total->valuedouble > 9007199254740991.0)
+      valid = false;
+    else
+      out->total_bytes = (uint64_t)total->valuedouble;
+  }
+  if (valid && strncmp(out->url, "https://", 8) != 0 &&
+      strncmp(out->url, "http://", 7) != 0)
+    valid = false;
+  if (valid && out->filename[0] == '\0')
+    path_filename_from_url(out->url, out->filename, sizeof(out->filename));
+  if (valid && (strchr(out->filename, '/') || strchr(out->filename, '\\') ||
+                strcmp(out->filename, ".") == 0 ||
+                strcmp(out->filename, "..") == 0))
+    valid = false;
+  cJSON_Delete(root);
+  return valid;
+}
+
+static IpcBrowserProgress browser_progress_snapshot(uint32_t id,
+                                                    const char *error) {
+  IpcBrowserProgress event = {.download_id = id};
+  DownloadRuntimeSnapshot snapshot = {0};
+  if (!queue_manager_get_runtime_snapshot(id, &snapshot)) {
+    snprintf(event.status, sizeof(event.status), "NOT_FOUND");
+    return event;
+  }
+  snprintf(event.status, sizeof(event.status), "%s",
+           status_to_string(snapshot.status));
+  event.total_bytes = snapshot.total_size;
+  memcpy(event.dest_path, snapshot.dest_path, sizeof(event.dest_path));
+  if (snapshot.status == DOWNLOAD_ACTIVE)
+    event.bytes_received = snapshot.bytes_downloaded;
+  else if (snapshot.status == DOWNLOAD_DONE)
+    event.bytes_received = snapshot.total_size ? snapshot.total_size
+                                               : snapshot.bytes_downloaded;
+  else {
+    for (int i = 0; i < snapshot.chunk_count; i++)
+      event.bytes_received += snapshot.chunks[i].bytes_done;
+  }
+  event.progress = snapshot_progress(&snapshot);
+  if (snapshot.status == DOWNLOAD_DONE)
+    event.progress = 1.0f;
+  if (error)
+    snprintf(event.error, sizeof(event.error), "%s", error);
+  return event;
+}
 
 static void initialize_client_mutex(void) { dm_mutex_init(&g_client_mutex); }
 
@@ -165,11 +361,13 @@ static void remove_client(int index) {
   for (int i = index; i < g_client_count - 1; i++) {
     g_client_fds[i] = g_client_fds[i + 1];
     g_client_subscribed[i] = g_client_subscribed[i + 1];
+    g_client_browser_download[i] = g_client_browser_download[i + 1];
     g_client_header_bytes[i] = g_client_header_bytes[i + 1];
     memcpy(g_client_header[i], g_client_header[i + 1], sizeof(MsgHeader));
   }
   g_client_fds[g_client_count - 1] = -1;
   g_client_subscribed[g_client_count - 1] = false;
+  g_client_browser_download[g_client_count - 1] = 0;
   g_client_header_bytes[g_client_count - 1] = 0;
   g_client_count--;
 }
@@ -180,12 +378,19 @@ static bool valid_message_header(const MsgHeader *header) {
 
   switch (header->type) {
   case MSG_ADD_DOWNLOAD:
+  case MSG_BROWSER_OFFER:
     return header->length <= IPC_MAX_FRAME_SIZE;
   case MSG_PAUSE:
   case MSG_RESUME:
   case MSG_CANCEL:
   case MSG_GET_DETAILS:
+  case MSG_BROWSER_GET_OFFER:
+  case MSG_BROWSER_DISMISS:
+  case MSG_BROWSER_SUBSCRIBE_PROGRESS:
     return header->length == sizeof(uint32_t);
+  case MSG_BROWSER_CONFIRM:
+    return header->length >= sizeof(uint32_t) * 2 &&
+           header->length <= sizeof(uint32_t) * 2 + IPC_MAX_PATH_LEN - 1;
   case MSG_LIST:
   case MSG_LIST_ALL:
   case MSG_SUBSCRIBE:
@@ -246,6 +451,35 @@ static void send_command_result(int client_fd, IpcResult result) {
   ipc_write_exact(client_fd, &wire_result, sizeof(wire_result));
 }
 
+static uint32_t reserve_download(const char *url, const char *dest,
+                                 const RequestOptions *opts) {
+  char unique_dest[IPC_MAX_PATH_LEN];
+  uint32_t id = 0;
+  for (unsigned int attempt = 0; attempt < 1000000; attempt++) {
+    if (!path_make_unique(dest, unique_dest, sizeof(unique_dest)))
+      break;
+    id = queue_manager_add(url, unique_dest, opts);
+    if (id == 0)
+      break;
+    int claim = file_preallocate(unique_dest, 0);
+    if (claim == 0) {
+      Download *download = queue_manager_find_by_id(id);
+      if (download)
+        download->reserved_file = true;
+      if (db_insert_reserved_download(id, url, unique_dest, opts) == 0)
+        break;
+      unlink(unique_dest);
+    }
+    queue_manager_remove(id);
+    id = 0;
+    if (claim != -2)
+      break;
+  }
+  if (id != 0 && strcmp(unique_dest, dest) != 0)
+    LOG_INFO("Selected unique destination '%s'", unique_dest);
+  return id;
+}
+
 /** Dispatch an incoming message. */
 static void handle_message(int client_fd, MsgHeader *hdr) {
   switch (hdr->type) {
@@ -287,35 +521,137 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       }
     }
 
-    char unique_dest[IPC_MAX_PATH_LEN];
-    uint32_t id = 0;
-    for (unsigned int attempt = 0; attempt < 1000000; attempt++) {
-      if (!path_make_unique(dest, unique_dest, sizeof(unique_dest)))
-        break;
-      id = queue_manager_add(url, unique_dest, &opts);
-      if (id == 0)
-        break;
-      /* Claim the actual destination before replying to the client. */
-      int claim = file_preallocate(unique_dest, 0);
-      if (claim == 0) {
-        Download *download = queue_manager_find_by_id(id);
-        if (download)
-          download->reserved_file = true;
-        if (db_insert_reserved_download(id, url, unique_dest, &opts) == 0)
-          break;
-        unlink(unique_dest);
-      }
-      queue_manager_remove(id);
-      id = 0;
-      if (claim != -2)
-        break;
-    }
-    if (id != 0 && strcmp(unique_dest, dest) != 0)
-      LOG_INFO("MSG_ADD_DOWNLOAD: selected unique destination '%s'",
-               unique_dest);
+    uint32_t id = reserve_download(url, dest, &opts);
     LOG_INFO("MSG_ADD_DOWNLOAD: queue_manager_add returned id=%u", id);
 
     ipc_write_exact(client_fd, &id, sizeof(id));
+    break;
+  }
+  case MSG_BROWSER_OFFER: {
+    char json[IPC_MAX_FRAME_SIZE + 1];
+    IpcBrowserOffer response = {0};
+    if (ipc_read_exact(client_fd, json, hdr->length) != 0)
+      return;
+    json[hdr->length] = '\0';
+    IpcBrowserOffer proposed = {0};
+    if (browser_parse_offer(json, &proposed)) {
+      BrowserOfferSlot *slot = browser_find_request(proposed.request_id);
+      if (slot && strcmp(slot->offer.url, proposed.url) != 0) {
+        LOG_WARN("Browser request ID reused with a different URL");
+        slot = NULL;
+      } else if (!slot) {
+        for (size_t i = 0; i < MAX_BROWSER_OFFERS; i++) {
+          if (!g_browser_offers[i].offer.offer_id) {
+            slot = &g_browser_offers[i];
+            break;
+          }
+        }
+        if (slot) {
+          uint32_t id = 0;
+          for (int attempt = 0; attempt < 16 && !id; attempt++) {
+            id = browser_random_id();
+            if (browser_find_offer(id))
+              id = 0;
+          }
+          if (id) {
+            slot->offer = proposed;
+            slot->offer.offer_id = id;
+            slot->touched_at = time(NULL);
+            LOG_INFO("Browser offer %u registered for %s", id,
+                     proposed.url);
+          } else {
+            slot = NULL;
+          }
+        }
+      }
+      if (slot)
+        response = slot->offer;
+    }
+    ipc_write_exact(client_fd, &response, sizeof(response));
+    break;
+  }
+  case MSG_BROWSER_GET_OFFER: {
+    uint32_t id = 0;
+    IpcBrowserOffer response = {0};
+    if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0)
+      return;
+    BrowserOfferSlot *slot = browser_find_offer(id);
+    if (slot) {
+      slot->touched_at = time(NULL);
+      response = slot->offer;
+    }
+    ipc_write_exact(client_fd, &response, sizeof(response));
+    break;
+  }
+  case MSG_BROWSER_CONFIRM: {
+    char payload[sizeof(uint32_t) * 2 + IPC_MAX_PATH_LEN];
+    uint32_t download_id = 0;
+    if (ipc_read_exact(client_fd, payload, hdr->length) != 0)
+      return;
+    uint32_t offer_id = 0, path_len = 0;
+    memcpy(&offer_id, payload, sizeof(offer_id));
+    memcpy(&path_len, payload + sizeof(offer_id), sizeof(path_len));
+    if (path_len > 0 && path_len < IPC_MAX_PATH_LEN &&
+        hdr->length == sizeof(uint32_t) * 2 + path_len &&
+        !memchr(payload + sizeof(uint32_t) * 2, '\0', path_len)) {
+      char dest[IPC_MAX_PATH_LEN];
+      memcpy(dest, payload + sizeof(uint32_t) * 2, path_len);
+      dest[path_len] = '\0';
+      BrowserOfferSlot *slot = browser_find_offer(offer_id);
+      if (slot && slot->offer.state == IPC_BROWSER_CONFIRMED)
+        download_id = slot->offer.download_id;
+      else if (slot && slot->offer.state == IPC_BROWSER_WAITING) {
+        RequestOptions opts = {0};
+        snprintf(opts.referrer, sizeof(opts.referrer), "%s",
+                 slot->offer.referrer);
+        download_id = reserve_download(slot->offer.url, dest, &opts);
+        if (download_id) {
+          slot->offer.download_id = download_id;
+          slot->offer.state = IPC_BROWSER_CONFIRMED;
+          slot->touched_at = time(NULL);
+          LOG_INFO("Browser offer %u confirmed as download %u", offer_id,
+                   download_id);
+        }
+      }
+    }
+    ipc_write_exact(client_fd, &download_id, sizeof(download_id));
+    break;
+  }
+  case MSG_BROWSER_DISMISS: {
+    uint32_t id = 0;
+    if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0)
+      return;
+    BrowserOfferSlot *slot = browser_find_offer(id);
+    IpcResult result = IPC_RESULT_NOT_FOUND;
+    if (slot && slot->offer.state == IPC_BROWSER_WAITING) {
+      slot->offer.state = IPC_BROWSER_DISMISSED;
+      slot->touched_at = time(NULL);
+      result = IPC_RESULT_OK;
+      LOG_INFO("Browser offer %u dismissed", id);
+    } else if (slot && slot->offer.state == IPC_BROWSER_DISMISSED) {
+      result = IPC_RESULT_OK;
+    } else if (slot) {
+      result = IPC_RESULT_REJECTED;
+    }
+    send_command_result(client_fd, result);
+    break;
+  }
+  case MSG_BROWSER_SUBSCRIBE_PROGRESS: {
+    uint32_t id = 0;
+    if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0)
+      return;
+    IpcBrowserProgress event = browser_progress_snapshot(id, NULL);
+    dm_mutex_lock(&g_client_mutex);
+    if (strcmp(event.status, "NOT_FOUND") != 0) {
+      for (int i = 0; i < g_client_count; i++) {
+        if (g_client_fds[i] == client_fd) {
+          g_client_browser_download[i] = id;
+          break;
+        }
+      }
+    }
+    ipc_write_exact(client_fd, &event, sizeof(event));
+    dm_mutex_unlock(&g_client_mutex);
     break;
   }
   case MSG_RELOAD_CONFIG:
@@ -444,22 +780,79 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
 
 /* Server lifecycle */
 
-bool ipc_server_is_running(void) {
+static int connect_daemon_socket(void) {
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0)
-    return false;
+    return -1;
 
   char socket_path[1024];
   get_socket_path(socket_path, sizeof(socket_path));
+  size_t path_len = strlen(socket_path);
+  if (path_len == 0 || path_len >= sizeof(((struct sockaddr_un *)0)->sun_path)) {
+    close(fd);
+    errno = ENAMETOOLONG;
+    return -1;
+  }
 
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
+  memcpy(addr.sun_path, socket_path, path_len + 1);
 
-  bool running = (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+    int saved_errno = errno;
+    close(fd);
+    errno = saved_errno;
+    return -1;
+  }
+  return fd;
+}
+
+bool ipc_server_is_running(void) {
+  int fd = connect_daemon_socket();
+  if (fd < 0)
+    return false;
   close(fd);
-  return running;
+  return true;
+}
+
+int ipc_server_get_pid(pid_t *pid_out) {
+  if (!pid_out) {
+    errno = EINVAL;
+    return -1;
+  }
+  *pid_out = 0;
+  int fd = connect_daemon_socket();
+  if (fd < 0)
+    return errno == ENOENT || errno == ECONNREFUSED ? 0 : -1;
+#ifdef SO_PEERCRED
+  struct {
+    pid_t pid;
+    uid_t uid;
+    gid_t gid;
+  } credentials;
+  socklen_t length = sizeof(credentials);
+  int result = getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length);
+  int saved_errno = errno;
+  close(fd);
+  if (result != 0) {
+    errno = saved_errno;
+    return -1;
+  }
+  if (length != sizeof(credentials) || credentials.pid <= 0 ||
+      credentials.uid != getuid()) {
+    errno = EPROTO;
+    return -1;
+  }
+  if (kill(credentials.pid, 0) != 0 && errno == ESRCH)
+    return 0;
+  *pid_out = credentials.pid;
+  return 1;
+#else
+  close(fd);
+  errno = ENOTSUP;
+  return -1;
+#endif
 }
 
 int ipc_server_start(void) {
@@ -511,8 +904,10 @@ int ipc_server_start(void) {
   for (int i = 0; i < MAX_CLIENTS; i++) {
     g_client_fds[i] = -1;
     g_client_subscribed[i] = false;
+    g_client_browser_download[i] = 0;
     g_client_header_bytes[i] = 0;
   }
+  memset(g_browser_offers, 0, sizeof(g_browser_offers));
   g_client_count = 0;
 
   call_once(&g_client_mutex_once, initialize_client_mutex);
@@ -522,6 +917,7 @@ int ipc_server_start(void) {
 }
 
 void ipc_server_poll(void) {
+  browser_expire_offers();
   fd_set rfds;
   FD_ZERO(&rfds);
   FD_SET(g_listen_fd, &rfds);
@@ -551,6 +947,7 @@ void ipc_server_poll(void) {
       dm_mutex_lock(&g_client_mutex);
       if (g_client_count < MAX_CLIENTS) {
         g_client_subscribed[g_client_count] = false;
+        g_client_browser_download[g_client_count] = 0;
         g_client_header_bytes[g_client_count] = 0;
         g_client_fds[g_client_count++] = new_fd;
         LOG_DEBUG("IPC: Client connected (fd=%d, total=%d)", new_fd,
@@ -616,6 +1013,7 @@ void ipc_server_stop(void) {
   char socket_path[1024];
   get_socket_path(socket_path, sizeof(socket_path));
   unlink(socket_path);
+  memset(g_browser_offers, 0, sizeof(g_browser_offers));
 }
 
 /* Client lifecycle */
@@ -832,6 +1230,92 @@ int ipc_send_reload_config(int sock) {
   return result == IPC_RESULT_OK ? 0 : -1;
 }
 
+static int browser_write_request(int sock, MsgType type, const void *payload,
+                                 uint32_t size) {
+  if (sock < 0 || size > IPC_MAX_FRAME_SIZE)
+    return -1;
+  MsgHeader header = {.length = size, .type = type};
+  if (ipc_write_exact(sock, &header, sizeof(header)) != 0)
+    return -1;
+  return size ? ipc_write_exact(sock, payload, size) : 0;
+}
+
+int ipc_browser_offer(int sock, const IpcBrowserOffer *offer,
+                      IpcBrowserOffer *out) {
+  if (!offer || !out || !offer->request_id[0] || !offer->url[0])
+    return -1;
+  cJSON *root = cJSON_CreateObject();
+  if (!root)
+    return -1;
+  cJSON_AddStringToObject(root, "request_id", offer->request_id);
+  cJSON_AddStringToObject(root, "url", offer->url);
+  cJSON_AddStringToObject(root, "filename", offer->filename);
+  cJSON_AddStringToObject(root, "mime", offer->mime);
+  cJSON_AddStringToObject(root, "referrer", offer->referrer);
+  cJSON_AddNumberToObject(root, "total_bytes", (double)offer->total_bytes);
+  char *json = cJSON_PrintUnformatted(root);
+  cJSON_Delete(root);
+  if (!json)
+    return -1;
+  size_t length = strlen(json);
+  int result = -1;
+  if (length <= IPC_MAX_FRAME_SIZE &&
+      browser_write_request(sock, MSG_BROWSER_OFFER, json,
+                            (uint32_t)length) == 0 &&
+      ipc_read_exact(sock, out, sizeof(*out)) == 0 && out->offer_id)
+    result = 0;
+  cJSON_free(json);
+  return result;
+}
+
+int ipc_browser_get_offer(int sock, uint32_t offer_id, IpcBrowserOffer *out) {
+  if (!out || !offer_id ||
+      browser_write_request(sock, MSG_BROWSER_GET_OFFER, &offer_id,
+                            sizeof(offer_id)) != 0 ||
+      ipc_read_exact(sock, out, sizeof(*out)) != 0)
+    return -1;
+  return out->offer_id ? 0 : -1;
+}
+
+int ipc_browser_confirm(int sock, uint32_t offer_id, const char *dest_path,
+                        uint32_t *download_id) {
+  if (!offer_id || !dest_path || !download_id)
+    return -1;
+  size_t len = strlen(dest_path);
+  if (!len || len >= IPC_MAX_PATH_LEN)
+    return -1;
+  char payload[sizeof(uint32_t) * 2 + IPC_MAX_PATH_LEN];
+  uint32_t wire_len = (uint32_t)len;
+  memcpy(payload, &offer_id, sizeof(offer_id));
+  memcpy(payload + sizeof(offer_id), &wire_len, sizeof(wire_len));
+  memcpy(payload + sizeof(uint32_t) * 2, dest_path, len);
+  if (browser_write_request(sock, MSG_BROWSER_CONFIRM, payload,
+                            (uint32_t)(sizeof(uint32_t) * 2 + len)) != 0 ||
+      ipc_read_exact(sock, download_id, sizeof(*download_id)) != 0)
+    return -1;
+  return *download_id ? 0 : -1;
+}
+
+int ipc_browser_dismiss(int sock, uint32_t offer_id) {
+  if (!offer_id || browser_write_request(sock, MSG_BROWSER_DISMISS, &offer_id,
+                                         sizeof(offer_id)) != 0)
+    return -1;
+  uint8_t result = IPC_RESULT_ERROR;
+  if (ipc_read_exact(sock, &result, sizeof(result)) != 0)
+    return -1;
+  return result == IPC_RESULT_OK ? 0 : -1;
+}
+
+int ipc_browser_subscribe_progress(int sock, uint32_t download_id,
+                                   IpcBrowserProgress *initial) {
+  if (!download_id || !initial ||
+      browser_write_request(sock, MSG_BROWSER_SUBSCRIBE_PROGRESS, &download_id,
+                            sizeof(download_id)) != 0 ||
+      ipc_read_exact(sock, initial, sizeof(*initial)) != 0)
+    return -1;
+  return strcmp(initial->status, "NOT_FOUND") == 0 ? -1 : 0;
+}
+
 /* Low‑level I/O */
 
 int ipc_read_exact(int fd, void *buf, size_t len) {
@@ -900,9 +1384,22 @@ void ipc_broadcast_status(uint32_t download_id, const char *status,
   memcpy(frame + offset, text, status_len);
   offset += status_len;
 
+  IpcBrowserProgress browser_event = browser_progress_snapshot(
+      download_id, strcmp(text, "Error") == 0 ||
+                           strcmp(text, "Verification failed") == 0
+                       ? text
+                       : NULL);
+  unsigned char browser_frame[sizeof(MsgHeader) + sizeof(browser_event)];
+  MsgHeader browser_hdr = {.length = sizeof(browser_event),
+                           .type = MSG_BROWSER_PROGRESS_EVENT};
+  memcpy(browser_frame, &browser_hdr, sizeof(browser_hdr));
+  memcpy(browser_frame + sizeof(browser_hdr), &browser_event,
+         sizeof(browser_event));
+
   dm_mutex_lock(&g_client_mutex);
   for (int i = 0; i < g_client_count; i++) {
-    if (!g_client_subscribed[i])
+    if (!g_client_subscribed[i] &&
+        g_client_browser_download[i] != download_id)
       continue;
 
     int flags = 0;
@@ -912,8 +1409,14 @@ void ipc_broadcast_status(uint32_t download_id, const char *status,
 #if defined(MSG_DONTWAIT)
     flags |= MSG_DONTWAIT;
 #endif
-    ssize_t sent = send(g_client_fds[i], frame, offset, flags);
-    if (sent != (ssize_t)offset) {
+    const void *bytes = g_client_browser_download[i] == download_id
+                            ? (const void *)browser_frame
+                            : (const void *)frame;
+    size_t bytes_len = g_client_browser_download[i] == download_id
+                           ? sizeof(browser_frame)
+                           : offset;
+    ssize_t sent = send(g_client_fds[i], bytes, bytes_len, flags);
+    if (sent != (ssize_t)bytes_len) {
       LOG_DEBUG("IPC: removing slow or disconnected subscriber (fd=%d)",
                 g_client_fds[i]);
       remove_client(i);

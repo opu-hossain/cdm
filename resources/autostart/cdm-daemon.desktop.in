@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Core Download Manager Daemon
+Comment=Start the download manager in the background
+Exec=@CDM_INSTALL_EXECUTABLE@ daemon
+TryExec=@CDM_INSTALL_EXECUTABLE@
+Terminal=false
+NoDisplay=true

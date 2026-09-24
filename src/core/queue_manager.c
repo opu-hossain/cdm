@@ -289,6 +289,7 @@ bool queue_manager_get_runtime_snapshot(uint32_t id,
       out->status = cur->status;
       out->total_size = cur->total_size;
       out->bytes_downloaded = atomic_load(&cur->bytes_downloaded);
+      memcpy(out->dest_path, cur->dest_path, sizeof(out->dest_path));
       out->chunk_count = cur->chunk_count;
       if (out->chunk_count > QM_MAX_CHUNKS)
         out->chunk_count = QM_MAX_CHUNKS;
