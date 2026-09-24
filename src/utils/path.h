@@ -10,6 +10,10 @@
 /** Derive a safe filename from the final URL path segment. */
 void path_filename_from_url(const char *url, char *out, size_t out_size);
 
+/** Extract a safe filename from a Content-Disposition header value. */
+bool path_filename_from_disposition(const char *header, char *out,
+                                    size_t out_size);
+
 /** Join a directory and filename, returning false if the result is too long. */
 bool path_join(const char *dir, const char *filename, char *out,
                size_t out_size);

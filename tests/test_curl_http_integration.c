@@ -67,6 +67,7 @@ static void setup_server(void) {
         "  if self.path!='/file.bin': self.send_error(404); return\n"
         "  self.send_response(200)\n"
         "  self.send_header('Content-Length','12')\n"
+        "  self.send_header('Content-Disposition','attachment; filename=server.txt')\n"
         "  self.end_headers()\n"
         " def do_GET(self):\n"
         "  if self.path not in ('/head-405','/range-ignored'):\n"
@@ -80,6 +81,7 @@ static void setup_server(void) {
         "   self.send_response(200)\n"
         "   body=b'test payload'\n"
         "  self.send_header('Content-Length',str(len(body)))\n"
+        "  self.send_header('Content-Disposition','attachment; filename=range.txt')\n"
         "  self.end_headers()\n"
         "  self.wfile.write(body)\n"
         "http.server.ThreadingHTTPServer(('127.0.0.1',int(sys.argv[1])),H).serve_forever()\n";
@@ -121,6 +123,8 @@ Test(curl_http, head_reads_local_file) {
 
   cr_assert_eq(curl_client_head(url, &context, &info), 0);
   cr_assert_eq(info.total_size, 12);
+  cr_assert_str_eq(info.content_disposition,
+                   "attachment; filename=server.txt");
 }
 
 Test(curl_http, head_rejects_http_errors) {
@@ -140,6 +144,8 @@ Test(curl_http, head_405_falls_back_to_get_range) {
   cr_assert_eq(curl_client_head(url, NULL, &info), 0);
   cr_assert_eq(info.total_size, 12);
   cr_assert(info.supports_ranges);
+  cr_assert_str_eq(info.content_disposition,
+                   "attachment; filename=range.txt");
 }
 
 Test(curl_http, ignored_range_uses_full_get_length) {

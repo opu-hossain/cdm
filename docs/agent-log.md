@@ -151,3 +151,22 @@ Open questions:
 
 Next:
 - 0.2.2 Parse `Content-Disposition` filenames.
+
+## 2026-09-24 — Codex, task 0.2.2
+
+Branch: `cdm`
+Commit: `feat(path): derive filename from Content-Disposition` (this entry's commit)
+
+Tasks completed:
+- 0.2.2 Capture `Content-Disposition` from the final probe response and parse plain or UTF-8 extended filenames, preferring valid `filename*` and rejecting path separators, traversal dots, controls, and malformed encoding.
+
+Tests:
+- Test first: parser and FileInfo capture tests failed to compile because the interfaces did not exist.
+- A focused parser run found and fixed a partial decoded filename overriding a valid fallback.
+- Full `cmake --build build -j` and CTest passed 27/27.
+
+Open questions:
+- None for task 0.2.2.
+
+Next:
+- 0.2.3 Percent-decode URL-derived filenames.

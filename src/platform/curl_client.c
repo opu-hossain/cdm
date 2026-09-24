@@ -39,6 +39,20 @@ static size_t probe_header_callback(void *data, size_t size, size_t nmemb,
       strncasecmp((char *)data, "Accept-Ranges: bytes", 19) == 0) {
     state->info->supports_ranges = true;
   }
+  if (total > 20 && strncasecmp(data, "Content-Disposition:", 20) == 0) {
+    const char *value = (const char *)data + 20;
+    size_t n = total - 20;
+    while (n && (*value == ' ' || *value == '\t')) {
+      value++;
+      n--;
+    }
+    while (n && (value[n - 1] == '\r' || value[n - 1] == '\n'))
+      n--;
+    if (n < sizeof(state->info->content_disposition)) {
+      memcpy(state->info->content_disposition, value, n);
+      state->info->content_disposition[n] = '\0';
+    }
+  }
   if (total > 14 && strncasecmp(data, "Content-Range:", 14) == 0) {
     char value[96];
     size_t n = total - 14;

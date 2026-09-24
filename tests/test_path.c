@@ -116,3 +116,43 @@ Test(path, dangling_symlink_occupies_its_name) {
   snprintf(expected, sizeof(expected), "%s/missing(1).apk", test_dir);
   cr_assert_str_eq(output, expected);
 }
+
+Test(path, parses_content_disposition_filenames) {
+  struct {
+    const char *header;
+    const char *expected;
+  } cases[] = {
+      {"attachment; filename=report.txt", "report.txt"},
+      {"Content-Disposition: attachment; filename=\"quarter; one.txt\"",
+       "quarter; one.txt"},
+      {"attachment; filename=plain.txt; filename*=UTF-8''caf%C3%A9.txt",
+       "caf\xC3\xA9.txt"},
+      {"inline; filename*=UTF-8'en'%E2%82%AC-rates.csv",
+       "\xE2\x82\xAC-rates.csv"},
+      {"attachment; filename*=UTF-8''bad%GG; filename=fallback.txt",
+       "fallback.txt"},
+      {"attachment; filename*=UTF-8''bad%C3%28; filename=fallback.txt",
+       "fallback.txt"},
+  };
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    char name[128];
+    cr_assert(path_filename_from_disposition(cases[i].header, name,
+                                             sizeof(name)),
+              "case %zu", i);
+    cr_assert_str_eq(name, cases[i].expected);
+  }
+}
+
+Test(path, rejects_unsafe_content_disposition_filenames) {
+  const char *headers[] = {
+      "attachment; filename=../../secret", "attachment; filename=\\evil.txt",
+      "attachment; filename=two..dots", "attachment; filename*=UTF-8''%2Fetc",
+      "attachment; filename*=UTF-8''bad%00name", "attachment; filename=\"\"",
+  };
+  for (size_t i = 0; i < sizeof(headers) / sizeof(headers[0]); i++) {
+    char name[128] = "unchanged";
+    cr_assert(!path_filename_from_disposition(headers[i], name, sizeof(name)),
+              "case %zu", i);
+    cr_assert_eq(name[0], '\0');
+  }
+}

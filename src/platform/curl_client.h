@@ -22,6 +22,7 @@ typedef struct {
 typedef struct {
   uint64_t total_size; // 0 = unknown
   bool supports_ranges;
+  char content_disposition[512]; // Empty if no usable header was received.
 } FileInfo;
 
 /* Functions. */
