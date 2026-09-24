@@ -31,11 +31,10 @@ Test(curl_client, header_callback_ignores_other_headers) {
   cr_assert(!info.supports_ranges);
 }
 
-Test(curl_client, head_failure_on_invalid_url) {
+Test(curl_client, head_failure_when_local_server_is_absent) {
   FileInfo info = {0};
   RequestContext ctx = {0};
-  int rc = curl_client_head("http://this-domain-does-not-exist-1234567890.com/",
-                            &ctx, &info);
+  int rc = curl_client_head("http://127.0.0.1:1/", &ctx, &info);
   cr_assert_eq(rc, -1);
   cr_assert_eq(info.total_size, 0);
 }

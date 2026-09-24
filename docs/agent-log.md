@@ -132,3 +132,22 @@ Open questions:
 
 Next:
 - 0.2.1 Add GET `Range: 0-0` fallback to HEAD probing.
+
+## 2026-09-24 — Codex, task 0.2.1
+
+Branch: `cdm`
+Commit: `feat(curl): fall back to GET Range 0-0 when HEAD is rejected` (this entry's commit)
+
+Tasks completed:
+- 0.2.1 Retry failed HEAD probes with `GET Range: bytes=0-0`, derive complete size from `Content-Range` on 206 or `Content-Length` on an ignored 200, and stop reading the response body immediately.
+
+Tests:
+- Test first: a localhost route returning HEAD 405 and GET 206 failed before implementation.
+- After fix: both the 206 route and an ignored-range 200 route passed; the existing curl failure test now uses 127.0.0.1.
+- Full `cmake --build build -j` and CTest passed 27/27.
+
+Open questions:
+- None for task 0.2.1.
+
+Next:
+- 0.2.2 Parse `Content-Disposition` filenames.

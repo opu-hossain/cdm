@@ -6,27 +6,80 @@
 #include "../utils/log.h"
 
 #include <curl/curl.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 /* Internal helpers */
 
 /**
  * libcurl header callback – called once per response header line.
  *
- * We use it only to detect the Accept-Ranges: bytes header.  The userdata
- * pointer points to the FileInfo struct being filled.
+ * Capture range support and the complete size from a one-byte range reply.
  */
-static size_t head_header_callback(void *data, size_t size, size_t nmemb,
-                                   void *userdata) {
-  FileInfo *info = (FileInfo *)userdata;
+typedef struct {
+  FileInfo *info;
+  uint64_t range_total;
+  bool has_range_total;
+  bool body_aborted;
+} ProbeState;
+
+static size_t probe_header_callback(void *data, size_t size, size_t nmemb,
+                                    void *userdata) {
+  ProbeState *state = userdata;
   size_t total = size * nmemb;
 
+  /* Redirects and intermediate HTTP responses may have different headers. */
+  if (total >= 5 && strncasecmp(data, "HTTP/", 5) == 0) {
+    memset(state->info, 0, sizeof(*state->info));
+    state->has_range_total = false;
+  }
   if (total >= 19 &&
       strncasecmp((char *)data, "Accept-Ranges: bytes", 19) == 0) {
-    info->supports_ranges = true;
+    state->info->supports_ranges = true;
+  }
+  if (total > 14 && strncasecmp(data, "Content-Range:", 14) == 0) {
+    char value[96];
+    size_t n = total - 14;
+    if (n >= sizeof(value))
+      return total;
+    memcpy(value, (char *)data + 14, n);
+    value[n] = '\0';
+    char *cursor = value;
+    while (*cursor == ' ' || *cursor == '\t')
+      cursor++;
+    if (strncasecmp(cursor, "bytes ", 6) != 0)
+      return total;
+    cursor += 6;
+    errno = 0;
+    char *end = NULL;
+    unsigned long long first = strtoull(cursor, &end, 10);
+    if (errno || end == cursor || *end != '-')
+      return total;
+    cursor = end + 1;
+    unsigned long long last = strtoull(cursor, &end, 10);
+    if (errno || end == cursor || *end != '/')
+      return total;
+    cursor = end + 1;
+    unsigned long long size_bytes = strtoull(cursor, &end, 10);
+    if (errno || end == cursor || first != 0 || last != 0 ||
+        size_bytes == 0 || (*end != '\r' && *end != '\n' && *end != '\0'))
+      return total;
+    state->range_total = (uint64_t)size_bytes;
+    state->has_range_total = true;
   }
   return total; // must return the number of bytes consumed
+}
+
+static size_t probe_body_callback(char *data, size_t size, size_t nmemb,
+                                  void *userdata) {
+  (void)data;
+  ProbeState *state = userdata;
+  state->body_aborted = true;
+  (void)size;
+  (void)nmemb;
+  return 0; /* Headers are enough; never download an ignored full response. */
 }
 
 /* Public API */
@@ -34,6 +87,7 @@ static size_t head_header_callback(void *data, size_t size, size_t nmemb,
 int curl_client_head(const char *url, const RequestContext *ctx,
                      FileInfo *out) {
   memset(out, 0, sizeof(*out));
+  ProbeState state = {.info = out};
 
   CURL *curl = curl_easy_init();
   if (!curl) {
@@ -45,8 +99,8 @@ int curl_client_head(const char *url, const RequestContext *ctx,
   curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
-  curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, head_header_callback);
-  curl_easy_setopt(curl, CURLOPT_HEADERDATA, out);
+  curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, probe_header_callback);
+  curl_easy_setopt(curl, CURLOPT_HEADERDATA, &state);
   curl_easy_setopt(curl, CURLOPT_USERAGENT, "cdm/0.1");
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
@@ -68,7 +122,8 @@ int curl_client_head(const char *url, const RequestContext *ctx,
   long http_status = 0;
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
 
-  if (res == CURLE_OK && http_status >= 200 && http_status < 300) {
+  bool success = res == CURLE_OK && http_status >= 200 && http_status < 300;
+  if (success) {
     curl_off_t content_length = -1;
     curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
                       &content_length);
@@ -80,11 +135,43 @@ int curl_client_head(const char *url, const RequestContext *ctx,
     LOG_WARN("HEAD request returned HTTP %ld for %s", http_status, url);
   }
 
+  if (!success) {
+    memset(out, 0, sizeof(*out));
+    state.has_range_total = false;
+    state.body_aborted = false;
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(curl, CURLOPT_RANGE, "0-0");
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, probe_body_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &state);
+    res = curl_easy_perform(curl);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
+    success = (res == CURLE_OK ||
+               (res == CURLE_WRITE_ERROR && state.body_aborted)) &&
+              (http_status == 206 || http_status == 200);
+    if (success && http_status == 206) {
+      success = state.has_range_total;
+      if (success) {
+        out->total_size = state.range_total;
+        out->supports_ranges = true;
+      }
+    } else if (success) {
+      curl_off_t content_length = -1;
+      curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
+                        &content_length);
+      out->total_size = (content_length > 0) ? (uint64_t)content_length : 0;
+      out->supports_ranges = false;
+    }
+    if (!success)
+      LOG_WARN("GET range probe failed for %s: HTTP %ld, %s", url,
+               http_status, curl_easy_strerror(res));
+  }
+
   if (headers)
     curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
-  return (res == CURLE_OK && http_status >= 200 && http_status < 300) ? 0
-                                                                        : -1;
+  if (!success)
+    memset(out, 0, sizeof(*out));
+  return success ? 0 : -1;
 }
 
 struct curl_slist *curl_client_build_headers(const char *extra_headers) {

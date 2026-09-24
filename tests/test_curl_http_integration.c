@@ -57,9 +57,33 @@ static void setup_server(void) {
       dup2(null_fd, STDERR_FILENO);
       close(null_fd);
     }
-    execlp("python3", "python3", "-m", "http.server", "--bind",
-           "127.0.0.1", "--directory", server_root,
-          port_text, (char *)NULL);
+    static const char script[] =
+        "import http.server,sys\n"
+        "class H(http.server.BaseHTTPRequestHandler):\n"
+        " def log_message(self,*args): pass\n"
+        " def do_HEAD(self):\n"
+        "  if self.path in ('/head-405','/range-ignored'):\n"
+        "   self.send_error(405); return\n"
+        "  if self.path!='/file.bin': self.send_error(404); return\n"
+        "  self.send_response(200)\n"
+        "  self.send_header('Content-Length','12')\n"
+        "  self.end_headers()\n"
+        " def do_GET(self):\n"
+        "  if self.path not in ('/head-405','/range-ignored'):\n"
+        "   self.send_error(404); return\n"
+        "  if self.path=='/head-405' and self.headers.get('Range')=='bytes=0-0':\n"
+        "   self.send_response(206)\n"
+        "   self.send_header('Content-Range','bytes 0-0/12')\n"
+        "   self.send_header('Accept-Ranges','bytes')\n"
+        "   body=b't'\n"
+        "  else:\n"
+        "   self.send_response(200)\n"
+        "   body=b'test payload'\n"
+        "  self.send_header('Content-Length',str(len(body)))\n"
+        "  self.end_headers()\n"
+        "  self.wfile.write(body)\n"
+        "http.server.ThreadingHTTPServer(('127.0.0.1',int(sys.argv[1])),H).serve_forever()\n";
+    execlp("python3", "python3", "-c", script, port_text, (char *)NULL);
     _exit(127);
   }
 
@@ -106,4 +130,24 @@ Test(curl_http, head_rejects_http_errors) {
   RequestContext context = {0};
 
   cr_assert_eq(curl_client_head(url, &context, &info), -1);
+}
+
+Test(curl_http, head_405_falls_back_to_get_range) {
+  char url[128];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/head-405", server_port);
+  FileInfo info = {0};
+
+  cr_assert_eq(curl_client_head(url, NULL, &info), 0);
+  cr_assert_eq(info.total_size, 12);
+  cr_assert(info.supports_ranges);
+}
+
+Test(curl_http, ignored_range_uses_full_get_length) {
+  char url[128];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/range-ignored", server_port);
+  FileInfo info = {0};
+
+  cr_assert_eq(curl_client_head(url, NULL, &info), 0);
+  cr_assert_eq(info.total_size, 12);
+  cr_assert(!info.supports_ranges);
 }

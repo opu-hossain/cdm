@@ -135,7 +135,7 @@ int engine_run_download(struct Download *d) {
 
   FileInfo info;
   if (curl_client_head(d->url, &req_ctx, &info) != 0) {
-    LOG_ERROR("HEAD request failed for: %s\n", d->url);
+    LOG_ERROR("Metadata probe failed for: %s\n", d->url);
     return -1;
   }
 

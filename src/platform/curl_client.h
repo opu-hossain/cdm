@@ -27,10 +27,10 @@ typedef struct {
 /* Functions. */
 
 /**
- * Perform an HTTP HEAD request to probe file metadata.
+ * Probe file metadata with HEAD, falling back to a one-byte range GET.
  *
  * Follows redirects up to 10 levels.  On success, fills `out` with the
- * content length (or 0 if not reported) and the Accept-Ranges flag.
+ * total size (or 0 if not reported) and whether a range request succeeded.
  *
  * @param url   Target URL.
  * @param ctx   Optional request context (cookies, referrer, extra headers).
