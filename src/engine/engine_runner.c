@@ -206,6 +206,17 @@ int engine_run_download(struct Download *d) {
   if (resolve_auto_filename(d, &info) != 0)
     return -1;
 
+  /* Keep the validator that belongs to the bytes already on disk. The
+   * probe may discover newer metadata, which must not validate old chunks. */
+  char if_range[sizeof(d->etag)];
+  if_range[0] = '\0';
+  if (d->chunk_count > 0) {
+    const char *validator = d->etag[0] && strncmp(d->etag, "W/", 2) != 0
+                                ? d->etag
+                                : d->last_modified;
+    snprintf(if_range, sizeof(if_range), "%s", validator);
+  }
+
   if (strcmp(d->etag, info.etag) != 0 ||
       strcmp(d->last_modified, info.last_modified) != 0) {
     dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
@@ -240,6 +251,9 @@ int engine_run_download(struct Download *d) {
       resuming = false;
     }
   }
+
+  if (resuming && if_range[0])
+    req_ctx.if_range = if_range;
 
   d->total_size = info.total_size;
   db_update_total_size(d->id, info.total_size);
@@ -364,6 +378,15 @@ int engine_run_download(struct Download *d) {
 
   bool user_stopped =
       atomic_load(&d->cancel_requested) || atomic_load(&d->pause_requested);
+
+  if (result.range_invalidated && !user_stopped) {
+    LOG_INFO("Download %u: origin rejected resume validator; restarting", d->id);
+    dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
+    dm_mutex_lock(mutex);
+    clear_resume_state(d, true);
+    dm_mutex_unlock(mutex);
+    return engine_run_download(d);
+  }
 
   /* --- Fallback: single‑connection retry if parallel failed --- */
   bool tried_single_fallback = false;

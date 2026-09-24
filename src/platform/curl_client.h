@@ -17,6 +17,7 @@ typedef struct {
   const char *cookie;
   const char *referrer;
   const char *extra_headers; // "Key: Value\nKey: Value" lines
+  const char *if_range; // Stored strong ETag or Last-Modified for resume GETs.
 } RequestContext;
 
 typedef struct {

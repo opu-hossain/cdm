@@ -216,7 +216,28 @@ typedef struct {
   RebalancePool *pool;
   int slot_index;
   bool truncated; // stopped early due to rebalance shrink
+  bool range_invalidated;
 } WorkerContext;
+
+static size_t worker_header_callback(char *data, size_t size, size_t nmemb,
+                                     void *userdata) {
+  WorkerContext *ctx = (WorkerContext *)userdata;
+  size_t total = size * nmemb;
+  if (total >= 12 && memcmp(data, "HTTP/", 5) == 0) {
+    char line[64];
+    size_t length = total < sizeof(line) - 1 ? total : sizeof(line) - 1;
+    memcpy(line, data, length);
+    line[length] = '\0';
+    long status = 0;
+    if (sscanf(line, "HTTP/%*s %ld", &status) == 1 && status == 200 &&
+        ctx->request_ctx && ctx->request_ctx->if_range &&
+        !ctx->range.whole_file) {
+      ctx->range_invalidated = true;
+      return 0; // Stop before the full response can overwrite partial data.
+    }
+  }
+  return total;
+}
 
 /**
  * libcurl write callback.
@@ -295,6 +316,8 @@ static void run_one_segment(WorkerContext *ctx) {
   curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, worker_write_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, ctx);
+  curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, worker_header_callback);
+  curl_easy_setopt(curl, CURLOPT_HEADERDATA, ctx);
   curl_easy_setopt(curl, CURLOPT_USERAGENT, "cdm/0.1");
 
   struct curl_slist *headers = NULL;
@@ -304,9 +327,22 @@ static void run_one_segment(WorkerContext *ctx) {
     if (ctx->request_ctx->referrer && ctx->request_ctx->referrer[0])
       curl_easy_setopt(curl, CURLOPT_REFERER, ctx->request_ctx->referrer);
     headers = curl_client_build_headers(ctx->request_ctx->extra_headers);
-    if (headers)
-      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    if (!ctx->range.whole_file && ctx->request_ctx->if_range &&
+        ctx->request_ctx->if_range[0]) {
+      char header[sizeof(((FileInfo *)0)->etag) + sizeof("If-Range: ")];
+      snprintf(header, sizeof(header), "If-Range: %s",
+               ctx->request_ctx->if_range);
+      struct curl_slist *next = curl_slist_append(headers, header);
+      if (!next) {
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        return;
+      }
+      headers = next;
+    }
   }
+  if (headers)
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
   curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -472,6 +508,8 @@ worker_pool_run(const char *url, const Range *ranges, int n_workers,
     if (!contexts[i].succeeded) {
       result.all_succeeded = false;
     }
+    if (contexts[i].range_invalidated)
+      result.range_invalidated = true;
     if (i < MAX_WORKERS) {
       result.chunk_succeeded[i] = contexts[i].succeeded;
     }

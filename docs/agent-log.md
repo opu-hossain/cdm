@@ -247,3 +247,22 @@ Open questions:
 
 Next:
 - 0.3.3 Send `If-Range` on resume.
+
+## 2026-09-25 — Codex, task 0.3.3
+
+Branch: `cdm`
+Commit: `feat(engine): validate resume with If-Range and validators` (this entry's commit)
+
+Tasks completed:
+- 0.3.3 Send the stored strong ETag or Last-Modified in `If-Range` on resumed range requests. Abort a full HTTP 200 response before writing, discard stale chunks and file, and retry from byte zero.
+
+Tests:
+- Test first: local `127.0.0.1` HTTP integration cases for matching and stale validators both failed before implementation.
+- After implementation, both focused cases passed; `cmake --build build -j` and CTest passed 27/27.
+- Smoke: the same integration cases verified the final file contains all old bytes for a matching validator and all new bytes after a stale validator triggers restart.
+
+Open questions:
+- None for task 0.3.3.
+
+Next:
+- 0.3.4 Stale-validator refusal path.

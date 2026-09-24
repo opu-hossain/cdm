@@ -62,6 +62,7 @@ void rebalance_pool_destroy(RebalancePool *pool);
 
 typedef struct {
   bool all_succeeded;
+  bool range_invalidated; // A conditional range request received HTTP 200.
   bool chunk_succeeded[MAX_WORKERS]; // per‑worker success flag
   uint64_t total_bytes_downloaded;
 } WorkerPoolResult;

@@ -140,6 +140,110 @@ static void start_unknown_size_server(void) {
   cr_assert_fail("unknown-size HTTP server did not become ready");
 }
 
+static void start_validator_server(bool stale) {
+  g_server_root[0] = '\0';
+  g_server_port = reserve_port();
+  g_server_pid = fork();
+  cr_assert_neq(g_server_pid, -1);
+  if (g_server_pid == 0) {
+    static const char script[] =
+        "import http.server,sys\n"
+        "OLD=b'A'*64\n"
+        "NEW=b'B'*64\n"
+        "STALE=sys.argv[2]=='1'\n"
+        "class H(http.server.BaseHTTPRequestHandler):\n"
+        " def log_message(self,*args): pass\n"
+        " def do_HEAD(self):\n"
+        "  self.send_response(200)\n"
+        "  self.send_header('Content-Length','64')\n"
+        "  self.send_header('Accept-Ranges','bytes')\n"
+        "  self.send_header('ETag','\"old\"')\n"
+        "  self.end_headers()\n"
+        " def do_GET(self):\n"
+        "  value=self.headers.get('Range','')\n"
+        "  validator=self.headers.get('If-Range','')\n"
+        "  if not value.startswith('bytes='):\n"
+        "   self.send_error(400); return\n"
+        "  start,end=map(int,value[6:].split('-'))\n"
+        "  if start>0 and validator!='\"old\"':\n"
+        "   self.send_error(400); return\n"
+        "  if STALE and validator:\n"
+        "   self.send_response(200); body=NEW\n"
+        "  else:\n"
+        "   self.send_response(206)\n"
+        "   self.send_header('Content-Range',f'bytes {start}-{end}/64')\n"
+        "   body=(NEW if STALE else OLD)[start:end+1]\n"
+        "  self.send_header('Content-Length',str(len(body)))\n"
+        "  self.end_headers()\n"
+        "  try: self.wfile.write(body)\n"
+        "  except BrokenPipeError: pass\n"
+        "http.server.ThreadingHTTPServer(('127.0.0.1',int(sys.argv[1])),H).serve_forever()\n";
+    char port_text[16];
+    snprintf(port_text, sizeof(port_text), "%d", g_server_port);
+    int devnull = open("/dev/null", O_WRONLY);
+    if (devnull >= 0) {
+      dup2(devnull, STDOUT_FILENO);
+      dup2(devnull, STDERR_FILENO);
+      close(devnull);
+    }
+    execlp("python3", "python3", "-c", script, port_text,
+           stale ? "1" : "0", (char *)NULL);
+    _exit(127);
+  }
+  char url[160];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/file", g_server_port);
+  for (int i = 0; i < 100; i++) {
+    FileInfo info = {0};
+    if (curl_client_head(url, NULL, &info) == 0 && info.total_size == 64)
+      return;
+    usleep(10000);
+  }
+  cr_assert_fail("validator HTTP server did not become ready");
+}
+
+static void check_validator_resume(bool stale) {
+  start_validator_server(stale);
+  snprintf(g_download_path, sizeof(g_download_path),
+           "/tmp/cdm-validator-resume-%ld.bin", (long)getpid());
+  FILE *file = fopen(g_download_path, "wb");
+  cr_assert_not_null(file);
+  char first_half[32];
+  memset(first_half, 'A', sizeof(first_half));
+  cr_assert_eq(fwrite(first_half, 1, sizeof(first_half), file),
+               sizeof(first_half));
+  fclose(file);
+
+  Download d = {.id = 41, .total_size = 64, .chunk_count = 1};
+  snprintf(d.url, sizeof(d.url), "http://127.0.0.1:%d/file", g_server_port);
+  snprintf(d.dest_path, sizeof(d.dest_path), "%s", g_download_path);
+  strcpy(d.etag, "\"old\"");
+  d.chunks[0] = (DownloadChunk){0, 63, 32};
+  cr_assert_eq(db_insert_download(d.id, d.url, d.dest_path, NULL), 0);
+  cr_assert_eq(db_update_total_size(d.id, 64), 0);
+  cr_assert_eq(db_update_validators(d.id, d.etag, ""), 0);
+  cr_assert_eq(db_insert_chunk(d.id, 0, 63), 0);
+  cr_assert_eq(db_update_chunk_progress(d.id, 0, 32), 0);
+
+  cr_assert_eq(engine_run_download(&d), 0);
+  cr_assert_eq(file_get_size(g_download_path), 64);
+  file = fopen(g_download_path, "rb");
+  cr_assert_not_null(file);
+  char actual[64];
+  cr_assert_eq(fread(actual, 1, sizeof(actual), file), sizeof(actual));
+  fclose(file);
+  for (size_t i = 0; i < sizeof(actual); i++)
+    cr_assert_eq(actual[i], stale ? 'B' : 'A');
+  stop_server();
+}
+
+Test(engine_http_integration, matching_if_range_resumes) {
+  check_validator_resume(false);
+}
+
+Test(engine_http_integration, stale_if_range_restarts_from_zero) {
+  check_validator_resume(true);
+}
+
 static void setup_engine_http(void) {
   setenv("DOWNLOADMGR_ROOT", "/tmp", 1);
   db_init(":memory:");
