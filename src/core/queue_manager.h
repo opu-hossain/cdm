@@ -59,6 +59,7 @@ typedef struct Download {
 
   DownloadChunk chunks[QM_MAX_CHUNKS];
   int chunk_count;
+  bool reserved_file;
   int retry_count;
   time_t next_retry_at;
 

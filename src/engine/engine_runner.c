@@ -209,7 +209,10 @@ int engine_run_download(struct Download *d) {
 
     LOG_INFO("Using %d worker(s)\n", n_ranges);
 
-    int prealloc_rc = file_preallocate(d->dest_path, info.total_size);
+    int prealloc_rc = d->reserved_file && access(d->dest_path, F_OK) == 0
+                          ? file_preallocate_reserved(d->dest_path,
+                                                     info.total_size)
+                          : file_preallocate(d->dest_path, info.total_size);
     if (prealloc_rc == -2) {
       LOG_ERROR("Destination already exists, not retrying: %s\n", d->dest_path);
       return -3; // non-retryable, distinct from -2 (checksum/verification)

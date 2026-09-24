@@ -83,7 +83,8 @@ int db_init(const char *db_path) {
       "  referrer        TEXT DEFAULT '',"
       "  extra_headers   TEXT DEFAULT '',"
       "  expected_sha256 TEXT DEFAULT '',"
-      "  speed_limit_bps INTEGER DEFAULT 0"
+      "  speed_limit_bps INTEGER DEFAULT 0,"
+      "  reserved_file   INTEGER DEFAULT 0"
       ");"
       ""
       "CREATE TABLE IF NOT EXISTS chunks ("
@@ -104,10 +105,11 @@ int db_init(const char *db_path) {
   }
 
   static const char *migration_names[] = {"cookie", "referrer", "extra_headers",
-                                          "expected_sha256", "speed_limit_bps"};
+                                          "expected_sha256", "speed_limit_bps",
+                                          "reserved_file"};
   static const char *migration_types[] = {"TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
-                                          "INTEGER DEFAULT 0"};
+                                          "INTEGER DEFAULT 0", "INTEGER DEFAULT 0"};
 
   char *migration_error = NULL;
   rc = sqlite3_exec(g_db, "BEGIN;", NULL, NULL, &migration_error);
@@ -164,32 +166,17 @@ void db_close(void) {
 
 /* Download persistence */
 
-int db_insert_download(uint32_t id, const char *url, const char *dest_path,
-                       const RequestOptions *opts) {
+static int insert_download(uint32_t id, const char *url,
+                           const char *dest_path, const RequestOptions *opts,
+                           bool reserved) {
   if (!db_ready() || !url || !dest_path)
     return -1;
-
-  const char *check_sql =
-      "SELECT 1 FROM downloads WHERE dest_path = ? AND id != ? LIMIT 1";
-  sqlite3_stmt *check_stmt = NULL;
-  if (sqlite3_prepare_v2(g_db, check_sql, -1, &check_stmt, NULL) != SQLITE_OK) {
-    LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
-    return -1;
-  }
-  sqlite3_bind_text(check_stmt, 1, dest_path, -1, SQLITE_STATIC);
-  sqlite3_bind_int(check_stmt, 2, (int)id);
-  int exists = sqlite3_step(check_stmt) == SQLITE_ROW;
-  sqlite3_finalize(check_stmt);
-  if (exists) {
-    LOG_WARN("db_insert_download: destination already in use: %s", dest_path);
-    return -1;
-  }
 
   const char *sql =
       "INSERT OR REPLACE INTO downloads "
       "(id, url, dest_path, status, created_at, cookie, referrer, "
-      "extra_headers, expected_sha256, speed_limit_bps) "
-      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?)";
+      "extra_headers, expected_sha256, speed_limit_bps, reserved_file) "
+      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?)";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
     LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
@@ -207,6 +194,7 @@ int db_insert_download(uint32_t id, const char *url, const char *dest_path,
                     SQLITE_STATIC);
   sqlite3_bind_int64(stmt, 9,
                      (sqlite3_int64)(opts ? opts->speed_limit_bps : 0));
+  sqlite3_bind_int(stmt, 10, reserved ? 1 : 0);
 
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
@@ -214,6 +202,17 @@ int db_insert_download(uint32_t id, const char *url, const char *dest_path,
     LOG_ERROR("insert failed for id=%u: %s", id, sqlite3_errmsg(g_db));
   }
   return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+int db_insert_download(uint32_t id, const char *url, const char *dest_path,
+                       const RequestOptions *opts) {
+  return insert_download(id, url, dest_path, opts, false);
+}
+
+int db_insert_reserved_download(uint32_t id, const char *url,
+                                const char *dest_path,
+                                const RequestOptions *opts) {
+  return insert_download(id, url, dest_path, opts, true);
 }
 
 bool db_destination_exists(const char *dest_path) {
@@ -517,7 +516,7 @@ int db_restore_queue(void) {
     return -1;
   const char *sql = "SELECT id, url, dest_path, total_size, status, priority, "
                     "cookie, referrer, extra_headers, expected_sha256, "
-                    "speed_limit_bps "
+                    "speed_limit_bps, reserved_file "
                     "FROM downloads WHERE status != 'DONE'";
 
   sqlite3_stmt *stmt = NULL;
@@ -544,6 +543,7 @@ int db_restore_queue(void) {
     const char *headers = (const char *)sqlite3_column_text(stmt, 8);
     const char *sha256 = (const char *)sqlite3_column_text(stmt, 9);
     uint64_t speed_limit = (uint64_t)sqlite3_column_int64(stmt, 10);
+    d->reserved_file = sqlite3_column_int(stmt, 11) != 0;
 
     strncpy(d->url, url ? url : "", sizeof(d->url) - 1);
     strncpy(d->dest_path, path ? path : "", sizeof(d->dest_path) - 1);

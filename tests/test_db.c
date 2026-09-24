@@ -11,6 +11,21 @@ static void close_db(void) { db_close(); }
 
 TestSuite(db, .init = setup_db, .fini = close_db);
 
+Test(db, history_does_not_block_reusing_deleted_file_path) {
+  const char *path = "/tmp/cdm-history-only.apk";
+  unlink(path);
+  cr_assert_eq(db_insert_download(1, "http://test/old", path, NULL), 0);
+  cr_assert_eq(db_insert_reserved_download(2, "http://test/new", path, NULL),
+               0);
+  cr_assert_eq(db_count_downloads(10), 2);
+  cr_assert_eq(db_restore_queue(), 0);
+  Download *new_download = queue_manager_find_by_id(2);
+  cr_assert_not_null(new_download);
+  cr_assert(new_download->reserved_file);
+  queue_manager_remove(1);
+  queue_manager_remove(2);
+}
+
 Test(db, insert_download_and_chunks) {
   uint32_t id = 1;
   int rc = db_insert_download(id, "http://test", "/tmp/test", NULL);

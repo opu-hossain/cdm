@@ -81,6 +81,19 @@ int file_preallocate(const char *path, uint64_t total_size) {
   return 0;
 }
 
+int file_preallocate_reserved(const char *path, uint64_t total_size) {
+  int fd = open(path, O_WRONLY | O_NOFOLLOW);
+  if (fd < 0)
+    return -1;
+  struct stat st;
+  int rc = -1;
+  if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size == 0 &&
+      ftruncate(fd, (off_t)total_size) == 0)
+    rc = 0;
+  close(fd);
+  return rc;
+}
+
 FileHandle file_open_rw(const char *path) {
   int fd = open(path, O_WRONLY | O_NOFOLLOW, 0644);
   if (fd < 0) {
@@ -169,6 +182,23 @@ int file_preallocate(const char *path, uint64_t total_size) {
   }
   CloseHandle(h);
   return 0;
+}
+
+int file_preallocate_reserved(const char *path, uint64_t total_size) {
+  HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                         FILE_ATTRIBUTE_NORMAL, NULL);
+  if (h == INVALID_HANDLE_VALUE)
+    return -1;
+  LARGE_INTEGER size;
+  int rc = -1;
+  if (GetFileType(h) == FILE_TYPE_DISK && GetFileSizeEx(h, &size) &&
+      size.QuadPart == 0) {
+    size.QuadPart = (LONGLONG)total_size;
+    if (SetFilePointerEx(h, size, NULL, FILE_BEGIN) && SetEndOfFile(h))
+      rc = 0;
+  }
+  CloseHandle(h);
+  return rc;
 }
 
 uint64_t file_get_size(const char *path) {

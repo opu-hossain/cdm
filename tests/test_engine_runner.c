@@ -87,6 +87,17 @@ Test(engine_runner, run_success) {
   cr_assert_eq(size, 1000, "Output file should be 1000 bytes");
 }
 
+Test(engine_runner, fills_claimed_file) {
+  Download d = {0};
+  strcpy(d.url, "http://example.com/file");
+  strcpy(d.dest_path, "/tmp/test_engine_out");
+  cr_assert_eq(file_preallocate(d.dest_path, 0), 0);
+  d.reserved_file = true;
+
+  cr_assert_eq(engine_run_download(&d), 0);
+  cr_assert_eq(file_get_size(d.dest_path), 1000);
+}
+
 Test(engine_runner, invalid_url) {
   Download d = {0};
   strcpy(d.url, "ftp://invalid");

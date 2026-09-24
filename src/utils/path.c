@@ -3,6 +3,7 @@
 
 #include "path.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -51,16 +52,18 @@ bool path_join(const char *dir, const char *filename, char *out,
 
 static bool path_exists(const char *path) {
   struct stat info;
-  return stat(path, &info) == 0;
+#ifdef _WIN32
+  return stat(path, &info) == 0 || errno != ENOENT;
+#else
+  return lstat(path, &info) == 0 || errno != ENOENT;
+#endif
 }
 
-bool path_make_unique_with_conflict(const char *path, char *out,
-                                    size_t out_size, PathConflictFn conflict,
-                                    void *context) {
+bool path_make_unique(const char *path, char *out, size_t out_size) {
   if (!path || !out || out_size == 0)
     return false;
 
-  if (!path_exists(path) && (!conflict || !conflict(path, context))) {
+  if (!path_exists(path)) {
     if (strlen(path) >= out_size)
       return false;
     strcpy(out, path);
@@ -78,22 +81,29 @@ bool path_make_unique_with_conflict(const char *path, char *out,
   const char *extension = strrchr(filename, '.');
   if (!extension || extension == filename)
     extension = filename + strlen(filename);
+  /* Keep common tar archive suffixes together when numbering archives. */
+  if (extension > filename &&
+      (strcmp(extension, ".gz") == 0 || strcmp(extension, ".bz2") == 0 ||
+       strcmp(extension, ".xz") == 0 || strcmp(extension, ".zst") == 0)) {
+    const char *dot = extension;
+    while (dot > filename && dot[-1] != '.')
+      dot--;
+    if (dot > filename && (size_t)(extension - dot) == 3 &&
+        memcmp(dot, "tar", 3) == 0)
+      extension = dot - 1;
+  }
   size_t stem_len = (size_t)(extension - filename);
   size_t extension_len = strlen(extension);
 
   for (unsigned int suffix = 1; suffix < 1000000; suffix++) {
-    int written = snprintf(out, out_size, "%.*s%.*s (%u)%.*s", (int)prefix_len,
+    int written = snprintf(out, out_size, "%.*s%.*s(%u)%.*s", (int)prefix_len,
                            path, (int)stem_len, filename, suffix,
                            (int)extension_len, extension);
     if (written < 0 || (size_t)written >= out_size)
       return false;
-    if (!path_exists(out) && (!conflict || !conflict(out, context)))
+    if (!path_exists(out))
       return true;
   }
 
   return false;
-}
-
-bool path_make_unique(const char *path, char *out, size_t out_size) {
-  return path_make_unique_with_conflict(path, out, out_size, NULL, NULL);
 }

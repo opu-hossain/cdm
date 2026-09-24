@@ -143,7 +143,7 @@ Test(queue_manager, allowed_root_tracks_environment_changes) {
   queue_manager_remove(id);
 }
 
-Test(queue_manager, duplicate_destinations_are_rejected) {
+Test(queue_manager, destination_history_does_not_claim_filesystem_path) {
   const char *dest = "/tmp/duplicate-destination.bin";
   unlink(dest);
 
@@ -151,9 +151,10 @@ Test(queue_manager, duplicate_destinations_are_rejected) {
   cr_assert_neq(id1, 0);
 
   uint32_t id2 = queue_manager_add("http://example.com/second", dest, NULL);
-  cr_assert_eq(id2, 0);
+  cr_assert_neq(id2, 0);
 
   queue_manager_remove(id1);
+  queue_manager_remove(id2);
   unlink(dest);
 }
 

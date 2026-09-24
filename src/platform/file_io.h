@@ -48,6 +48,8 @@ int file_pwrite(FileHandle fd, const void *buf, size_t n, uint64_t offset);
  * it)
  */
 int file_preallocate(const char *path, uint64_t total_size);
+/** Resize a zero-length file previously claimed for a queued download. */
+int file_preallocate_reserved(const char *path, uint64_t total_size);
 
 /**
  * Get the current size of a file.

@@ -246,11 +246,6 @@ static void send_command_result(int client_fd, IpcResult result) {
   ipc_write_exact(client_fd, &wire_result, sizeof(wire_result));
 }
 
-static bool db_path_conflict(const char *path, void *context) {
-  (void)context;
-  return db_destination_exists(path);
-}
-
 /** Dispatch an incoming message. */
 static void handle_message(int client_fd, MsgHeader *hdr) {
   switch (hdr->type) {
@@ -263,18 +258,6 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         read_string(client_fd, options_json, sizeof(options_json)) != 0)
       return;
     LOG_INFO("MSG_ADD_DOWNLOAD received: url='%s' dest='%s'", url, dest);
-
-    char unique_dest[IPC_MAX_PATH_LEN];
-    if (!path_make_unique_with_conflict(dest, unique_dest, sizeof(unique_dest),
-                                        db_path_conflict, NULL)) {
-      LOG_ERROR("MSG_ADD_DOWNLOAD: could not allocate destination path");
-      uint32_t id = 0;
-      ipc_write_exact(client_fd, &id, sizeof(id));
-      break;
-    }
-    if (strcmp(unique_dest, dest) != 0)
-      LOG_INFO("MSG_ADD_DOWNLOAD: selected unique destination '%s'",
-               unique_dest);
 
     RequestOptions opts = {0};
     if (options_json[0] != '\0') {
@@ -304,13 +287,33 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       }
     }
 
-    uint32_t id = queue_manager_add(url, unique_dest, &opts);
-    LOG_INFO("MSG_ADD_DOWNLOAD: queue_manager_add returned id=%u", id);
-    if (id != 0 && db_insert_download(id, url, unique_dest, &opts) != 0) {
-      LOG_ERROR("MSG_ADD_DOWNLOAD: persistence failed for id=%u", id);
+    char unique_dest[IPC_MAX_PATH_LEN];
+    uint32_t id = 0;
+    for (unsigned int attempt = 0; attempt < 1000000; attempt++) {
+      if (!path_make_unique(dest, unique_dest, sizeof(unique_dest)))
+        break;
+      id = queue_manager_add(url, unique_dest, &opts);
+      if (id == 0)
+        break;
+      /* Claim the actual destination before replying to the client. */
+      int claim = file_preallocate(unique_dest, 0);
+      if (claim == 0) {
+        Download *download = queue_manager_find_by_id(id);
+        if (download)
+          download->reserved_file = true;
+        if (db_insert_reserved_download(id, url, unique_dest, &opts) == 0)
+          break;
+        unlink(unique_dest);
+      }
       queue_manager_remove(id);
       id = 0;
+      if (claim != -2)
+        break;
     }
+    if (id != 0 && strcmp(unique_dest, dest) != 0)
+      LOG_INFO("MSG_ADD_DOWNLOAD: selected unique destination '%s'",
+               unique_dest);
+    LOG_INFO("MSG_ADD_DOWNLOAD: queue_manager_add returned id=%u", id);
 
     ipc_write_exact(client_fd, &id, sizeof(id));
     break;
