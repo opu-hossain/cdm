@@ -10,9 +10,9 @@
 
 #define GUI_CMD_TIMEOUT_MS 5000
 #define GUI_EVENT_QUEUE_CAP 512
-#define GUI_LIST_ALL_FETCH_CAP 256
 
 static int g_cmd_fd = -1;
+static bool g_cmd_page_supported = false;
 static int g_listener_fd = -1;
 static dm_thread_t g_listener_thread;
 static bool g_listener_started = false;
@@ -222,9 +222,12 @@ static int listener_thread_fn(void *arg) {
 }
 
 bool gui_client_connect(void) {
-  g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, NULL);
+  uint16_t command_version = 1;
+  g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                             &command_version);
   if (g_cmd_fd < 0)
     return false;
+  g_cmd_page_supported = command_version == IPC_PROTOCOL_VERSION;
 
   uint16_t version = 1;
   g_listener_fd = ipc_client_connect_compatible(-1, &version);
@@ -428,6 +431,62 @@ bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count) {
 
   *out_records = out;
   *out_count = n;
+  return true;
+}
+
+bool gui_client_list_page(uint32_t offset, uint32_t limit,
+                          GuiDownloadRecord **out_records, int *out_count,
+                          uint32_t *out_total) {
+  if (!out_records || !out_count || !out_total || limit == 0)
+    return false;
+  *out_records = NULL;
+  *out_count = 0;
+  *out_total = 0;
+  if (limit > 256)
+    limit = 256;
+  if (g_cmd_fd < 0) {
+    uint16_t version = 1;
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, &version);
+    if (g_cmd_fd < 0) {
+      note_lost();
+      return false;
+    }
+    g_cmd_page_supported = version == IPC_PROTOCOL_VERSION;
+    note_restored();
+  }
+
+  GuiDownloadRecord *rows = calloc(limit, sizeof(*rows));
+  if (!rows)
+    return false;
+  if (g_cmd_page_supported) {
+    int count = ipc_send_list_page(g_cmd_fd, offset, limit, rows, (int)limit,
+                                   out_total);
+    if (count >= 0) {
+      *out_records = rows;
+      *out_count = count;
+      return true;
+    }
+    ipc_client_disconnect(g_cmd_fd);
+    g_cmd_fd = -1;
+    g_cmd_page_supported = false;
+  }
+
+  /* Legacy daemon, including older v2 builds without type 35. */
+  free(rows);
+  GuiDownloadRecord *legacy = NULL;
+  int legacy_count = 0;
+  if (!gui_client_list_all(&legacy, &legacy_count))
+    return false;
+  *out_total = (uint32_t)legacy_count;
+  if (offset >= (uint32_t)legacy_count) {
+    free(legacy);
+    return true;
+  }
+  int available = legacy_count - (int)offset;
+  int count = available < (int)limit ? available : (int)limit;
+  memmove(legacy, legacy + offset, (size_t)count * sizeof(*legacy));
+  *out_records = legacy;
+  *out_count = count;
   return true;
 }
 

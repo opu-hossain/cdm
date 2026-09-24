@@ -50,6 +50,10 @@ bool gui_client_reload_config(void);
 
 /* Fetch a full snapshot. The caller owns *out_records on success. */
 bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count);
+/* Fetch a bounded history window on the controller thread. Caller frees rows. */
+bool gui_client_list_page(uint32_t offset, uint32_t limit,
+                          GuiDownloadRecord **out_records, int *out_count,
+                          uint32_t *out_total);
 
 /* Fetch details only when the user opens a row's details panel. */
 bool gui_client_get_details(uint32_t id, GuiDownloadDetails *out);

@@ -6,6 +6,13 @@
 #include <stdint.h>
 
 #define GUI_CONTROLLER_MAX_ROWS 256
+#define GUI_HISTORY_PAGE_ROWS 64
+
+typedef struct {
+  uint32_t offset;
+  uint32_t count;
+  uint32_t total;
+} GuiHistoryWindow;
 
 typedef enum {
   GUI_CONTROLLER_EVENT_OPERATION,
@@ -42,6 +49,8 @@ typedef struct {
 typedef struct {
   GuiDownloadRecord records[GUI_CONTROLLER_MAX_ROWS];
   int count;
+  uint32_t offset;
+  uint32_t total;
 } GuiControllerSnapshotEvent;
 
 typedef struct {
@@ -85,5 +94,8 @@ bool gui_controller_enqueue_pause(uint32_t id);
 bool gui_controller_enqueue_resume(uint32_t id);
 bool gui_controller_enqueue_cancel(uint32_t id);
 bool gui_controller_enqueue_details(uint32_t id);
+bool gui_controller_request_more(void);
+/* Advances a bounded history window; used by the controller worker. */
+bool gui_controller_history_next(GuiHistoryWindow *window);
 
 #endif

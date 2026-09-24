@@ -19,6 +19,7 @@ typedef enum {
   GUI_CONTROLLER_COMMAND_RESUME,
   GUI_CONTROLLER_COMMAND_CANCEL,
   GUI_CONTROLLER_COMMAND_DETAILS,
+  GUI_CONTROLLER_COMMAND_PAGE,
 } GuiControllerCommandType;
 
 typedef struct {
@@ -218,6 +219,25 @@ bool gui_controller_enqueue_details(uint32_t id) {
   return enqueue_id_command(GUI_CONTROLLER_COMMAND_DETAILS, id);
 }
 
+bool gui_controller_request_more(void) {
+  return enqueue_id_command(GUI_CONTROLLER_COMMAND_PAGE, 0);
+}
+
+bool gui_controller_history_next(GuiHistoryWindow *window) {
+  if (!window || (uint64_t)window->offset + window->count >= window->total)
+    return false;
+  if (window->count < GUI_CONTROLLER_MAX_ROWS) {
+    uint32_t next = window->count + GUI_HISTORY_PAGE_ROWS;
+    window->count = next > GUI_CONTROLLER_MAX_ROWS
+                        ? GUI_CONTROLLER_MAX_ROWS : next;
+  } else {
+    window->offset += GUI_HISTORY_PAGE_ROWS;
+  }
+  if (window->count > window->total - window->offset)
+    window->count = window->total - window->offset;
+  return true;
+}
+
 static void publish_operation(GuiControllerOperation operation, uint32_t id,
                               const char *url, const char *dest_path,
                               bool succeeded) {
@@ -234,15 +254,24 @@ static void publish_operation(GuiControllerOperation operation, uint32_t id,
   gui_controller_publish(&event);
 }
 
-static void publish_snapshot(void) {
+static void publish_error(const char *message);
+
+static void publish_snapshot(GuiHistoryWindow *window) {
   GuiDownloadRecord *records = NULL;
   int count = 0;
-  if (!gui_client_list_all(&records, &count))
+  uint32_t total = 0;
+  uint32_t limit = window->count ? window->count : GUI_HISTORY_PAGE_ROWS;
+  if (!gui_client_list_page(window->offset, limit, &records, &count, &total)) {
+    publish_error("History could not be loaded");
     return;
+  }
 
   GuiControllerEvent event = {.type = GUI_CONTROLLER_EVENT_SNAPSHOT};
-  event.data.snapshot.count =
-      count > GUI_CONTROLLER_MAX_ROWS ? GUI_CONTROLLER_MAX_ROWS : count;
+  event.data.snapshot.count = count;
+  event.data.snapshot.offset = window->offset;
+  event.data.snapshot.total = total;
+  window->count = (uint32_t)count;
+  window->total = total;
   if (event.data.snapshot.count > 0)
     memcpy(event.data.snapshot.records, records,
            (size_t)event.data.snapshot.count * sizeof(records[0]));
@@ -323,6 +352,8 @@ static void process_command(const GuiControllerCommand *command) {
       publish_error("Download details are unavailable");
     return;
   }
+  case GUI_CONTROLLER_COMMAND_PAGE:
+    return; /* handled by the controller loop with its worker-owned window */
   }
   publish_operation(operation, command->id, NULL, NULL, succeeded);
   if (!succeeded)
@@ -331,17 +362,24 @@ static void process_command(const GuiControllerCommand *command) {
 
 static int controller_thread_fn(void *arg) {
   (void)arg;
+  GuiHistoryWindow window = {.count = GUI_HISTORY_PAGE_ROWS};
   int refresh_elapsed = GUI_CONTROLLER_REFRESH_MS;
   while (atomic_load(&g_running)) {
     publish_client_events();
     if (refresh_elapsed >= GUI_CONTROLLER_REFRESH_MS) {
       refresh_elapsed = 0;
-      publish_snapshot();
+      publish_snapshot(&window);
     }
 
     GuiControllerCommand command;
-    while (dequeue_command(&command))
-      process_command(&command);
+    while (dequeue_command(&command)) {
+      if (command.type == GUI_CONTROLLER_COMMAND_PAGE) {
+        if (gui_controller_history_next(&window))
+          publish_snapshot(&window);
+      } else {
+        process_command(&command);
+      }
+    }
 
     dm_thread_sleep_ms(50);
     refresh_elapsed += 50;

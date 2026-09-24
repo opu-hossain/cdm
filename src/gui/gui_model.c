@@ -207,7 +207,7 @@ void gui_model_add_local_row(uint32_t id, const char *url,
   if (g_row_count < GUI_MODEL_MAX_ROWS) {
     // Shift everything down to make room at the front — new downloads
     // should appear at the top immediately, matching the ORDER BY id DESC
-    // (newest first) that the next periodic MSG_LIST_ALL refresh will
+    // (newest first) that the next paged history refresh will
     // also produce, so there's no visible reshuffle a moment later.
     for (int i = g_row_count; i > 0; i--) {
       g_rows[i] = g_rows[i - 1];

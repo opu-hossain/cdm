@@ -88,3 +88,24 @@ Test(gui_controller, v2_progress_survives_snapshot_and_formats_row_metadata) {
   cr_assert_eq(gui_model_snapshot_rows(&row, 1), 1);
   cr_assert_not(row.has_v2); // an older daemon supplies only v1 events
 }
+
+Test(gui_controller, advances_bounded_history_window_through_600_rows) {
+  GuiHistoryWindow window = {.offset = 0, .count = 64, .total = 600};
+  cr_assert(gui_controller_history_next(&window));
+  cr_assert_eq(window.offset, 0);
+  cr_assert_eq(window.count, 128);
+  cr_assert(gui_controller_history_next(&window));
+  cr_assert(gui_controller_history_next(&window));
+  cr_assert_eq(window.count, GUI_CONTROLLER_MAX_ROWS);
+  cr_assert(gui_controller_history_next(&window));
+  cr_assert_eq(window.offset, 64);
+  cr_assert_eq(window.count, GUI_CONTROLLER_MAX_ROWS);
+  uint32_t previous_end = window.offset + window.count;
+  while (gui_controller_history_next(&window)) {
+    cr_assert_leq(window.count, GUI_CONTROLLER_MAX_ROWS);
+    cr_assert_leq(window.offset, previous_end);
+    cr_assert_gt(window.offset + window.count, previous_end);
+    previous_end = window.offset + window.count;
+  }
+  cr_assert_eq(window.offset + window.count, 600);
+}

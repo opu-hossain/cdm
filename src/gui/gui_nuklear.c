@@ -55,6 +55,8 @@ static const struct nk_user_font *fonts[6]; /* 11 through 16 px */
 typedef struct {
   bool connected, add_open, settings_open, details_open, details_found;
   bool advanced, toast_open, menu_just_opened;
+  bool history_loading;
+  uint32_t history_offset, history_total, pending_scroll_adjust;
   uint32_t selected_id, menu_id;
   GuiTab tab;
   GuiCategory category;
@@ -533,8 +535,12 @@ static void draw_chrome(struct nk_context *ctx, UiState *ui,
             DISABLED, SURFACE);
   }
   char total[64];
-  snprintf(total, sizeof(total), "%d downloads", visible_count);
-  text_at(ctx, width - 113, 60, 100, 32, total, 12, MUTED, BG);
+  if (ui->category == CATEGORY_ALL && ui->tab == TAB_ALL && !ui->search[0])
+    snprintf(total, sizeof(total), "%d of %u downloads", visible_count,
+             ui->history_total);
+  else
+    snprintf(total, sizeof(total), "%d downloads", visible_count);
+  text_at(ctx, width - 183, 60, 170, 32, total, 12, MUTED, BG);
   fill(ctx, screen_rect(ctx, 220, 100, width - 220, 1), 0, BORDER);
 }
 
@@ -579,22 +585,25 @@ static void file_chip(const char *filename, char ext[5],
 
 static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
                       int count, float width, float height) {
+  float viewport = height - 101 - (ui->error[0] ? 36 : 0);
   nk_layout_space_push(ctx, nk_rect(220, 101, width - 220,
-                                    height - 101 - (ui->error[0] ? 36 : 0)));
+                                    viewport));
   if (!nk_group_begin(ctx, "downloads", 0))
     return;
   nk_layout_set_min_row_height(ctx, 0);
   nk_layout_row_dynamic(ctx, 8, 1);
   nk_label(ctx, "", NK_TEXT_LEFT);
-  if (!count) {
+  if (!count && !ui->history_loading) {
     nk_layout_row_dynamic(ctx, 100, 1);
     nk_label_colored(ctx, "Your download queue is empty", NK_TEXT_CENTERED,
                      MUTED);
   }
+  float content_height = 8;
   for (int i = 0; i < count; ++i) {
     GuiRow *row = &rows[i];
     bool progress = can_pause(row) || is_status(row, "PAUSED");
     float rh = progress ? 69 : 59;
+    content_height += rh;
     nk_layout_space_begin(ctx, NK_STATIC, rh, 1);
     struct nk_rect r = screen_rect(ctx, 8, 2, width - 236, rh - 4);
     bool hovered = nk_input_is_mouse_hovering_rect(&ctx->input, r);
@@ -696,7 +705,28 @@ static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
     }
     nk_layout_space_end(ctx);
   }
+  bool all_history = ui->category == CATEGORY_ALL && ui->tab == TAB_ALL &&
+                     ui->search[0] == '\0';
+  if (all_history && ui->history_loading) {
+    nk_layout_row_dynamic(ctx, 28, 1);
+    nk_label_colored(ctx, "Loading more downloads...", NK_TEXT_CENTERED,
+                     MUTED);
+    content_height += 28;
+  }
   nk_group_end(ctx);
+  nk_uint x_scroll = 0, y_scroll = 0;
+  nk_group_get_scroll(ctx, "downloads", &x_scroll, &y_scroll);
+  if (ui->pending_scroll_adjust) {
+    y_scroll = y_scroll > ui->pending_scroll_adjust
+                   ? y_scroll - ui->pending_scroll_adjust : 0;
+    nk_group_set_scroll(ctx, "downloads", x_scroll, y_scroll);
+    ui->pending_scroll_adjust = 0;
+  }
+  if (all_history && !ui->history_loading &&
+      (uint64_t)ui->history_offset + (uint32_t)count < ui->history_total &&
+      (float)y_scroll + viewport + 220 >= content_height &&
+      gui_controller_request_more())
+    ui->history_loading = true;
 }
 
 static void show_details(UiState *ui, uint32_t id) {
@@ -1133,16 +1163,37 @@ static void consume_events(UiState *ui) {
     case GUI_CONTROLLER_EVENT_SNAPSHOT: {
       GuiRow previous[GUI_MODEL_MAX_ROWS];
       int n = gui_model_snapshot_rows(previous, GUI_MODEL_MAX_ROWS);
+      if (event.data.snapshot.offset > ui->history_offset) {
+        uint32_t dropped = event.data.snapshot.offset - ui->history_offset;
+        if (dropped > (uint32_t)n)
+          dropped = (uint32_t)n;
+        for (uint32_t i = 0; i < dropped; i++)
+          ui->pending_scroll_adjust +=
+              !strcmp(previous[i].status, "ACTIVE") ||
+                      !strcmp(previous[i].status, "PAUSED") ||
+                      !strcmp(previous[i].status, "QUEUED")
+                  ? 69 : 59;
+      }
       for (int i = 0; i < event.data.snapshot.count; ++i)
         maybe_complete(ui,
                        find_row(previous, n, event.data.snapshot.records[i].id),
                        event.data.snapshot.records[i].status);
       gui_model_apply_snapshot(event.data.snapshot.records,
                                event.data.snapshot.count);
+      if (event.data.snapshot.offset != ui->history_offset ||
+          event.data.snapshot.count != n ||
+          (uint64_t)event.data.snapshot.offset +
+                  (uint32_t)event.data.snapshot.count >=
+              event.data.snapshot.total)
+        ui->history_loading = false;
+      ui->history_offset = event.data.snapshot.offset;
+      ui->history_total = event.data.snapshot.total;
       break;
     }
     case GUI_CONTROLLER_EVENT_CONNECTION:
       ui->connected = event.data.connection.connected;
+      if (!ui->connected)
+        ui->history_loading = false;
       break;
     case GUI_CONTROLLER_EVENT_OPERATION:
       if (event.data.operation.succeeded) {
@@ -1172,6 +1223,7 @@ static void consume_events(UiState *ui) {
       break;
     case GUI_CONTROLLER_EVENT_ERROR:
       copy_text(ui->error, sizeof(ui->error), event.data.error.message);
+      ui->history_loading = false;
       break;
     }
   }
@@ -1183,12 +1235,6 @@ int run_gui(void) {
     return 1;
   }
   gui_model_init();
-  GuiDownloadRecord *records = NULL;
-  int count = 0;
-  if (gui_client_list_all(&records, &count)) {
-    gui_model_apply_snapshot(records, count);
-    free(records);
-  }
   GuiSdlBackendConfig config = {.width = 1100,
                                 .height = 720,
                                 .title = "Core Download Manager",
@@ -1209,7 +1255,8 @@ int run_gui(void) {
     gui_client_disconnect();
     return 1;
   }
-  UiState ui = {.connected = true, .disk_checked_at = UINT32_MAX};
+  UiState ui = {.connected = true, .history_loading = true,
+                .disk_checked_at = UINT32_MAX};
   copy_text(ui.numbers[5], sizeof(ui.numbers[5]), "0");
   copy_text(ui.folder, sizeof(ui.folder), config_get_default_download_dir());
   while (gui_sdl_backend_poll(backend)) {

@@ -423,3 +423,22 @@ Open questions:
 
 Next:
 - 0.5.2 Update GUI to page.
+
+## 2026-09-25 — Codex, task 0.5.2
+
+Branch: `cdm`
+Commit: `feat(gui): paginate history list on scroll` (this entry's commit)
+
+Tasks completed:
+- 0.5.2 Moved history reads to the GUI controller worker. The all-history view loads 64 rows initially, adds 64 as the user scrolls near the end, and advances a bounded 256-row window after it fills. It displays loading text and a loaded/total count, and adjusts scroll position when the window advances. The GUI client reconnects and uses the legacy list response when an older daemon rejects type 35.
+
+Tests:
+- Test first: a 600-row history-window test failed to build before the new controller API existed; it then passed and checks the 256-row bound and complete traversal.
+- `cmake --build build -j` and full CTest passed 27/27.
+- An isolated offscreen GUI stayed live with a temporary daemon and 600 completed database rows. The headless smoke did not visually exercise scrolling.
+
+Open questions:
+- None for task 0.5.2. Category, search, and status filters apply to the currently loaded window; a future server-side filter protocol would be needed for global filtered history.
+
+Next:
+- 0.5.3 Add a CLI list command.
