@@ -38,3 +38,22 @@ Open questions:
 
 Next:
 - 0.1.3 Fix unknown-size full-file request.
+
+## 2026-09-24 — Codex, task 0.1.3
+
+Branch: `cdm`
+Commit: `fix(engine): accept unknown-size transfers when total is absent` (this entry's commit)
+
+Tasks completed:
+- 0.1.3 Mark unknown-size whole-file ranges and require a successful HTTP/curl transfer without comparing against a fabricated one-byte range.
+
+Tests:
+- Test first: local HTTP integration route omitted `Content-Length` and returned a 21-byte body; the original engine failed with HTTP 200 and curl success.
+- After fix: focused unknown-size transfer test passed and verified the file bytes.
+- Full `cmake --build build -j` and CTest: 25/25 passed.
+
+Open questions:
+- None for task 0.1.3.
+
+Next:
+- 0.1.4 Make CLI add fail on a rejected ID.

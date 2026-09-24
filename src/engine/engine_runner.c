@@ -172,6 +172,7 @@ int engine_run_download(struct Download *d) {
       ranges[n_ranges].start = c->range_start;
       ranges[n_ranges].end = c->range_end;
       ranges[n_ranges].whole_file = force_whole_file;
+      ranges[n_ranges].unknown_size = false;
       ranges[n_ranges].resume_offset = force_whole_file ? 0 : c->bytes_done;
 
       if (!force_whole_file)
@@ -205,6 +206,7 @@ int engine_run_download(struct Download *d) {
       ranges[0].end = (info.total_size > 0) ? (info.total_size - 1) : 0;
       ranges[0].resume_offset = 0;
       ranges[0].whole_file = true;
+      ranges[0].unknown_size = info.total_size == 0;
     }
 
     LOG_INFO("Using %d worker(s)\n", n_ranges);
@@ -275,7 +277,8 @@ int engine_run_download(struct Download *d) {
         "Parallel download failed, retrying with a single connection...\n");
     atomic_store(&d->bytes_downloaded, 0);
     Range single_range = {
-        .start = 0, .end = 0, .resume_offset = 0, .whole_file = true};
+        .start = 0, .end = 0, .resume_offset = 0, .whole_file = true,
+        .unknown_size = info.total_size == 0};
     result =
         worker_pool_run(d->url, &single_range, 1, d->dest_path,
                         &d->bytes_downloaded, &d->cancel_requested,

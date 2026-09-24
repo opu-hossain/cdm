@@ -18,6 +18,7 @@ typedef struct {
   uint64_t end;           // inclusive
   uint64_t resume_offset; // for resuming a partially‑completed range
   bool whole_file;        // true if range covers the entire file
+  bool unknown_size;      // true when the whole-file response has no known size
 } Range;
 
 /**

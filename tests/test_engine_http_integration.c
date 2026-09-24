@@ -84,11 +84,60 @@ static void stop_server(void) {
     waitpid(g_server_pid, NULL, 0);
     g_server_pid = -1;
   }
-  char path[160];
-  snprintf(path, sizeof(path), "%s/payload.bin", g_server_root);
-  unlink(path);
-  rmdir(g_server_root);
+  if (g_server_root[0]) {
+    char path[160];
+    snprintf(path, sizeof(path), "%s/payload.bin", g_server_root);
+    unlink(path);
+    rmdir(g_server_root);
+  }
   g_server_root[0] = '\0';
+}
+
+static void start_unknown_size_server(void) {
+  g_server_root[0] = '\0';
+  g_server_port = reserve_port();
+  g_server_pid = fork();
+  cr_assert_neq(g_server_pid, -1);
+  if (g_server_pid == 0) {
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    if (listener < 0)
+      _exit(1);
+    int reuse = 1;
+    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons((uint16_t)g_server_port);
+    if (bind(listener, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+        listen(listener, 4) != 0)
+      _exit(1);
+    for (;;) {
+      int client = accept(listener, NULL, NULL);
+      if (client < 0)
+        continue;
+      char request[1024] = {0};
+      ssize_t count = recv(client, request, sizeof(request) - 1, 0);
+      if (count > 0) {
+        const char response[] = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
+        send(client, response, sizeof(response) - 1, 0);
+        if (strncmp(request, "GET ", 4) == 0) {
+          const char body[] = "unknown-size-transfer";
+          send(client, body, sizeof(body) - 1, 0);
+        }
+      }
+      close(client);
+    }
+  }
+
+  char url[160];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/stream", g_server_port);
+  for (int i = 0; i < 100; i++) {
+    FileInfo info = {0};
+    if (curl_client_head(url, NULL, &info) == 0 && info.total_size == 0)
+      return;
+    usleep(10000);
+  }
+  cr_assert_fail("unknown-size HTTP server did not become ready");
 }
 
 static void setup_engine_http(void) {
@@ -141,6 +190,32 @@ Test(engine_http_integration, real_download_succeeds) {
   cr_assert_eq(read_len, payload_len);
   cr_assert_eq(memcmp(payload, buf, payload_len), 0);
 
+  stop_server();
+}
+
+Test(engine_http_integration, unknown_size_download_succeeds) {
+  static const char payload[] = "unknown-size-transfer";
+  start_unknown_size_server();
+  snprintf(g_download_path, sizeof(g_download_path),
+           "/tmp/cdm-engine-http-unknown-%ld.bin", (long)getpid());
+  char url[160];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/stream", g_server_port);
+
+  Download d = {0};
+  d.id = 10;
+  snprintf(d.url, sizeof(d.url), "%s", url);
+  snprintf(d.dest_path, sizeof(d.dest_path), "%s", g_download_path);
+  cr_assert_eq(db_insert_download(d.id, d.url, d.dest_path, NULL), 0);
+  cr_assert_eq(engine_run_download(&d), 0);
+  cr_assert_eq(file_get_size(g_download_path), sizeof(payload) - 1);
+
+  FILE *fp = fopen(g_download_path, "rb");
+  cr_assert_not_null(fp);
+  char actual[sizeof(payload)] = {0};
+  cr_assert_eq(fread(actual, 1, sizeof(payload) - 1, fp),
+               sizeof(payload) - 1);
+  fclose(fp);
+  cr_assert_eq(memcmp(actual, payload, sizeof(payload) - 1), 0);
   stop_server();
 }
 

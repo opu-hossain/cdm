@@ -324,7 +324,8 @@ static void run_one_segment(WorkerContext *ctx) {
                 (ctx->range.whole_file ||
                  (ctx->total_workers == 1 && intended_write_offset == 0));
   bool http_ok = (http_status == 206 || ok_200);
-  bool exact_bytes = atomic_load(&ctx->bytes_done) == expected_bytes;
+  bool exact_bytes = ctx->range.unknown_size ||
+                     atomic_load(&ctx->bytes_done) == expected_bytes;
 
   ctx->succeeded = http_ok && exact_bytes &&
                    (res == CURLE_OK || ctx->truncated);

@@ -20,6 +20,7 @@ int segmenter_plan(uint64_t total_size, int n_workers, Range *out) {
     out[i].start = (uint64_t)i * chunk;
     out[i].resume_offset = 0;
     out[i].whole_file = false;
+    out[i].unknown_size = false;
 
     if (i == n_workers - 1) {
       /* Last worker picks up the remainder. */
