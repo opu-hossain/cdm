@@ -47,20 +47,35 @@ static bool join_path(char *out, size_t out_size, const char *base,
 
 typedef enum { IPC_BASE_RUNTIME, IPC_BASE_HOME, IPC_BASE_TMP } IpcBaseKind;
 
+static bool socket_path_fits(const char *base, const char *suffix) {
+  size_t capacity = sizeof(((struct sockaddr_un *)0)->sun_path);
+  size_t base_len = strlen(base);
+  return base_len < capacity && strlen(suffix) < capacity - base_len;
+}
+
+static bool format_tmp_path(char *out, size_t size, const char *extension) {
+  int written = snprintf(out, size, "/tmp/cdm_%u.%s", (unsigned)getuid(),
+                         extension);
+  return written >= 0 && (size_t)written < size;
+}
+
 /* Socket and lock must make the same runtime/home/tmp choice. */
 static int get_ipc_base(char *out, size_t size, IpcBaseKind *kind) {
   const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
   const char *home = getenv("HOME");
-  if (runtime_dir && runtime_dir[0] == '/') {
+  if (runtime_dir && runtime_dir[0] == '/' &&
+      socket_path_fits(runtime_dir, "/cdm.sock")) {
     *kind = IPC_BASE_RUNTIME;
-    return snprintf(out, size, "%s", runtime_dir) < (int)size ? 0 : -1;
+    int written = snprintf(out, size, "%s", runtime_dir);
+    return written >= 0 && (size_t)written < size ? 0 : -1;
   }
-  if (home && home[0] == '/') {
+  if (home && home[0] == '/' &&
+      socket_path_fits(home, "/.local/share/cdm/ipc.sock")) {
     *kind = IPC_BASE_HOME;
     return join_path(out, size, home, "/.local/share") ? 0 : -1;
   }
   *kind = IPC_BASE_TMP;
-  return snprintf(out, size, "/tmp") < (int)size ? 0 : -1;
+  return join_path(out, size, "", "/tmp") ? 0 : -1;
 }
 
 /** Get user-isolated IPC socket path (XDG_RUNTIME_DIR,
@@ -73,20 +88,26 @@ static void get_socket_path(char *out, size_t out_size) {
     return;
   }
 
-  char base[1024];
+  char base[2048];
   IpcBaseKind kind;
   if (get_ipc_base(base, sizeof(base), &kind) != 0) {
     out[0] = '\0';
     return;
   }
+  bool formatted = false;
   if (kind == IPC_BASE_RUNTIME)
-    join_path(cached_path, sizeof(cached_path), base, "/cdm.sock");
+    formatted = join_path(cached_path, sizeof(cached_path), base, "/cdm.sock");
   else if (kind == IPC_BASE_HOME)
     /* Probing clients must not create the new directory before migration. */
-    join_path(cached_path, sizeof(cached_path), base, "/cdm/ipc.sock");
+    formatted = join_path(cached_path, sizeof(cached_path), base,
+                          "/cdm/ipc.sock");
   else
-    snprintf(cached_path, sizeof(cached_path), "%s/cdm_%u.sock", base,
-             (unsigned)getuid());
+    formatted = format_tmp_path(cached_path, sizeof(cached_path), "sock");
+
+  if (!formatted) {
+    out[0] = '\0';
+    return;
+  }
 
   strncpy(out, cached_path, out_size - 1);
   out[out_size - 1] = '\0';
@@ -96,15 +117,16 @@ int ipc_daemon_lock_acquire(int *fd_out) {
   if (!fd_out)
     return -1;
   *fd_out = -1;
-  char path[1024];
-  char base[1024];
+  char path[2048];
+  char base[2048];
   IpcBaseKind kind;
   if (get_ipc_base(base, sizeof(base), &kind) != 0 ||
       (kind == IPC_BASE_HOME && file_ensure_directory(base) != 0))
     return -1;
-  if (kind == IPC_BASE_TMP)
-    snprintf(path, sizeof(path), "%s/cdm_%u.lock", base,
-             (unsigned)getuid());
+  if (kind == IPC_BASE_TMP) {
+    if (!format_tmp_path(path, sizeof(path), "lock"))
+      return -1;
+  }
   else if (!join_path(path, sizeof(path), base, "/cdm.lock"))
     return -1;
   int fd = open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);

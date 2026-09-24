@@ -76,3 +76,21 @@ Open questions:
 
 Next:
 - 0.1.5 Handle truncated fallback socket paths.
+
+## 2026-09-24 — Codex, task 0.1.5
+
+Branch: `cdm`
+Commit: `fix(ipc): handle truncated fallback socket and lock paths` (this entry's commit)
+
+Tasks completed:
+- 0.1.5 Select a shorter HOME or `/tmp` IPC base when a runtime/home socket path cannot fit `sockaddr_un`, and validate formatted temporary socket/lock paths.
+
+Tests:
+- Test first: new daemon integration test passed without `XDG_RUNTIME_DIR` but failed with an overlong runtime directory because the daemon exited before HOME fallback.
+- After fix: focused fallback smoke test passed, IPC source compiled without the two `-Wformat-truncation` warnings, and the full build/CTest passed 27/27.
+
+Open questions:
+- None for task 0.1.5.
+
+Next:
+- 0.1.6 Reset the chunk plan before single-stream fallback.

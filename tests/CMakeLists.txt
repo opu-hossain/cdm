@@ -77,6 +77,10 @@ if(UNIX AND NOT WIN32)
                  COMMAND ${Python3_EXECUTABLE} -B
                          ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_rejected_add.py
                          $<TARGET_FILE:cdm>)
+        add_test(NAME test_ipc_fallback
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_ipc_fallback.py
+                         $<TARGET_FILE:cdm>)
         add_executable(test_curl_http_integration test_curl_http_integration.c)
         downloadmgr_enable_warnings(test_curl_http_integration)
         downloadmgr_enable_sanitizer(test_curl_http_integration)
