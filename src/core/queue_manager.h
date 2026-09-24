@@ -46,6 +46,8 @@ typedef struct Download {
   uint32_t id;
   char url[2048];
   char dest_path[1024];
+  char etag[256];
+  char last_modified[128];
   uint64_t total_size;
   DownloadStatus status;
   int priority;

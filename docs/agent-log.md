@@ -228,3 +228,22 @@ Open questions:
 
 Next:
 - 0.3.2 Capture validators during probe.
+
+## 2026-09-24 — Codex, task 0.3.2
+
+Branch: `cdm`
+Commit: `feat(curl): capture etag and last-modified during probe` (this entry's commit)
+
+Tasks completed:
+- 0.3.2 Capture raw ETag and Last-Modified values from the final HEAD or GET probe response, persist changes in SQLite, and restore them into Download state.
+
+Tests:
+- Test first: the local HTTP integration test failed to compile before `FileInfo` had validator fields.
+- Focused curl, engine, and DB tests passed after implementation. One full-suite run saw an intermittent engine test failure; a retry passed. The engine tests had a shared `/tmp/test_engine_out` teardown path, so the success test now uses a PID-based path and cleans up its own file.
+- Final `cmake --build build -j` and CTest passed 27/27.
+
+Open questions:
+- None for task 0.3.2.
+
+Next:
+- 0.3.3 Send `If-Range` on resume.

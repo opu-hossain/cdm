@@ -25,6 +25,25 @@ typedef struct {
   bool body_aborted;
 } ProbeState;
 
+static void copy_header_value(char *out, size_t capacity, const char *data,
+                              size_t total, size_t prefix_len) {
+  const char *value = data + prefix_len;
+  size_t n = total - prefix_len;
+  while (n && (*value == ' ' || *value == '\t')) {
+    value++;
+    n--;
+  }
+  while (n && (value[n - 1] == '\r' || value[n - 1] == '\n' ||
+               value[n - 1] == ' ' || value[n - 1] == '\t'))
+    n--;
+  if (n >= capacity) {
+    out[0] = '\0';
+    return;
+  }
+  memcpy(out, value, n);
+  out[n] = '\0';
+}
+
 static size_t probe_header_callback(void *data, size_t size, size_t nmemb,
                                     void *userdata) {
   ProbeState *state = userdata;
@@ -40,19 +59,16 @@ static size_t probe_header_callback(void *data, size_t size, size_t nmemb,
     state->info->supports_ranges = true;
   }
   if (total > 20 && strncasecmp(data, "Content-Disposition:", 20) == 0) {
-    const char *value = (const char *)data + 20;
-    size_t n = total - 20;
-    while (n && (*value == ' ' || *value == '\t')) {
-      value++;
-      n--;
-    }
-    while (n && (value[n - 1] == '\r' || value[n - 1] == '\n'))
-      n--;
-    if (n < sizeof(state->info->content_disposition)) {
-      memcpy(state->info->content_disposition, value, n);
-      state->info->content_disposition[n] = '\0';
-    }
+    copy_header_value(state->info->content_disposition,
+                      sizeof(state->info->content_disposition), data, total,
+                      20);
   }
+  if (total > 5 && strncasecmp(data, "ETag:", 5) == 0)
+    copy_header_value(state->info->etag, sizeof(state->info->etag), data,
+                      total, 5);
+  if (total > 14 && strncasecmp(data, "Last-Modified:", 14) == 0)
+    copy_header_value(state->info->last_modified,
+                      sizeof(state->info->last_modified), data, total, 14);
   if (total > 14 && strncasecmp(data, "Content-Range:", 14) == 0) {
     char value[96];
     size_t n = total - 14;

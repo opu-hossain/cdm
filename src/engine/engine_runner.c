@@ -206,6 +206,21 @@ int engine_run_download(struct Download *d) {
   if (resolve_auto_filename(d, &info) != 0)
     return -1;
 
+  if (strcmp(d->etag, info.etag) != 0 ||
+      strcmp(d->last_modified, info.last_modified) != 0) {
+    dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
+    dm_mutex_lock(mutex);
+    int saved = db_update_validators(d->id, info.etag, info.last_modified);
+    if (saved == 0) {
+      snprintf(d->etag, sizeof(d->etag), "%s", info.etag);
+      snprintf(d->last_modified, sizeof(d->last_modified), "%s",
+               info.last_modified);
+    }
+    dm_mutex_unlock(mutex);
+    if (saved != 0)
+      return -1;
+  }
+
   LOG_INFO("Size: %llu bytes, Ranges: %s\n",
            (unsigned long long)info.total_size,
            info.supports_ranges ? "yes" : "no");

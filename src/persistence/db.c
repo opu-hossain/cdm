@@ -297,6 +297,24 @@ int db_update_total_size(uint32_t id, uint64_t total_size) {
   return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
+int db_update_validators(uint32_t id, const char *etag,
+                         const char *last_modified) {
+  if (!db_ready() || !etag || !last_modified)
+    return -1;
+  const char *sql = "UPDATE downloads SET etag = ?, last_modified = ? "
+                    "WHERE id = ?";
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_text(stmt, 1, etag, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, last_modified, -1, SQLITE_STATIC);
+  sqlite3_bind_int(stmt, 3, (int)id);
+  int rc = sqlite3_step(stmt);
+  int changed = sqlite3_changes(g_db);
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_DONE && changed == 1 ? 0 : -1;
+}
+
 /* Chunk persistence */
 
 int db_insert_chunk(uint32_t download_id, uint64_t range_start,
@@ -546,7 +564,8 @@ int db_restore_queue(void) {
     return -1;
   const char *sql = "SELECT id, url, dest_path, total_size, status, priority, "
                     "cookie, referrer, extra_headers, expected_sha256, "
-                    "speed_limit_bps, reserved_file, auto_filename "
+                    "speed_limit_bps, reserved_file, auto_filename, etag, "
+                    "last_modified "
                     "FROM downloads WHERE status != 'DONE'";
 
   sqlite3_stmt *stmt = NULL;
@@ -575,9 +594,14 @@ int db_restore_queue(void) {
     uint64_t speed_limit = (uint64_t)sqlite3_column_int64(stmt, 10);
     d->reserved_file = sqlite3_column_int(stmt, 11) != 0;
     atomic_store(&d->auto_filename, sqlite3_column_int(stmt, 12) != 0);
+    const char *etag = (const char *)sqlite3_column_text(stmt, 13);
+    const char *last_modified = (const char *)sqlite3_column_text(stmt, 14);
 
     strncpy(d->url, url ? url : "", sizeof(d->url) - 1);
     strncpy(d->dest_path, path ? path : "", sizeof(d->dest_path) - 1);
+    strncpy(d->etag, etag ? etag : "", sizeof(d->etag) - 1);
+    strncpy(d->last_modified, last_modified ? last_modified : "",
+            sizeof(d->last_modified) - 1);
     RequestOptions options = {0};
     strncpy(options.cookie, cookie ? cookie : "", sizeof(options.cookie) - 1);
     strncpy(options.referrer, referrer ? referrer : "",

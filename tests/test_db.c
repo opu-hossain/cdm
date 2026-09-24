@@ -167,12 +167,17 @@ Test(db, automatic_filename_mode_survives_restart) {
   cr_assert_eq(db_init(path), 0);
   cr_assert_eq(db_insert_reserved_download_auto(
                    81, "http://127.0.0.1/file", initial_path, NULL), 0);
+  cr_assert_eq(db_update_validators(81, "\"version-1\"",
+                                    "Wed, 21 Oct 2015 07:28:00 GMT"), 0);
   db_close();
   cr_assert_eq(db_init(path), 0);
   cr_assert_eq(db_restore_queue(), 0);
   Download *download = queue_manager_find_by_id(81);
   cr_assert_not_null(download);
   cr_assert(atomic_load(&download->auto_filename));
+  cr_assert_str_eq(download->etag, "\"version-1\"");
+  cr_assert_str_eq(download->last_modified,
+                   "Wed, 21 Oct 2015 07:28:00 GMT");
   cr_assert_eq(db_update_resolved_destination(81, resolved_path), 0);
   queue_manager_remove(81);
   db_close();

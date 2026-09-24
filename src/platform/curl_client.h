@@ -23,6 +23,8 @@ typedef struct {
   uint64_t total_size; // 0 = unknown
   bool supports_ranges;
   char content_disposition[512]; // Empty if no usable header was received.
+  char etag[256]; // Raw ETag value, including quotes or W/ prefix.
+  char last_modified[128]; // Raw Last-Modified date.
 } FileInfo;
 
 /* Functions. */
@@ -31,7 +33,8 @@ typedef struct {
  * Probe file metadata with HEAD, falling back to a one-byte range GET.
  *
  * Follows redirects up to 10 levels.  On success, fills `out` with the
- * total size (or 0 if not reported) and whether a range request succeeded.
+ * total size (or 0 if not reported), range support, filename suggestion, and
+ * raw ETag/Last-Modified validators from the final response.
  *
  * @param url   Target URL.
  * @param ctx   Optional request context (cookies, referrer, extra headers).

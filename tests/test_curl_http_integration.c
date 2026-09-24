@@ -68,6 +68,8 @@ static void setup_server(void) {
         "  self.send_response(200)\n"
         "  self.send_header('Content-Length','12')\n"
         "  self.send_header('Content-Disposition','attachment; filename=server.txt')\n"
+        "  self.send_header('ETag','\"version-1\"')\n"
+        "  self.send_header('Last-Modified','Wed, 21 Oct 2015 07:28:00 GMT')\n"
         "  self.end_headers()\n"
         " def do_GET(self):\n"
         "  if self.path not in ('/head-405','/range-ignored'):\n"
@@ -125,6 +127,8 @@ Test(curl_http, head_reads_local_file) {
   cr_assert_eq(info.total_size, 12);
   cr_assert_str_eq(info.content_disposition,
                    "attachment; filename=server.txt");
+  cr_assert_str_eq(info.etag, "\"version-1\"");
+  cr_assert_str_eq(info.last_modified, "Wed, 21 Oct 2015 07:28:00 GMT");
 }
 
 Test(curl_http, head_rejects_http_errors) {

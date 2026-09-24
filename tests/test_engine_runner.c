@@ -17,6 +17,7 @@
 static int fallback_scenario;
 static int fallback_call;
 static bool filename_scenario;
+static bool validator_scenario;
 static const uint64_t fallback_size = 4ULL * 1024ULL * 1024ULL;
 
 static void fill_file(const char *path, char value, uint64_t length) {
@@ -40,6 +41,10 @@ int curl_client_head(const char *url, const RequestContext *ctx, FileInfo *out) 
   if (filename_scenario)
     strcpy(out->content_disposition,
            "attachment; filename=\"server-name.bin\"");
+  if (validator_scenario) {
+    strcpy(out->etag, "\"version-1\"");
+    strcpy(out->last_modified, "Wed, 21 Oct 2015 07:28:00 GMT");
+  }
   return 0;
 }
 
@@ -121,13 +126,13 @@ static void setup_engine_test(void) {
   fallback_scenario = 0;
   fallback_call = 0;
   filename_scenario = false;
+  validator_scenario = false;
   setenv("DOWNLOADMGR_ROOT", "/tmp", 1);
   db_init(":memory:"); // use in‑memory DB to avoid "out of memory" errors
 }
 
 static void teardown_engine_test(void) {
   db_close();
-  unlink("/tmp/test_engine_out");
 }
 
 TestSuite(engine_runner, .init = setup_engine_test,
@@ -135,14 +140,17 @@ TestSuite(engine_runner, .init = setup_engine_test,
 
 Test(engine_runner, run_success) {
   Download d = {0};
-  strcpy(d.url, "http://example.com/file");
-  strcpy(d.dest_path, "/tmp/test_engine_out");
+  strcpy(d.url, "http://127.0.0.1/file");
+  snprintf(d.dest_path, sizeof(d.dest_path), "/tmp/cdm-engine-success-%ld.bin",
+           (long)getpid());
+  unlink(d.dest_path);
 
   int rc = engine_run_download(&d);
   cr_assert_eq(rc, 0, "engine_run_download should return 0 on success");
 
-  uint64_t size = file_get_size("/tmp/test_engine_out");
+  uint64_t size = file_get_size(d.dest_path);
   cr_assert_eq(size, 1000, "Output file should be 1000 bytes");
+  unlink(d.dest_path);
 }
 
 Test(engine_runner, renames_automatic_destination_after_probe) {
@@ -192,6 +200,21 @@ Test(engine_runner, keeps_explicit_destination_after_probe) {
   rmdir(dir);
 }
 
+Test(engine_runner, stores_probe_validators) {
+  Download d = {.id = 79};
+  strcpy(d.url, "http://127.0.0.1/file.bin");
+  snprintf(d.dest_path, sizeof(d.dest_path), "/tmp/cdm-validator-%ld.bin",
+           (long)getpid());
+  unlink(d.dest_path);
+  cr_assert_eq(db_insert_download(d.id, d.url, d.dest_path, NULL), 0);
+  validator_scenario = true;
+
+  cr_assert_eq(engine_run_download(&d), 0);
+  cr_assert_str_eq(d.etag, "\"version-1\"");
+  cr_assert_str_eq(d.last_modified, "Wed, 21 Oct 2015 07:28:00 GMT");
+  unlink(d.dest_path);
+}
+
 Test(engine_runner, fills_claimed_file) {
   char path[128];
   snprintf(path, sizeof(path), "/tmp/test_engine_claimed_%ld", (long)getpid());
@@ -205,7 +228,7 @@ Test(engine_runner, fills_claimed_file) {
 Test(engine_runner, invalid_url) {
   Download d = {0};
   strcpy(d.url, "ftp://invalid");
-  strcpy(d.dest_path, "/tmp/test_engine_out");
+  strcpy(d.dest_path, "/tmp/cdm-invalid-url-never-created");
 
   int rc = engine_run_download(&d);
   cr_assert_eq(rc, -1, "Invalid URL should return -1");
