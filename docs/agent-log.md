@@ -404,3 +404,22 @@ Open questions:
 
 Next:
 - 0.5.1 Add offset/limit pagination.
+
+## 2026-09-25 — Codex, task 0.5.1
+
+Branch: `cdm`
+Commit: `feat(ipc): add paginated history listing` (this entry's commit)
+
+Tasks completed:
+- 0.5.1 Added `MSG_LIST_PAGE = 35` with offset/limit request and total/returned/rows response, capped at 500 rows. The existing `MSG_LIST_ALL` remains a 200-row legacy shim. Added the client helper and database page visitor and documented the new wire type.
+
+Tests:
+- Test first: new 600-row IPC test failed to build because `ipc_send_list_page` was absent.
+- Focused test then passed, covering two pages without gaps/duplicates, exhausted offset, 500-row cap, and legacy 200-row response.
+- `cmake --build build -j` and full CTest passed 27/27. Focused IPC test also served as the affected-surface smoke check.
+
+Open questions:
+- None for task 0.5.1. Type 35 is new within protocol v2; an earlier v2 daemon closes on it, so clients should reconnect and use the legacy type 9 response in that case.
+
+Next:
+- 0.5.2 Update GUI to page.

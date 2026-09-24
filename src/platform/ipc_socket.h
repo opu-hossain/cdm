@@ -15,6 +15,7 @@ extern "C" {
 #endif
 
 #define IPC_LIST_ALL_MAX 200
+#define IPC_LIST_PAGE_MAX 500
 #define IPC_BROWSER_REQUEST_ID_MAX 128
 #define IPC_BROWSER_FILENAME_MAX 512
 #define IPC_BROWSER_MIME_MAX 128
@@ -96,6 +97,10 @@ int ipc_send_pause(int sock, uint32_t id);
 int ipc_send_resume(int sock, uint32_t id);
 int ipc_send_cancel(int sock, uint32_t id);
 int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max);
+/* Returns rows copied to out, -1 on I/O error. The daemon caps limit at 500.
+ * total_out is the full database count, before offset/limit. */
+int ipc_send_list_page(int sock, uint32_t offset, uint32_t limit,
+                       IpcDownloadRecord *out, int max, uint32_t *total_out);
 int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out);
 int ipc_send_reload_config(int sock);
 void ipc_send_subscribe(int sock);

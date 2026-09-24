@@ -65,7 +65,10 @@ int db_delete_chunks(uint32_t download_id);
 int db_load_chunks(uint32_t download_id, DbChunkRow *out, int max);
 int db_list_all_downloads(DbDownloadRow *out, int max);
 int db_count_downloads(int max);
+int64_t db_count_downloads_total(void);
 int db_visit_downloads(DbDownloadVisitor visitor, void *ctx, int max);
+int db_visit_downloads_page(DbDownloadVisitor visitor, void *ctx,
+                            uint32_t offset, uint32_t limit);
 uint32_t db_get_max_id(void);
 
 /** Single-row fetch of the heavy request-options fields for one download.

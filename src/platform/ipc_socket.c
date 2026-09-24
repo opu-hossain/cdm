@@ -417,6 +417,8 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_BROWSER_CONFIRM:
     return header->length >= sizeof(uint32_t) * 2 &&
            header->length <= sizeof(uint32_t) * 2 + IPC_MAX_PATH_LEN - 1;
+  case MSG_LIST_PAGE:
+    return header->length == sizeof(uint32_t) * 2;
   case MSG_LIST:
   case MSG_LIST_ALL:
   case MSG_SUBSCRIBE:
@@ -432,6 +434,17 @@ static bool valid_message_header(const MsgHeader *header) {
 typedef struct {
   int client_fd;
 } ListResponseContext;
+
+typedef struct {
+  DbDownloadRow *rows;
+  int count;
+} PageCollectContext;
+
+static int collect_download_row(const DbDownloadRow *row, void *ctx) {
+  PageCollectContext *page = ctx;
+  page->rows[page->count++] = *row;
+  return 0;
+}
 
 static float snapshot_progress(const DownloadRuntimeSnapshot *snapshot) {
   if (snapshot->total_size == 0)
@@ -782,6 +795,37 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     ipc_write_exact(client_fd, &count, sizeof(count));
     ListResponseContext response = {.client_fd = client_fd};
     db_visit_downloads(send_download_row, &response, IPC_LIST_ALL_MAX);
+    break;
+  }
+  case MSG_LIST_PAGE: {
+    uint32_t request[2];
+    if (ipc_read_exact(client_fd, request, sizeof(request)) != 0)
+      return;
+    uint32_t limit = request[1] > IPC_LIST_PAGE_MAX ? IPC_LIST_PAGE_MAX
+                                                     : request[1];
+    int64_t db_total = db_count_downloads_total();
+    uint32_t total = db_total < 0 ? 0
+                     : db_total > UINT32_MAX ? UINT32_MAX
+                                              : (uint32_t)db_total;
+    PageCollectContext page = {0};
+    if (db_total >= 0 && limit > 0 && request[0] < total) {
+      page.rows = calloc(limit, sizeof(*page.rows));
+      if (page.rows) {
+        int count = db_visit_downloads_page(collect_download_row, &page,
+                                            request[0], limit);
+        if (count < 0)
+          page.count = 0;
+      }
+    }
+    uint32_t returned = (uint32_t)page.count;
+    ipc_write_exact(client_fd, &total, sizeof(total));
+    ipc_write_exact(client_fd, &returned, sizeof(returned));
+    ListResponseContext response = {.client_fd = client_fd};
+    for (int i = 0; i < page.count; i++) {
+      if (send_download_row(&page.rows[i], &response) != 0)
+        break;
+    }
+    free(page.rows);
     break;
   }
   case MSG_GET_DETAILS: {
@@ -1251,17 +1295,8 @@ int ipc_send_cancel(int sock, uint32_t id) {
   return result == IPC_RESULT_OK ? 0 : -1;
 }
 
-int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max) {
-  if (!out || max <= 0)
-    return -1;
-  MsgHeader hdr = {.length = 0, .type = MSG_LIST_ALL};
-  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0)
-    return -1;
-
-  uint32_t count = 0;
-  if (ipc_read_exact(sock, &count, sizeof(count)) != 0)
-    return -1;
-
+static int read_download_rows(int sock, uint32_t count,
+                              IpcDownloadRecord *out, int max) {
   int n = 0;
   for (uint32_t i = 0; i < count; i++) {
     uint32_t id;
@@ -1290,6 +1325,38 @@ int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max) {
     }
   }
   return n;
+}
+
+int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max) {
+  if (!out || max <= 0)
+    return -1;
+  MsgHeader hdr = {.length = 0, .type = MSG_LIST_ALL};
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0)
+    return -1;
+  uint32_t count = 0;
+  if (ipc_read_exact(sock, &count, sizeof(count)) != 0)
+    return -1;
+  return read_download_rows(sock, count, out, max);
+}
+
+int ipc_send_list_page(int sock, uint32_t offset, uint32_t limit,
+                       IpcDownloadRecord *out, int max, uint32_t *total_out) {
+  if (!out || max <= 0 || !total_out)
+    return -1;
+  MsgHeader hdr = {.length = sizeof(uint32_t) * 2, .type = MSG_LIST_PAGE};
+  uint32_t request[2] = {offset, limit};
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0 ||
+      ipc_write_exact(sock, request, sizeof(request)) != 0)
+    return -1;
+  uint32_t total = 0, returned = 0;
+  if (ipc_read_exact(sock, &total, sizeof(total)) != 0 ||
+      ipc_read_exact(sock, &returned, sizeof(returned)) != 0 ||
+      returned > IPC_LIST_PAGE_MAX)
+    return -1;
+  int count = read_download_rows(sock, returned, out, max);
+  if (count >= 0)
+    *total_out = total;
+  return count;
 }
 
 int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out) {

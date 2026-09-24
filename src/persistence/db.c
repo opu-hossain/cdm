@@ -460,32 +460,47 @@ int db_list_all_downloads(DbDownloadRow *out, int max) {
 }
 
 int db_count_downloads(int max) {
-  if (!db_ready() || max < 0)
+  if (max < 0)
+    return -1;
+  int64_t total = db_count_downloads_total();
+  if (total < 0)
+    return -1;
+  return total > max ? max : (int)total;
+}
+
+int64_t db_count_downloads_total(void) {
+  if (!db_ready())
     return -1;
   const char *sql = "SELECT COUNT(*) FROM downloads";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
     return -1;
 
-  int count = -1;
-  if (sqlite3_step(stmt) == SQLITE_ROW) {
-    sqlite3_int64 total = sqlite3_column_int64(stmt, 0);
-    count = (total > max) ? max : (int)total;
-  }
+  int64_t count = -1;
+  if (sqlite3_step(stmt) == SQLITE_ROW)
+    count = sqlite3_column_int64(stmt, 0);
   sqlite3_finalize(stmt);
   return count;
 }
 
 int db_visit_downloads(DbDownloadVisitor visitor, void *ctx, int max) {
-  if (!db_ready() || !visitor || max <= 0)
+  if (max <= 0)
+    return -1;
+  return db_visit_downloads_page(visitor, ctx, 0, (uint32_t)max);
+}
+
+int db_visit_downloads_page(DbDownloadVisitor visitor, void *ctx,
+                            uint32_t offset, uint32_t limit) {
+  if (!db_ready() || !visitor || limit == 0)
     return -1;
 
   const char *sql = "SELECT id, url, dest_path, status FROM downloads "
-                    "ORDER BY id DESC LIMIT ?";
+                    "ORDER BY id DESC LIMIT ? OFFSET ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
     return -1;
-  sqlite3_bind_int(stmt, 1, max);
+  sqlite3_bind_int64(stmt, 1, (sqlite3_int64)limit);
+  sqlite3_bind_int64(stmt, 2, (sqlite3_int64)offset);
 
   int visited = 0;
   while (sqlite3_step(stmt) == SQLITE_ROW) {

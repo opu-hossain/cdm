@@ -76,6 +76,57 @@ static int browser_server_thread(void *unused) {
   return 0;
 }
 
+Test(ipc, list_page_covers_history_beyond_legacy_limit) {
+  char dir[] = "/tmp/cdm-page-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  setenv("DOWNLOADMGR_ROOT", dir, 1);
+  cr_assert_eq(db_init(":memory:"), 0);
+  for (uint32_t id = 1; id <= 600; id++) {
+    char path[128];
+    snprintf(path, sizeof(path), "%s/item-%u", dir, id);
+    cr_assert_eq(db_insert_download(id, "http://127.0.0.1/item", path, NULL),
+                 0);
+  }
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+
+  IpcDownloadRecord *rows = calloc(500, sizeof(*rows));
+  cr_assert_not_null(rows);
+  uint32_t total = 0;
+  int returned = ipc_send_list_page(client, 0, 500, rows, 500, &total);
+  cr_assert_eq(total, 600);
+  cr_assert_eq(returned, 500);
+  for (int i = 0; i < returned; i++)
+    cr_assert_eq(rows[i].id, (uint32_t)(600 - i));
+
+  returned = ipc_send_list_page(client, 500, 500, rows, 500, &total);
+  cr_assert_eq(total, 600);
+  cr_assert_eq(returned, 100);
+  for (int i = 0; i < returned; i++)
+    cr_assert_eq(rows[i].id, (uint32_t)(100 - i));
+
+  returned = ipc_send_list_page(client, 600, 500, rows, 500, &total);
+  cr_assert_eq(total, 600);
+  cr_assert_eq(returned, 0);
+  returned = ipc_send_list_page(client, 0, 1000, rows, 500, &total);
+  cr_assert_eq(total, 600);
+  cr_assert_eq(returned, 500);
+  cr_assert_eq(ipc_send_list_all(client, rows, 500), 200);
+
+  free(rows);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  db_close();
+  rmdir(dir);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
 Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   char dir[] = "/tmp/cdm-browser-ipc-XXXXXX";
   cr_assert_not_null(mkdtemp(dir));
