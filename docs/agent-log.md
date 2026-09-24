@@ -113,3 +113,22 @@ Open questions:
 
 Next:
 - 0.1.7 Protect rebalance split mutations with the queue mutex.
+
+## 2026-09-24 — Codex, task 0.1.7
+
+Branch: `cdm`
+Commit: `fix(engine): lock queue around rebalance split mutation` (this entry's commit)
+
+Tasks completed:
+- 0.1.7 Serialize rebalance split mutations with queue snapshots using the queue mutex, while releasing the pool mutex around the split callback.
+
+Tests:
+- Test first: a localhost 8 MiB range transfer triggered work stealing and failed because the split callback ran without the mutation lock.
+- After fix: focused transfer passed with concurrent interval sampling and an exact, gap-free interval coverage check.
+- Full `cmake --build build -j` and CTest passed 27/27.
+
+Open questions:
+- None for task 0.1.7.
+
+Next:
+- 0.2.1 Add GET `Range: 0-0` fallback to HEAD probing.

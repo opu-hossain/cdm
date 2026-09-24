@@ -92,12 +92,17 @@ WorkerPoolResult worker_pool_run(const char *url, const Range *ranges,
 RebalancePool *rebalance_pool_create(const Range *ranges, int n_ranges,
                                      _Atomic uint64_t **progress_slots,
                                      uint64_t min_steal_bytes,
-                                     RebalanceSplitFn on_split, void *userdata) {
+                                     RebalanceSplitFn on_split,
+                                     RebalanceMutationLockFn lock_mutation,
+                                     RebalanceMutationLockFn unlock_mutation,
+                                     void *userdata) {
   (void)ranges;
   (void)n_ranges;
   (void)progress_slots;
   (void)min_steal_bytes;
   (void)on_split;
+  (void)lock_mutation;
+  (void)unlock_mutation;
   (void)userdata;
   return NULL;
 }

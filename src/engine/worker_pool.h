@@ -27,6 +27,7 @@ extern "C" {
  */
 typedef void (*RebalanceSplitFn)(void *userdata, uint64_t victim_start,
                                  uint64_t new_start, uint64_t new_end);
+typedef void (*RebalanceMutationLockFn)(void *userdata);
 
 /** Opaque handle for the rebalance pool. */
 typedef struct RebalancePool RebalancePool;
@@ -41,13 +42,18 @@ typedef struct RebalancePool RebalancePool;
  * @param min_steal_bytes   Minimum remaining bytes before a chunk is worth
  *                          stealing.
  * @param on_split          Callback invoked when a chunk is split.
+ * @param lock_mutation     Lock protecting the split callback's shared state.
+ * @param unlock_mutation   Release that lock after the split callback.
  * @param userdata          Opaque pointer forwarded to the callback.
  * @return                  New pool, or NULL on allocation failure.
  */
 RebalancePool *rebalance_pool_create(const Range *ranges, int n_ranges,
                                      _Atomic uint64_t **progress_slots,
                                      uint64_t min_steal_bytes,
-                                     RebalanceSplitFn on_split, void *userdata);
+                                     RebalanceSplitFn on_split,
+                                     RebalanceMutationLockFn lock_mutation,
+                                     RebalanceMutationLockFn unlock_mutation,
+                                     void *userdata);
 
 /** Free a rebalance pool. */
 void rebalance_pool_destroy(RebalancePool *pool);

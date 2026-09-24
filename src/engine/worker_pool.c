@@ -34,6 +34,8 @@ struct RebalancePool {
   int slot_count;
   uint64_t min_steal_bytes;
   RebalanceSplitFn on_split;
+  RebalanceMutationLockFn lock_mutation;
+  RebalanceMutationLockFn unlock_mutation;
   void *userdata;
   _Atomic uint64_t **progress_slots;
 };
@@ -44,6 +46,8 @@ RebalancePool *rebalance_pool_create(const Range *ranges, int n_ranges,
                                      _Atomic uint64_t **progress_slots,
                                      uint64_t min_steal_bytes,
                                      RebalanceSplitFn on_split,
+                                     RebalanceMutationLockFn lock_mutation,
+                                     RebalanceMutationLockFn unlock_mutation,
                                      void *userdata) {
   RebalancePool *pool = calloc(1, sizeof(RebalancePool));
   if (!pool) {
@@ -55,6 +59,8 @@ RebalancePool *rebalance_pool_create(const Range *ranges, int n_ranges,
   dm_mutex_init(&pool->mutex);
   pool->min_steal_bytes = min_steal_bytes;
   pool->on_split = on_split;
+  pool->lock_mutation = lock_mutation;
+  pool->unlock_mutation = unlock_mutation;
   pool->userdata = userdata;
   pool->progress_slots = progress_slots;
   pool->slot_count = (n_ranges > MAX_WORKERS) ? MAX_WORKERS : n_ranges;
@@ -93,6 +99,10 @@ static int rebalance_pool_acquire(RebalancePool *pool, Range *out_range,
   if (!pool)
     return -1;
 
+  /* Always take the mutation lock first so concurrent splits are observed
+   * by the callback in the same order as the pool's slot changes. */
+  if (pool->lock_mutation)
+    pool->lock_mutation(pool->userdata);
   dm_mutex_lock(&pool->mutex);
 
   /* 1. Pick up an orphaned slot (should be rare). */
@@ -104,8 +114,11 @@ static int rebalance_pool_acquire(RebalancePool *pool, Range *out_range,
       out_range->end = atomic_load(&pool->slots[i].live_end) - 1;
       out_range->resume_offset = 0;
       out_range->whole_file = false;
+      out_range->unknown_size = false;
       *out_progress_slot = pool->slots[i].progress_slot;
       dm_mutex_unlock(&pool->mutex);
+      if (pool->unlock_mutation)
+        pool->unlock_mutation(pool->userdata);
       return i;
     }
   }
@@ -130,6 +143,8 @@ static int rebalance_pool_acquire(RebalancePool *pool, Range *out_range,
   if (victim == -1 || victim_remaining < pool->min_steal_bytes ||
       pool->slot_count >= MAX_WORKERS) {
     dm_mutex_unlock(&pool->mutex);
+    if (pool->unlock_mutation)
+      pool->unlock_mutation(pool->userdata);
     return -1;
   }
 
@@ -148,8 +163,13 @@ static int rebalance_pool_acquire(RebalancePool *pool, Range *out_range,
   atomic_init(&pool->slots[new_idx].exhausted, false);
   pool->slots[new_idx].progress_slot = NULL;
 
+  uint64_t victim_start = pool->slots[victim].start;
+  dm_mutex_unlock(&pool->mutex);
+
   if (pool->on_split)
-    pool->on_split(pool->userdata, pool->slots[victim].start, split, le);
+    pool->on_split(pool->userdata, victim_start, split, le);
+
+  dm_mutex_lock(&pool->mutex);
   if (pool->progress_slots)
     pool->slots[new_idx].progress_slot = pool->progress_slots[new_idx];
 
@@ -157,9 +177,12 @@ static int rebalance_pool_acquire(RebalancePool *pool, Range *out_range,
   out_range->end = le - 1;
   out_range->resume_offset = 0;
   out_range->whole_file = false;
+  out_range->unknown_size = false;
   *out_progress_slot = pool->slots[new_idx].progress_slot;
 
   dm_mutex_unlock(&pool->mutex);
+  if (pool->unlock_mutation)
+    pool->unlock_mutation(pool->userdata);
   return new_idx;
 }
 

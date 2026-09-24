@@ -7,6 +7,7 @@
 #include "../persistence/db.h"
 #include "../platform/curl_client.h"
 #include "../platform/file_io.h"
+#include "../platform/thread.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
 #include "finalize.h"
@@ -25,6 +26,16 @@ typedef struct {
   struct Download *d;
   _Atomic uint64_t **progress_slots;
 } SplitCallbackCtx;
+
+static void lock_rebalance_mutation(void *userdata) {
+  (void)userdata;
+  dm_mutex_lock((dm_mutex_t *)queue_manager_get_mutex());
+}
+
+static void unlock_rebalance_mutation(void *userdata) {
+  (void)userdata;
+  dm_mutex_unlock((dm_mutex_t *)queue_manager_get_mutex());
+}
 
 /**
  * Called by the rebalance pool when it decides to split a chunk.
@@ -250,7 +261,8 @@ int engine_run_download(struct Download *d) {
   if (n_ranges > 1) {
     pool = rebalance_pool_create(ranges, n_ranges, chunk_progress_slots,
                                  1024ULL * 1024ULL, /* 1 MB steal threshold */
-                                 on_rebalance_split, &split_ctx);
+                                 on_rebalance_split, lock_rebalance_mutation,
+                                 unlock_rebalance_mutation, &split_ctx);
   }
 
   WorkerPoolResult result = worker_pool_run(
