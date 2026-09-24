@@ -304,6 +304,16 @@ static void run_one_segment(WorkerContext *ctx) {
     return;
   }
 
+  DownloadManagerConfig config;
+  config_get(&config);
+  CURLcode proxy_result = curl_apply_proxy(curl, &config);
+  if (proxy_result != CURLE_OK) {
+    LOG_WARN("Could not configure proxy for worker: %s",
+             curl_easy_strerror(proxy_result));
+    curl_easy_cleanup(curl);
+    return;
+  }
+
   curl_easy_setopt(curl, CURLOPT_URL, ctx->url);
   if (!ctx->range.whole_file) {
     char range_header[128];

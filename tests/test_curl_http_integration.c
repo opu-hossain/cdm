@@ -1,5 +1,6 @@
 #include "../src/platform/curl_client.h"
 #include "../src/platform/thread.h"
+#include "../src/utils/config.h"
 #include <criterion/criterion.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
@@ -160,4 +161,71 @@ Test(curl_http, ignored_range_uses_full_get_length) {
   cr_assert_eq(curl_client_head(url, NULL, &info), 0);
   cr_assert_eq(info.total_size, 12);
   cr_assert(!info.supports_ranges);
+}
+
+Test(curl_http, socks5_proxy_resolves_target_hostname) {
+  int port = reserve_port();
+  pid_t proxy_pid = fork();
+  cr_assert_neq(proxy_pid, -1);
+  if (proxy_pid == 0) {
+    static const char script[] =
+        "import socket,sys\n"
+        "def take(c,n):\n"
+        " b=b''\n"
+        " while len(b)<n:\n"
+        "  p=c.recv(n-len(b))\n"
+        "  if not p: raise RuntimeError('closed')\n"
+        "  b+=p\n"
+        " return b\n"
+        "s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)\n"
+        "s.bind(('127.0.0.1',int(sys.argv[1]))); s.listen(4)\n"
+        "while True:\n"
+        " c,_=s.accept()\n"
+        " try:\n"
+        "  version,count=take(c,2)\n"
+        "  methods=take(c,count)\n"
+        "  if version!=5 or 0 not in methods: raise RuntimeError('greeting')\n"
+        "  c.sendall(b'\\x05\\x00')\n"
+        "  head=take(c,4)\n"
+        "  if head!=b'\\x05\\x01\\x00\\x03': raise RuntimeError('not remote DNS')\n"
+        "  length=take(c,1)[0]; host=take(c,length); take(c,2)\n"
+        "  if host!=b'proxy-target.invalid': raise RuntimeError('wrong host')\n"
+        "  c.sendall(b'\\x05\\x00\\x00\\x01\\x7f\\x00\\x00\\x01\\x00\\x00')\n"
+        "  request=c.recv(4096)\n"
+        "  if not request.startswith(b'HEAD /file HTTP/1.1'):\n"
+        "   raise RuntimeError('wrong request')\n"
+        "  c.sendall(b'HTTP/1.1 200 OK\\r\\nContent-Length: 7\\r\\nConnection: close\\r\\n\\r\\n')\n"
+        " except Exception: pass\n"
+        " finally: c.close()\n";
+    char port_text[16];
+    snprintf(port_text, sizeof(port_text), "%d", port);
+    execlp("python3", "python3", "-c", script, port_text, (char *)NULL);
+    _exit(127);
+  }
+
+  char config_path[160];
+  snprintf(config_path, sizeof(config_path), "/tmp/cdm-socks-%ld.toml",
+           (long)getpid());
+  FILE *config = fopen(config_path, "w");
+  cr_assert_not_null(config);
+  cr_assert(fprintf(config,
+                    "[proxy]\nmode = 2\nurl = \"socks5h://127.0.0.1:%d\"\n",
+                    port) > 0);
+  cr_assert_eq(fclose(config), 0);
+  config_init(config_path);
+  unlink(config_path);
+  FileInfo info = {0};
+  int result = -1;
+  for (int i = 0; i < 50; i++) {
+    result = curl_client_head("http://proxy-target.invalid/file", NULL,
+                              &info);
+    if (result == 0)
+      break;
+    dm_thread_sleep_ms(20);
+  }
+  cr_assert_eq(result, 0);
+  cr_assert_eq(info.total_size, 7);
+  config_init("/tmp/cdm-socks-no-config.toml");
+  kill(proxy_pid, SIGTERM);
+  waitpid(proxy_pid, NULL, 0);
 }

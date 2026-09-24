@@ -114,6 +114,34 @@ static size_t probe_body_callback(char *data, size_t size, size_t nmemb,
 
 /* Public API */
 
+CURLcode curl_apply_proxy(CURL *curl, const DownloadManagerConfig *config) {
+  if (!curl || !config)
+    return CURLE_BAD_FUNCTION_ARGUMENT;
+  if (config->proxy_mode == PROXY_NONE)
+    return CURLE_OK;
+
+  /* The selected mode controls the protocol, independent of the URL scheme. */
+  const char *address = strstr(config->proxy_url, "://");
+  if (!address || !address[3])
+    return CURLE_BAD_FUNCTION_ARGUMENT;
+  address += 3;
+  CURLcode code = curl_easy_setopt(curl, CURLOPT_PROXY, address);
+  if (code == CURLE_OK)
+    code = curl_easy_setopt(curl, CURLOPT_PROXYTYPE,
+                            config->proxy_mode == PROXY_HTTP
+                                ? (long)CURLPROXY_HTTP
+                                : (long)CURLPROXY_SOCKS5_HOSTNAME);
+  if (code == CURLE_OK)
+    code = curl_easy_setopt(curl, CURLOPT_NOPROXY, "");
+  if (code == CURLE_OK && config->proxy_username[0])
+    code = curl_easy_setopt(curl, CURLOPT_PROXYUSERNAME,
+                            config->proxy_username);
+  if (code == CURLE_OK && config->proxy_password[0])
+    code = curl_easy_setopt(curl, CURLOPT_PROXYPASSWORD,
+                            config->proxy_password);
+  return code;
+}
+
 int curl_client_head(const char *url, const RequestContext *ctx,
                      FileInfo *out) {
   memset(out, 0, sizeof(*out));
@@ -122,6 +150,16 @@ int curl_client_head(const char *url, const RequestContext *ctx,
   CURL *curl = curl_easy_init();
   if (!curl) {
     LOG_ERROR("curl_easy_init failed for %s", url);
+    return -1;
+  }
+
+  DownloadManagerConfig config;
+  config_get(&config);
+  CURLcode proxy_result = curl_apply_proxy(curl, &config);
+  if (proxy_result != CURLE_OK) {
+    LOG_WARN("Could not configure proxy for probe: %s",
+             curl_easy_strerror(proxy_result));
+    curl_easy_cleanup(curl);
     return -1;
   }
 

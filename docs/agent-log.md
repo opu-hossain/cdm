@@ -535,3 +535,21 @@ Open questions:
 
 Next:
 - 1.1.2 Apply proxy to all curl handles. Phase 0 merge gate 0.6.3 remains deferred as logged above.
+
+## 2026-09-25 — Codex, task 1.1.2
+
+Branch: `cdm`
+Commit: `feat(curl): route probe and workers through configured proxy` (this entry's commit)
+
+Tasks completed:
+- 1.1.2 Added a shared libcurl proxy helper for HTTP and SOCKS5 with remote DNS, proxy credentials, and explicit bypass of environment `NO_PROXY` for configured proxies. Probe and worker curl handles use the same config snapshot path.
+
+Tests:
+- Test first: a loopback authenticated HTTP proxy test failed at the probe because the configured proxy was not applied.
+- After implementation: HTTP proxy HEAD plus download and a local SOCKS5 remote-hostname handshake passed. Full build and CTest passed 29/29.
+
+Open questions:
+- None for task 1.1.2.
+
+Next:
+- 1.1.3 GUI proxy fields. Phase 0 merge gate 0.6.3 remains deferred.

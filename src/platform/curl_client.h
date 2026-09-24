@@ -4,6 +4,8 @@
 #ifndef PLATFORM_CURL_CLIENT_H
 #define PLATFORM_CURL_CLIENT_H
 
+#include "../utils/config.h"
+#include <curl/curl.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -53,6 +55,9 @@ int curl_client_head(const char *url, const RequestContext *ctx, FileInfo *out);
  * @return Heap-allocated header list, or NULL.
  */
 struct curl_slist *curl_client_build_headers(const char *extra_headers);
+
+/* Apply a config snapshot to a new curl handle before performing a request. */
+CURLcode curl_apply_proxy(CURL *curl, const DownloadManagerConfig *config);
 
 #ifdef __cplusplus
 }

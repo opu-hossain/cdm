@@ -3,6 +3,7 @@
 #include "../src/persistence/db.h"
 #include "../src/platform/curl_client.h"
 #include "../src/platform/file_io.h"
+#include "../src/utils/config.h"
 #include <criterion/criterion.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -258,6 +259,7 @@ static void setup_engine_http(void) {
 }
 
 static void teardown_engine_http(void) {
+  config_init("/tmp/cdm-engine-no-config.toml");
   db_close();
   if (g_download_path[0] != '\0') {
     unlink(g_download_path);
@@ -269,6 +271,84 @@ static void teardown_engine_http(void) {
 
 TestSuite(engine_http_integration, .init = setup_engine_http,
           .fini = teardown_engine_http);
+
+Test(engine_http_integration, configured_proxy_handles_probe_and_download) {
+  const int proxy_port = reserve_port();
+  g_server_pid = fork();
+  cr_assert_neq(g_server_pid, -1);
+  if (g_server_pid == 0) {
+    static const char script[] =
+        "import base64,http.server,sys\n"
+        "AUTH='Basic '+base64.b64encode(b'proxy-user:proxy-pass').decode()\n"
+        "BODY=b'proxy-payload'\n"
+        "class H(http.server.BaseHTTPRequestHandler):\n"
+        " def log_message(self,*args): pass\n"
+        " def reply(self,body):\n"
+        "  if self.headers.get('Proxy-Authorization')!=AUTH:\n"
+        "   self.send_response(407); self.end_headers(); return\n"
+        "  if self.path!='http://127.0.0.1:1/file.bin':\n"
+        "   self.send_error(404); return\n"
+        "  self.send_response(200)\n"
+        "  self.send_header('Content-Length',str(len(BODY)))\n"
+        "  self.end_headers()\n"
+        "  if body: self.wfile.write(BODY)\n"
+        " def do_HEAD(self): self.reply(False)\n"
+        " def do_GET(self): self.reply(True)\n"
+        "http.server.ThreadingHTTPServer(('127.0.0.1',int(sys.argv[1])),H).serve_forever()\n";
+    char port_text[16];
+    snprintf(port_text, sizeof(port_text), "%d", proxy_port);
+    execlp("python3", "python3", "-c", script, port_text, (char *)NULL);
+    _exit(127);
+  }
+
+  char config_path[160];
+  snprintf(config_path, sizeof(config_path), "/tmp/cdm-proxy-%ld.toml",
+           (long)getpid());
+  FILE *config = fopen(config_path, "w");
+  cr_assert_not_null(config);
+  cr_assert(fprintf(config,
+                    "[proxy]\nmode = 1\nurl = \"http://127.0.0.1:%d\"\n"
+                    "username = \"proxy-user\"\npassword = \"proxy-pass\"\n",
+                    proxy_port) > 0);
+  cr_assert_eq(fclose(config), 0);
+  config_init(config_path);
+  unlink(config_path);
+
+  for (int i = 0; i < 100; i++) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    cr_assert_neq(fd, -1);
+    struct sockaddr_in addr = {.sin_family = AF_INET,
+                               .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+                               .sin_port = htons((uint16_t)proxy_port)};
+    int ready = connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0;
+    close(fd);
+    if (ready)
+      break;
+    usleep(10000);
+    if (i == 99)
+      cr_assert_fail("local proxy did not start");
+  }
+
+  const char *url = "http://127.0.0.1:1/file.bin";
+  FileInfo info = {0};
+  cr_assert_eq(curl_client_head(url, NULL, &info), 0);
+  cr_assert_eq(info.total_size, 13);
+  snprintf(g_download_path, sizeof(g_download_path),
+           "/tmp/cdm-proxy-download-%ld.bin", (long)getpid());
+  Download d = {.id = 71};
+  snprintf(d.url, sizeof(d.url), "%s", url);
+  snprintf(d.dest_path, sizeof(d.dest_path), "%s", g_download_path);
+  cr_assert_eq(db_insert_download(d.id, d.url, d.dest_path, NULL), 0);
+  cr_assert_eq(engine_run_download(&d), 0);
+  cr_assert_eq(file_get_size(g_download_path), 13);
+  FILE *download = fopen(g_download_path, "rb");
+  cr_assert_not_null(download);
+  char actual[13];
+  cr_assert_eq(fread(actual, 1, sizeof(actual), download), sizeof(actual));
+  fclose(download);
+  cr_assert_eq(memcmp(actual, "proxy-payload", sizeof(actual)), 0);
+  stop_server();
+}
 
 Test(engine_http_integration, real_download_succeeds) {
   static const char payload[] =
