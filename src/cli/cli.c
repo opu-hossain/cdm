@@ -45,13 +45,12 @@ static bool parse_id(const char *text, uint32_t *out) {
 }
 
 static bool parse_add_options(int argc, char **argv, int first_opt_index,
+                              char *headers_buf, size_t headers_capacity,
                               IpcDownloadOptions *opts_out, bool *valid_out) {
   const char *cookie = NULL;
   const char *referrer = NULL;
   const char *sha256 = NULL;
   uint64_t speed_limit = 0;
-  char headers_buf[4096] = {0};
-
   bool has_options = false;
   bool valid = (argc - first_opt_index) % 2 == 0;
 
@@ -75,7 +74,7 @@ static bool parse_add_options(int argc, char **argv, int first_opt_index,
       size_t current_len = strlen(headers_buf);
       size_t value_len = strlen(argv[i + 1]);
       size_t separator_len = headers_buf[0] ? 1 : 0;
-      if (current_len + separator_len + value_len >= sizeof(headers_buf)) {
+      if (current_len + separator_len + value_len >= headers_capacity) {
         LOG_WARN("Header is too long");
         valid = false;
       } else {
@@ -159,9 +158,11 @@ int run_cli(int argc, char **argv) {
     }
 
     IpcDownloadOptions opts;
+    char headers_buf[4096] = {0};
     bool valid_opts = false;
     bool has_opts =
-        parse_add_options(argc, argv, first_opt_index, &opts, &valid_opts);
+        parse_add_options(argc, argv, first_opt_index, headers_buf,
+                          sizeof(headers_buf), &opts, &valid_opts);
     if (!valid_opts) {
       fprintf(stderr, "Invalid add options\n");
       ipc_client_disconnect(sock);

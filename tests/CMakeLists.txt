@@ -69,6 +69,10 @@ if(UNIX AND NOT WIN32)
                  COMMAND ${Python3_EXECUTABLE} -B
                          ${CMAKE_CURRENT_SOURCE_DIR}/test_daemon_lifecycle.py
                          $<TARGET_FILE:cdm>)
+        add_test(NAME test_cli_headers
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_headers.py
+                         $<TARGET_FILE:cdm>)
         add_executable(test_curl_http_integration test_curl_http_integration.c)
         downloadmgr_enable_warnings(test_curl_http_integration)
         downloadmgr_enable_sanitizer(test_curl_http_integration)

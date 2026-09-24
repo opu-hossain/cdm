@@ -18,3 +18,23 @@ Open questions:
 
 Next:
 - 0.1.2 Fix CLI `--header` dangling pointer.
+
+## 2026-09-24 — Codex, task 0.1.2
+
+Branch: `cdm`
+Commit: `fix(cli): own --header buffer in caller, not callee stack` (this entry's commit)
+
+Tasks completed:
+- 0.1.2 Move repeated CLI header storage to a caller-owned buffer that remains live through IPC serialization.
+
+Tests:
+- Test first: new real-daemon CLI integration test passed on the ordinary build but failed on the unfixed ASan build with `stack-use-after-return` in `ipc_send_add_download`.
+- After fix: focused ASan test passed with `detect_stack_use_after_return=1`.
+- Full `cmake --build build -j` and CTest: 25/25 passed.
+- Smoke: integration test runs `cdm cli add` against `127.0.0.1` and verifies both repeated headers through `MSG_GET_DETAILS`.
+
+Open questions:
+- None for task 0.1.2.
+
+Next:
+- 0.1.3 Fix unknown-size full-file request.
