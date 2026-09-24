@@ -174,8 +174,10 @@ int run_cli(int argc, char **argv) {
     if (id == 0) {
       LOG_WARN("Daemon rejected the download (invalid or unsafe destination "
                "path?)");
+      ret = 1;
+    } else {
+      printf("Download added (ID: %u, saved to %s)\n", id, unique_path);
     }
-    printf("Download added (ID: %u, saved to %s)\n", id, unique_path);
 
   } else if (strcmp(cmd, "pause") == 0 && argc >= 3) {
     uint32_t id = 0;

@@ -57,3 +57,22 @@ Open questions:
 
 Next:
 - 0.1.4 Make CLI add fail on a rejected ID.
+
+## 2026-09-24 — Codex, task 0.1.4
+
+Branch: `cdm`
+Commit: `fix(cli): report rejected add as failure with non-zero exit` (this entry's commit)
+
+Tasks completed:
+- 0.1.4 Return failure and suppress the success line when the daemon returns download ID zero.
+
+Tests:
+- Test first: new daemon/CLI integration test rejected a destination outside `DOWNLOADMGR_ROOT`; the old CLI returned zero and printed `Download added (ID: 0, ...)`.
+- After fix: focused rejection test passed; full build and CTest passed 26/26.
+- Smoke: the test runs the real CLI and daemon over a local Unix socket, with a loopback-only URL.
+
+Open questions:
+- None for task 0.1.4.
+
+Next:
+- 0.1.5 Handle truncated fallback socket paths.
