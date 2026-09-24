@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Core Download Manager",
+  "description": "Offer browser downloads to cdm.",
+  "version": "0.2.0",
+  "permissions": ["downloads", "nativeMessaging"],
+  "background": {"scripts": ["background.js"]},
+  "action": {"default_title": "Core Download Manager"},
+  "browser_specific_settings": {
+    "gecko": {"id": "browser@cdm.local", "strict_min_version": "109.0"}
+  }
+}

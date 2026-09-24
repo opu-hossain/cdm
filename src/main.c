@@ -3,11 +3,17 @@
 
 #include "platform/ipc_socket.h"
 #include "platform/spawn.h"
+#include "platform/daemon_autostart.h"
 #include "platform/thread.h"
+#include "gui/browser_popup.h"
+#include "native_host/browser_install.h"
 #include "utils/config.h"
 #include "utils/log.h"
 
 #include <stdio.h>
+#include <errno.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Forward declarations for the three entry points */
@@ -54,6 +60,19 @@ static int ensure_daemon_running(void) {
 int main(int argc, char **argv) {
   /* Log to stderr by default (the daemon overrides this later). */
   log_init(NULL, LOG_INFO);
+
+  /* Lifecycle commands do not need configuration; run_daemon loads it. */
+  if (argc >= 2 && strcmp(argv[1], "daemon") == 0) {
+    if (argc == 2)
+      return run_daemon();
+    if (argc == 3 && (strcmp(argv[2], "enable") == 0 ||
+                      strcmp(argv[2], "disable") == 0 ||
+                      strcmp(argv[2], "status") == 0))
+      return daemon_autostart_command(argv[2]);
+    fprintf(stderr, "Usage: cdm daemon [enable|disable|status]\n");
+    return 2;
+  }
+
   config_init(NULL);
 
   /* No arguments → ensure daemon is running, then launch GUI. */
@@ -64,9 +83,6 @@ int main(int argc, char **argv) {
   }
 
   const char *mode = argv[1];
-
-  if (strcmp(mode, "daemon") == 0)
-    return run_daemon();
 
   if (strcmp(mode, "gui") == 0 || strcmp(mode, "ui") == 0) {
     if (ensure_daemon_running() != 0)
@@ -80,9 +96,22 @@ int main(int argc, char **argv) {
     return run_cli(argc - 1, argv + 1);
   }
 
+  if (strcmp(mode, "browser-popup") == 0 && argc == 4 &&
+      strcmp(argv[2], "--offer") == 0) {
+    errno = 0;
+    char *end = NULL;
+    unsigned long id = strtoul(argv[3], &end, 10);
+    if (errno || !end || *end || id == 0 || id > UINT32_MAX)
+      return 1;
+    return run_browser_popup((uint32_t)id);
+  }
+
+  if (strcmp(mode, "browser") == 0)
+    return browser_install_main(argc - 1, argv + 1);
+
   /* User-friendly usage (not a log message). */
-  fprintf(stderr, "Usage: %s [daemon|gui|cli]\n", argv[0]);
-  fprintf(stderr, "  daemon  — Run in background\n");
+  fprintf(stderr, "Usage: %s [daemon [enable|disable|status]|gui|cli]\n", argv[0]);
+  fprintf(stderr, "  daemon  — Run in background or manage login autostart\n");
   fprintf(stderr, "  gui     — Open the graphical interface (default)\n");
   fprintf(stderr, "  cli     — Command-line interface\n");
   return 1;

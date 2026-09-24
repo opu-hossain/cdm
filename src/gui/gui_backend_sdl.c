@@ -16,6 +16,7 @@
 #include <SDL2/SDL_opengl.h>
 // clang-format on
 #include <stdlib.h>
+#include <string.h>
 
 #include "nuklear.h"
 #include "nuklear_sdl_gl3.h"
@@ -35,8 +36,19 @@ struct GuiSdlBackend {
 };
 
 GuiSdlBackend *gui_sdl_backend_create(const GuiSdlBackendConfig *config) {
-  if (!config ||
-      SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS) != 0) {
+  if (!config)
+    return NULL;
+  int init_result = SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS);
+  const char *driver = SDL_getenv("SDL_VIDEODRIVER");
+  if (init_result != 0 && SDL_getenv("DISPLAY") &&
+      (!driver || strcmp(driver, "wayland") == 0)) {
+    LOG_WARN("gui_sdl: default video driver failed (%s), retrying X11",
+             SDL_GetError());
+    SDL_Quit();
+    SDL_setenv("SDL_VIDEODRIVER", "x11", 1);
+    init_result = SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS);
+  }
+  if (init_result != 0) {
     LOG_ERROR("gui_sdl: SDL initialization failed: %s", SDL_GetError());
     return NULL;
   }

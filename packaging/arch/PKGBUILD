@@ -1,8 +1,8 @@
 # Maintainer: Opu Hossain <opuhossain@tutamail.com>
 pkgname=cdm
-pkgver=0.1.0
+pkgver=0.2.0rc1
 pkgrel=1
-pkgdesc="Core Download Manager"
+pkgdesc="Core Download Manager with optional browser integration"
 arch=('x86_64' 'aarch64')
 url="https://github.com/opu-hossain/cdm"
 license=('MIT')
@@ -18,6 +18,7 @@ depends=(
 )
 makedepends=(
   'cmake'
+  'python'
   'git'
   'pkgconf'
   'libnotify'
@@ -25,11 +26,13 @@ makedepends=(
   'libepoxy'
   'mesa'
 )
-source=("$pkgname-$pkgver.tar.gz::https://github.com/opu-hossain/cdm/archive/refs/tags/v$pkgver.tar.gz")
+backup=('etc/xdg/autostart/cdm-daemon.desktop')
+_upstream_version="${pkgver/rc/-rc}"
+source=("$pkgname-$pkgver.tar.gz::https://github.com/opu-hossain/cdm/archive/refs/tags/v$_upstream_version.tar.gz")
 sha256sums=('SKIP')
 
 build() {
-  cd "$srcdir/cdm-$pkgver"
+  cd "$srcdir/cdm-$_upstream_version"
   cmake -S . -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr \
@@ -38,6 +41,6 @@ build() {
 }
 
 package() {
-  cd "$srcdir/cdm-$pkgver"
+  cd "$srcdir/cdm-$_upstream_version"
   DESTDIR="$pkgdir" cmake --install build
 }

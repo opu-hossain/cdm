@@ -1,0 +1,7 @@
+{
+  "name": "org.cdm.browser",
+  "description": "Core Download Manager browser host",
+  "path": "@CDM_NATIVE_HOST_PATH@",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://@EXTENSION_ID@/"]
+}

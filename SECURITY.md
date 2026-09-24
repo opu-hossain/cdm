@@ -1,58 +1,13 @@
-# Security Policy
+# Security policy
 
-## Reporting Security Vulnerabilities
+## Report a vulnerability
 
-The security of Core Download Manager is important.
+Please email **opuhossain@tutamail.com** privately with a description of the issue, reproduction steps, affected version or commit, and potential impact. This is the public maintainer address listed in `packaging/arch/PKGBUILD`. Do not put exploit details in a public issue before maintainers have had a chance to assess the report.
 
-If you discover a security vulnerability, please report it privately instead of opening a public issue.
+If the repository's GitHub Security page offers **Report a vulnerability**, you may use that private reporting form instead. Its availability depends on a repository setting; this policy does not assume it is enabled.
 
----
+No response-time or release-date guarantee is stated. Maintainers can coordinate a fix and disclosure with the reporter after reviewing the issue.
 
-# How to Report
+## Scope
 
-Please include:
-
-- Description of the vulnerability.
-- Steps to reproduce.
-- Affected versions.
-- Potential impact.
-- Suggested fix (if available).
-
----
-
-# Response Process
-
-After receiving a report:
-
-1. The issue will be investigated.
-2. The vulnerability will be confirmed.
-3. A fix will be prepared.
-4. A release will be published if necessary.
-5. Credit will be given to the reporter unless they request otherwise.
-
----
-
-# Supported Versions
-
-Currently:
-
-| Version | Supported |
-|--------|-----------|
-| Latest development branch | Yes |
-| Older releases | Best effort |
-
----
-
-# Responsible Disclosure
-
-Please do not:
-
-- Publicly disclose vulnerabilities before a fix is available.
-- Exploit vulnerabilities against other users.
-- Access data without permission.
-
-Responsible security research is appreciated.
-
----
-
-Thank you for helping keep CDM secure.
+The current source and package configuration target Linux. Windows and macOS are not yet supported. Include the exact cdm version, operating system, and package or build method in a report when relevant.

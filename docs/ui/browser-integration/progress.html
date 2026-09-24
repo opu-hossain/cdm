@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Download progress — cdm</title>
+  <style>
+    :root {
+      --bg: #0b0f14; --surface: #111722; --surface2: #161e2c;
+      --border: #232d3d; --text: #e8ecf1; --muted: #7c8a9d;
+      --accent: #3d9dcf; --green: #3f8f5f;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+      background: var(--bg); color: var(--text);
+      font: 14px/1.45 "Segoe UI", Inter, system-ui, sans-serif; }
+    .window { width: min(460px, calc(100vw - 24px)); overflow: hidden;
+      border: 1px solid var(--border); border-radius: 10px;
+      background: var(--surface); box-shadow: 0 18px 60px #0009; }
+    header { height: 48px; display: flex; align-items: center; gap: 10px;
+      padding: 0 17px; border-bottom: 1px solid var(--border); }
+    .mark { width: 23px; height: 23px; display: grid; place-items: center;
+      border-radius: 6px; background: #1f5c80; color: #d9f2ff;
+      font-size: 12px; font-weight: 700; }
+    .brand { font-weight: 650; }
+    .state { margin-left: auto; color: var(--muted); font-size: 12px; }
+    main { padding: 18px 20px 17px; }
+    .file { margin: 0; overflow: hidden; white-space: nowrap;
+      text-overflow: ellipsis; font-size: 16px; font-weight: 650; }
+    .url { margin-top: 4px; overflow: hidden; white-space: nowrap;
+      text-overflow: ellipsis; color: var(--muted); font-size: 12px; }
+    .numbers { display: flex; align-items: baseline; justify-content: space-between;
+      margin-top: 22px; }
+    .percent { font-size: 25px; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .transferred { color: var(--muted); font-size: 12px; }
+    .track { height: 8px; margin-top: 9px; overflow: hidden;
+      border-radius: 8px; background: var(--bg); }
+    .fill { width: 63%; height: 100%; border-radius: inherit; background: var(--accent); }
+    .details { display: flex; gap: 24px; margin-top: 14px; }
+    .metric { color: var(--muted); font-size: 11px; }
+    .metric strong { display: block; margin-top: 2px; color: var(--text);
+      font-size: 13px; font-weight: 600; }
+    .completed { margin-top: 20px; padding: 13px; border: 1px solid #294936;
+      border-radius: 7px; background: #122019; }
+    .completed-title { color: #8bd5a2; font-weight: 650; }
+    .completed-copy { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    footer { display: flex; justify-content: flex-end; gap: 8px;
+      padding: 0 20px 17px; }
+    button { height: 34px; padding: 0 13px; border: 1px solid var(--border);
+      border-radius: 6px; background: var(--surface2); color: var(--text);
+      font: inherit; cursor: pointer; }
+    .primary { border-color: var(--accent); background: var(--accent);
+      color: #07131b; font-weight: 650; }
+    .section-title { margin: 19px 0 7px; color: var(--muted); font-size: 10px;
+      font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+    .completed-preview { margin: 0 20px 18px; padding: 11px 12px;
+      border: 1px dashed var(--border); border-radius: 7px; }
+    .completed-preview .completed-title { font-size: 13px; }
+    .completed-preview .completed-copy { margin-bottom: 9px; }
+    .small-actions { display: flex; gap: 7px; }
+    .small-actions button { height: 29px; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <section class="window" aria-label="Download progress and completion states">
+    <header><span class="mark">c</span><span class="brand">cdm</span>
+      <span class="state">Downloading</span></header>
+    <main>
+      <h1 class="file">core-tool-2.4.1-x86_64.tar.zst</h1>
+      <div class="url">downloads.example.org/releases/core-tool-2.4.1-x86_64.tar.zst</div>
+      <div class="numbers"><span class="percent">63%</span>
+        <span class="transferred">53.3 MB of 84.6 MB</span></div>
+      <div class="track"><div class="fill"></div></div>
+      <div class="details">
+        <div class="metric">Speed<strong>8.2 MB/s</strong></div>
+        <div class="metric">Time remaining<strong>00:04</strong></div>
+      </div>
+    </main>
+    <footer><button type="button">Cancel download</button></footer>
+    <div class="section-title" style="margin:0 20px 7px">Completed state</div>
+    <section class="completed-preview" aria-label="Completed state reference">
+      <div class="completed-title">✓&nbsp; Download complete</div>
+      <div class="completed-copy">core-tool-2.4.1-x86_64.tar.zst · 84.6 MB</div>
+      <div class="small-actions"><button class="primary" type="button">Open file</button>
+        <button type="button">Open folder</button><button type="button">Close</button></div>
+    </section>
+  </section>
+</body>
+</html>
