@@ -33,16 +33,16 @@ The following are not part of the current public guarantee:
 
 ## Installation
 ```bash
-curl -LO https://github.com/<OWNER>/<REPO>/releases/download/v0.1.0/downloadmgr-0.1.0-Linux.deb
+curl -LO https://github.com/<OWNER>/<REPO>/releases/download/v0.1.0/cdm-0.1.0-Linux.deb
 sha256sum -c SHA256SUMS.txt
-sudo dpkg -i downloadmgr-0.1.0-Linux.deb
+sudo dpkg -i cdm-0.1.0-Linux.deb
 ```
 
 ## First-run usage
 ```bash
-downloadmgr gui
-downloadmgr daemon
-downloadmgr cli
+cdm gui
+cdm daemon
+cdm cli
 ```
 
 ## Known limitations

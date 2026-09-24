@@ -15,7 +15,7 @@ void dm_notify_init(void) {
     g_notify_ready = true;
     return;
   }
-  g_notify_ready = notify_init("downloadmgr");
+  g_notify_ready = notify_init("cdm");
   if (!g_notify_ready) {
     LOG_WARN("Could not initialize desktop notifications "
              "(no DBUS/notification daemon?)");

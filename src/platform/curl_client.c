@@ -47,7 +47,7 @@ int curl_client_head(const char *url, const RequestContext *ctx,
   curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
   curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, head_header_callback);
   curl_easy_setopt(curl, CURLOPT_HEADERDATA, out);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "downloadmgr/0.1");
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, "cdm/0.1");
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
   curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);

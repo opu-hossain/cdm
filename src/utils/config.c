@@ -39,7 +39,7 @@ static void get_config_path(char *out, size_t out_size) {
 #else
   const char *home = getenv("HOME");
 #endif
-  snprintf(out, out_size, "%s/.local/share/downloadmgr/config.toml",
+  snprintf(out, out_size, "%s/.local/share/cdm/config.toml",
            home ? home : "/tmp");
 }
 
@@ -203,7 +203,7 @@ bool config_save(const DownloadManagerConfig *config) {
   char path[1024];
   get_config_path(path, sizeof(path));
   char directory[1024];
-  snprintf(directory, sizeof(directory), "%s/.local/share/downloadmgr",
+  snprintf(directory, sizeof(directory), "%s/.local/share/cdm",
            getenv("HOME") ? getenv("HOME") : "/tmp");
   if (file_ensure_directory(directory) != 0)
     return false;

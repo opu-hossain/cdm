@@ -115,7 +115,7 @@ jobs:
           VERSION="${{ steps.meta.outputs.version }}"
           ARCH="$(dpkg --print-architecture)"
           PACKAGE_PATH="$(ls -1 ./*.deb | head -n 1)"
-          NEW_PATH="./downloadmgr-${VERSION}-linux-${ARCH}.deb"
+          NEW_PATH="./cdm-${VERSION}-linux-${ARCH}.deb"
           cp "$PACKAGE_PATH" "$NEW_PATH"
           echo "PACKAGE_PATH=$NEW_PATH" >> "$GITHUB_ENV"
 

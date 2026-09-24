@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and release toolkit for downloadmgr.
+# Build and release toolkit for Core Download Manager (cdm).
 # Reads .release.toml for versions and builds DEB, RPM, and Arch packages.
 
 set -euo pipefail
@@ -45,7 +45,7 @@ compute_versions() {
         PKG_VERSION="$v"
     fi
     RELEASE_TAG="v${TAG_VERSION}"
-    PACKAGE_FILE="downloadmgr-${TAG_VERSION}-linux"
+    PACKAGE_FILE="cdm-${TAG_VERSION}-linux"
 }
 
 show_version() {
@@ -86,7 +86,7 @@ make_source_tarball() {
 show_deps() {
     local kind="${1:-}"
     local f="$ROOT/packaging/deps/${kind}.sh"
-    [[ -f "$f" ]] || die "usage: cdm deps deb|rpm|arch"
+    [[ -f "$f" ]] || die "usage: cdm-release deps deb|rpm|arch"
     printf '# %s build deps\n' "$kind"
     printf '# run: %s\n\n' "${f#$ROOT/}"
     sed -n '/^[^#]/p' "$f"
@@ -337,11 +337,11 @@ doctor() {
         if has "$t"; then ok "  $t"; else warn "  missing: $t"; fail=1; fi
     done
     for t in makepkg updpkgsums; do
-        if has "$t"; then ok "  $t"; else warn "  missing: $t (needed for: cdm arch)"; fi
+        if has "$t"; then ok "  $t"; else warn "  missing: $t (needed for: cdm-release arch)"; fi
     done
-    if has podman; then ok "  podman"; else warn "  missing: podman (needed for: cdm rpm)"; fi
-    if has dpkg-deb; then ok "  dpkg-deb"; else warn "  missing: dpkg-deb (needed for: cdm deb)"; fi
-    if has rpm; then ok "  rpm"; else warn "  missing: rpm (needed for: cdm verify-rpm)"; fi
+    if has podman; then ok "  podman"; else warn "  missing: podman (needed for: cdm-release rpm)"; fi
+    if has dpkg-deb; then ok "  dpkg-deb"; else warn "  missing: dpkg-deb (needed for: cdm-release deb)"; fi
+    if has rpm; then ok "  rpm"; else warn "  missing: rpm (needed for: cdm-release verify-rpm)"; fi
     if has namcap; then ok "  namcap"; else warn "  missing: namcap (optional)"; fi
 
     info "Dependency scripts"
@@ -411,9 +411,9 @@ doctor() {
 # Command dispatcher.
 usage() {
     cat <<EOF
-cdm — build & release toolkit
+cdm-release — build & release toolkit
 
-Usage: cdm <command> [args]
+Usage: cdm-release <command> [args]
 
 Version
   version                 show resolved versions from .release.toml
@@ -468,5 +468,5 @@ case "$cmd" in
     open-release)   open_release ;;
     tag)            make_tag ;;
     help|-h|--help) usage ;;
-    *)              die "unknown command: $cmd (try 'cdm help')" ;;
+    *)              die "unknown command: $cmd (try 'cdm-release help')" ;;
 esac

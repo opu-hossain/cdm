@@ -6,7 +6,7 @@ Test(spawn, get_self_exe_path) {
   char buf[1024];
   get_self_exe_path(buf, sizeof(buf));
   cr_assert_gt(strlen(buf), 0);
-  // It should contain "downloadmgr" or "test_spawn" or something
+  // It should contain "cdm" or "test_spawn" or something
   // We can just check that it's not empty.
 }
 

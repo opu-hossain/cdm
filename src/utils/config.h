@@ -15,8 +15,8 @@ extern "C" {
  * Load configuration from a TOML file.
  *
  * If `path` is NULL the default location is used
- * ($HOME/.local/share/downloadmgr/config.toml on Unix,
- * %USERPROFILE%/.local/share/downloadmgr/config.toml on Windows).
+ * ($HOME/.local/share/cdm/config.toml on Unix,
+ * %USERPROFILE%/.local/share/cdm/config.toml on Windows).
  * Missing file or parse errors are silently absorbed – all values fall
  * back to built‑in defaults.
  */

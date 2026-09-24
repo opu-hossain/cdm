@@ -68,7 +68,7 @@ PY
 )"
 
 ARCH="$(dpkg --print-architecture)"
-PACKAGE_NAME="downloadmgr-${VERSION}-linux-${ARCH}.deb"
+PACKAGE_NAME="cdm-${VERSION}-linux-${ARCH}.deb"
 
 cmake -S "$ROOT_DIR" -B "$BUILD_DIR" -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build "$BUILD_DIR" -j"${JOBS:-$(nproc)}"

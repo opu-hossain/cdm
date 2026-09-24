@@ -53,7 +53,7 @@ GuiSdlBackend *gui_sdl_backend_create(const GuiSdlBackendConfig *config) {
     goto fail;
 
   backend->window = SDL_CreateWindow(
-      config->title ? config->title : "Download Manager",
+      config->title ? config->title : "Core Download Manager",
       SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
       config->width > 0 ? config->width : 1100,
       config->height > 0 ? config->height : 720,

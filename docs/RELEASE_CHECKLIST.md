@@ -18,12 +18,12 @@ This checklist captures the acceptance steps for the first Linux-first release o
 
 ## Package acceptance
 - [ ] Debian package builds cleanly with `cpack`.
-- [ ] Artifact name matches the release tag, for example `downloadmgr-0.1.0-Linux.deb`.
+- [ ] Artifact name matches the release tag, for example `cdm-0.1.0-Linux.deb`.
 - [ ] `SHA256SUMS.txt` is generated and includes the package checksum.
 - [ ] The checksum file is uploaded with the GitHub release.
 - [ ] Users can verify the package using:
   - `sha256sum -c SHA256SUMS.txt`
-  - or `sha256sum downloadmgr-0.1.0-Linux.deb`
+  - or `sha256sum cdm-0.1.0-Linux.deb`
 
 ## GitHub release checklist
 - [ ] The release tag matches the package version.
@@ -44,6 +44,6 @@ cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 cpack --config build/CPackConfig.cmake -G DEB
-sha256sum downloadmgr-0.1.0-Linux.deb > SHA256SUMS.txt
+sha256sum cdm-0.1.0-Linux.deb > SHA256SUMS.txt
 sha256sum -c SHA256SUMS.txt
 ```

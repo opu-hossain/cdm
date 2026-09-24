@@ -272,7 +272,7 @@ static void run_one_segment(WorkerContext *ctx) {
   curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, worker_write_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, ctx);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "downloadmgr/0.1");
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, "cdm/0.1");
 
   struct curl_slist *headers = NULL;
   if (ctx->request_ctx) {

@@ -26,6 +26,7 @@
 /* Internal helpers */
 
 static volatile sig_atomic_t g_shutdown_requested = 0;
+static bool g_data_dir_migrated = false;
 
 static void request_shutdown(int sig) {
   (void)sig;
@@ -36,7 +37,7 @@ static void request_shutdown(int sig) {
 static void ensure_data_dir(const char *dir) { file_ensure_directory(dir); }
 
 /**
- * Return the daemon's data directory (~/.local/share/downloadmgr),
+ * Return the daemon's data directory (~/.local/share/cdm),
  * creating it on first call.
  */
 static const char *get_data_dir(void) {
@@ -45,7 +46,15 @@ static const char *get_data_dir(void) {
     const char *home = getenv("HOME");
     if (!home)
       home = "/tmp";
-    snprintf(path, sizeof(path), "%s/.local/share/downloadmgr", home);
+    char old_path[1024];
+    snprintf(path, sizeof(path), "%s/.local/share/cdm", home);
+    snprintf(old_path, sizeof(old_path), "%s/.local/share/downloadmgr", home);
+    if (access(old_path, F_OK) == 0 && access(path, F_OK) != 0) {
+      char parent[1024];
+      snprintf(parent, sizeof(parent), "%s/.local/share", home);
+      if (file_ensure_directory(parent) == 0 && rename(old_path, path) == 0)
+        g_data_dir_migrated = true;
+    }
     ensure_data_dir(path);
   }
   return path;
@@ -103,6 +112,9 @@ int run_daemon(void) {
        this fprintf is a best‑effort warning. */
     fprintf(stderr, "Warning: could not open log file %s\n", log_path);
   }
+  if (g_data_dir_migrated)
+    LOG_INFO("Migrated data directory from ~/.local/share/downloadmgr to "
+             "~/.local/share/cdm");
 
   config_init(NULL);
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(downloadmgr LANGUAGES C)
+project(cdm LANGUAGES C)
 
 include(GNUInstallDirs)
 
@@ -78,11 +78,11 @@ if(DOWNLOADMGR_USE_SYSTEM_CURL)
     message(STATUS "  include: ${CURL_INCLUDE_DIRS}")
     message(STATUS "  library: ${CURL_LIBRARIES}")
 
-    add_library(downloadmgr_curl INTERFACE)
-    target_include_directories(downloadmgr_curl INTERFACE ${CURL_INCLUDE_DIRS})
-    target_link_libraries(downloadmgr_curl INTERFACE ${CURL_LIBRARIES})
+    add_library(cdm_curl INTERFACE)
+    target_include_directories(cdm_curl INTERFACE ${CURL_INCLUDE_DIRS})
+    target_link_libraries(cdm_curl INTERFACE ${CURL_LIBRARIES})
     # System curl is shared on Linux.
-    target_compile_definitions(downloadmgr_curl INTERFACE CURL_STATICLIB=0)
+    target_compile_definitions(cdm_curl INTERFACE CURL_STATICLIB=0)
 else()
     message(STATUS "Fetching curl from source (DOWNLOADMGR_USE_SYSTEM_CURL=OFF)")
 
@@ -104,9 +104,9 @@ else()
         add_subdirectory(${curl_SOURCE_DIR} ${curl_BINARY_DIR} EXCLUDE_FROM_ALL)
     endif()
 
-    add_library(downloadmgr_curl INTERFACE)
-    target_link_libraries(downloadmgr_curl INTERFACE libcurl)
-    target_compile_definitions(downloadmgr_curl INTERFACE CURL_STATICLIB=1)
+    add_library(cdm_curl INTERFACE)
+    target_link_libraries(cdm_curl INTERFACE libcurl)
+    target_compile_definitions(cdm_curl INTERFACE CURL_STATICLIB=1)
 endif()
 
 # SQLite3 – system library (required)
@@ -115,17 +115,17 @@ message(STATUS "Using system sqlite3: ${SQLite3_VERSION}")
 message(STATUS "  include: ${SQLite3_INCLUDE_DIRS}")
 message(STATUS "  library: ${SQLite3_LIBRARIES}")
 
-add_library(downloadmgr_sqlite INTERFACE)
-target_include_directories(downloadmgr_sqlite INTERFACE ${SQLite3_INCLUDE_DIRS})
-target_link_libraries(downloadmgr_sqlite INTERFACE ${SQLite3_LIBRARIES})
+add_library(cdm_sqlite INTERFACE)
+target_include_directories(cdm_sqlite INTERFACE ${SQLite3_INCLUDE_DIRS})
+target_link_libraries(cdm_sqlite INTERFACE ${SQLite3_LIBRARIES})
 
 # Vendor (third‑party) static library
-add_library(downloadmgr_vendor STATIC
+add_library(cdm_vendor STATIC
     src/vendor/cJSON.c
     src/vendor/tinyfiledialogs.c
     src/vendor/tomlc17.c
 )
-target_include_directories(downloadmgr_vendor PUBLIC src/vendor)
+target_include_directories(cdm_vendor PUBLIC src/vendor)
 
 # Project source groups
 set(PLATFORM_SOURCES
@@ -175,9 +175,9 @@ downloadmgr_enable_sanitizer(downloadmgr_core)
 
 target_include_directories(downloadmgr_core PRIVATE src)
 target_link_libraries(downloadmgr_core PUBLIC
-    downloadmgr_vendor
-    downloadmgr_curl
-    downloadmgr_sqlite
+    cdm_vendor
+    cdm_curl
+    cdm_sqlite
     PkgConfig::LIBNOTIFY
 )
 
@@ -203,7 +203,7 @@ add_custom_command(
 )
 
 # Main executable (CLI / GUI / daemon)
-add_executable(downloadmgr
+add_executable(cdm
     "${GUI_FONT_HEADER}"
     src/main.c
     src/cli/cli.c
@@ -214,47 +214,47 @@ add_executable(downloadmgr
     src/gui/gui_model.c
     src/daemon/daemon.c
 )
-downloadmgr_enable_warnings(downloadmgr)
-downloadmgr_enable_sanitizer(downloadmgr)
+downloadmgr_enable_warnings(cdm)
+downloadmgr_enable_sanitizer(cdm)
 
-target_include_directories(downloadmgr PRIVATE
+target_include_directories(cdm PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
     src
     src/vendor
 )
 
-target_link_libraries(downloadmgr PRIVATE
+target_link_libraries(cdm PRIVATE
     downloadmgr_core
     PkgConfig::SDL2
     PkgConfig::EPOXY
     OpenGL::GL
 )
 if(UNIX)
-    target_link_libraries(downloadmgr PRIVATE m)
+    target_link_libraries(cdm PRIVATE m)
 endif()
 
 # Browser native host executable
-add_executable(downloadmgr_native_host
+add_executable(cdm_native_host
     src/native_host/main_host.c
 )
-downloadmgr_enable_warnings(downloadmgr_native_host)
-downloadmgr_enable_sanitizer(downloadmgr_native_host)
+downloadmgr_enable_warnings(cdm_native_host)
+downloadmgr_enable_sanitizer(cdm_native_host)
 
-target_link_libraries(downloadmgr_native_host PRIVATE downloadmgr_core)
+target_link_libraries(cdm_native_host PRIVATE downloadmgr_core)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
 
-install(TARGETS downloadmgr
+install(TARGETS cdm
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-install(FILES resources/downloadmgr.desktop
+install(FILES resources/cdm.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
 )
 
 # CPack – DEB + RPM
-set(CPACK_PACKAGE_NAME "downloadmgr")
+set(CPACK_PACKAGE_NAME "cdm")
 set(CPACK_PACKAGE_VENDOR "Core Download Manager")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Core Download Manager")
 set(CPACK_PACKAGE_DESCRIPTION

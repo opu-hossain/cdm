@@ -107,7 +107,7 @@ static bool parse_add_options(int argc, char **argv, int first_opt_index,
 int run_cli(int argc, char **argv) {
   /* ---------- usage ---------- */
   if (argc < 2) {
-    printf("Usage: downloadmgr cli <command> [args...]\n");
+    printf("Usage: cdm cli <command> [args...]\n");
     printf("Commands:\n");
     printf("  add <url> [dest_dir] [--cookie V] [--referrer V] "
            "[--header \"K: V\"] [--sha256 HEX] [--limit BYTES_PER_SEC]\n");
@@ -123,7 +123,7 @@ int run_cli(int argc, char **argv) {
   if (sock < 0) {
     LOG_ERROR("Cannot connect to daemon");
     fprintf(stderr,
-            "Is the daemon running? Start it with: downloadmgr daemon\n");
+            "Is the daemon running? Start it with: cdm daemon\n");
     return 1;
   }
 

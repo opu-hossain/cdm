@@ -41,7 +41,7 @@ static bool join_path(char *out, size_t out_size, const char *base,
 }
 
 /** Get user-isolated IPC socket path (XDG_RUNTIME_DIR,
- * ~/.local/share/downloadmgr, or /tmp/downloadmgr_UID.sock). */
+ * ~/.local/share/cdm, or /tmp/cdm_UID.sock). */
 static void get_socket_path(char *out, size_t out_size) {
   static char cached_path[1024] = {0};
   if (cached_path[0] != '\0') {
@@ -53,20 +53,20 @@ static void get_socket_path(char *out, size_t out_size) {
   const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
   if (runtime_dir && runtime_dir[0] != '\0') {
     if (!join_path(cached_path, sizeof(cached_path), runtime_dir,
-                   "/downloadmgr.sock"))
+                   "/cdm.sock"))
       cached_path[0] = '\0';
   } else {
     const char *home = getenv("HOME");
     if (home && home[0] != '\0') {
       char dir[1024];
-      if (join_path(dir, sizeof(dir), home, "/.local/share/downloadmgr") &&
+      if (join_path(dir, sizeof(dir), home, "/.local/share/cdm") &&
           join_path(cached_path, sizeof(cached_path), dir, "/ipc.sock")) {
         file_ensure_directory(dir);
       } else {
         cached_path[0] = '\0';
       }
     } else {
-      snprintf(cached_path, sizeof(cached_path), "/tmp/downloadmgr_%u.sock",
+      snprintf(cached_path, sizeof(cached_path), "/tmp/cdm_%u.sock",
                (unsigned int)getuid());
     }
   }

@@ -469,7 +469,7 @@ static void draw_chrome(struct nk_context *ctx, UiState *ui,
   fill(ctx, screen_rect(ctx, 0, 52, 220, height - 52), 0, SURFACE);
   fill(ctx, screen_rect(ctx, 0, 51, width, 1), 0, BORDER);
   fill(ctx, screen_rect(ctx, 219, 52, 1, height - 52), 0, BORDER);
-  bold_at(ctx, 18, 0, 142, 52, "DOWNLOADMGR", 15, TEXT, SURFACE);
+  bold_at(ctx, 18, 0, 142, 52, "CDM", 15, TEXT, SURFACE);
   const char *tabs[] = {"All", "Downloading", "Completed"};
   float tx = 173;
   const float tw[] = {43, 109, 100};
@@ -1172,7 +1172,7 @@ int run_gui(void) {
   }
   GuiSdlBackendConfig config = {.width = 1100,
                                 .height = 720,
-                                .title = "Download Manager",
+                                .title = "Core Download Manager",
                                 .font_size = 13};
   GuiSdlBackend *backend = gui_sdl_backend_create(&config);
   if (!backend) {

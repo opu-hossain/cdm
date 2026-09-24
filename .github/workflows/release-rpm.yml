@@ -111,7 +111,7 @@ jobs:
           VERSION="${{ steps.meta.outputs.version }}"
           ARCH="$(rpm --eval '%{_arch}')"
           RPM_PATH="$(ls -1 ./*.rpm | head -n 1)"
-          NEW_PATH="./downloadmgr-${VERSION}-linux-${ARCH}.rpm"
+          NEW_PATH="./cdm-${VERSION}-linux-${ARCH}.rpm"
           cp "$RPM_PATH" "$NEW_PATH"
           echo "PACKAGE_PATH=$NEW_PATH" >> "$GITHUB_ENV"
 

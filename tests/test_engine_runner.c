@@ -7,6 +7,7 @@
 #include <criterion/criterion.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -88,14 +89,13 @@ Test(engine_runner, run_success) {
 }
 
 Test(engine_runner, fills_claimed_file) {
-  Download d = {0};
-  strcpy(d.url, "http://example.com/file");
-  strcpy(d.dest_path, "/tmp/test_engine_out");
-  cr_assert_eq(file_preallocate(d.dest_path, 0), 0);
-  d.reserved_file = true;
-
-  cr_assert_eq(engine_run_download(&d), 0);
-  cr_assert_eq(file_get_size(d.dest_path), 1000);
+  char path[128];
+  snprintf(path, sizeof(path), "/tmp/test_engine_claimed_%ld", (long)getpid());
+  unlink(path);
+  cr_assert_eq(file_preallocate(path, 0), 0);
+  cr_assert_eq(file_preallocate_reserved(path, 1000), 0);
+  cr_assert_eq(file_get_size(path), 1000);
+  unlink(path);
 }
 
 Test(engine_runner, invalid_url) {

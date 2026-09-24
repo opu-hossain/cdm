@@ -264,9 +264,9 @@ Linux builds require **libnotify** development files through `pkg-config`.
 Download the Debian package from GitHub Releases and verify its checksum before installing:
 
 ```bash
-curl -LO https://github.com/<OWNER>/<REPO>/releases/download/v0.1.0/downloadmgr-0.1.0-Linux.deb
+curl -LO https://github.com/<OWNER>/<REPO>/releases/download/v0.1.0/cdm-0.1.0-Linux.deb
 sha256sum -c SHA256SUMS.txt
-sudo dpkg -i downloadmgr-0.1.0-Linux.deb
+sudo dpkg -i cdm-0.1.0-Linux.deb
 ```
 
 If you are installing from a locally downloaded checksum file, verify the artifact with:
@@ -318,19 +318,19 @@ ctest --test-dir build --output-on-failure
 Daemon
 
 ```bash
-./build/downloadmgr daemon
+./build/cdm daemon
 ```
 
 GUI
 
 ```bash
-./build/downloadmgr gui
+./build/cdm gui
 ```
 
 CLI
 
 ```bash
-./build/downloadmgr cli
+./build/cdm cli
 ```
 
 ---
@@ -340,25 +340,25 @@ CLI
 Add a download
 
 ```bash
-downloadmgr cli add URL DESTINATION
+cdm cli add URL DESTINATION
 ```
 
 Pause
 
 ```bash
-downloadmgr cli pause ID
+cdm cli pause ID
 ```
 
 Resume
 
 ```bash
-downloadmgr cli resume ID
+cdm cli resume ID
 ```
 
 Cancel
 
 ```bash
-downloadmgr cli cancel ID
+cdm cli cancel ID
 ```
 
 ---
