@@ -807,7 +807,9 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     dm_mutex_lock(&g_client_mutex);
     for (int i = 0; i < g_client_count; i++) {
       if (g_client_fds[i] == client_fd) {
-        g_client_subscribed[i] = true;
+        if (hdr->type == MSG_SUBSCRIBE ||
+            g_client_browser_download[i] == 0)
+          g_client_subscribed[i] = true;
         g_client_v2_subscribed[i] = hdr->type == MSG_SUBSCRIBE_V2;
         break;
       }
@@ -1540,8 +1542,7 @@ void ipc_broadcast_status(uint32_t download_id, const char *status,
     size_t bytes_len = g_client_browser_download[i] == download_id
                            ? sizeof(browser_frame)
                            : offset;
-    if (g_client_v2_subscribed[i] &&
-        g_client_browser_download[i] != download_id) {
+    if (g_client_v2_subscribed[i]) {
       ssize_t rich_sent = send(g_client_fds[i], rich_frame,
                                sizeof(rich_frame), flags);
       if (rich_sent != (ssize_t)sizeof(rich_frame)) {

@@ -366,3 +366,23 @@ Open questions:
 
 Next:
 - 0.4.5 Update browser popup to consume v2 events.
+
+## 2026-09-25 — Codex, task 0.4.5
+
+Branch: `cdm`
+Commit: `feat(browser-popup): show speed and eta from v2 events` (this entry's commit)
+
+Tasks completed:
+- 0.4.5 Let a browser-specific progress subscriber opt into a v2 frame for its own download while retaining the legacy browser progress frame and path/control data. The popup parses both frame sizes and displays daemon speed and ETA; a v1 daemon retains the existing fallback display.
+- Keep native-host browser subscribers on their legacy frame because they do not opt into v2.
+
+Tests:
+- Test first: the same-socket browser/v2 subscription expected a v2 frame but received only the browser frame before implementation.
+- Local IPC integration verifies the v2 frame followed by the browser frame; full `cmake --build build -j` and CTest passed 27/27.
+- `python3 tests/smoke_browser_popup.py build/cdm` passed offscreen with an isolated daemon and a 127.0.0.1 origin. It verified popup readiness and received speed/ETA fields on the popup's v2 progress stream. Visual inspection of the rendered labels was not available in the offscreen run.
+
+Open questions:
+- None for task 0.4.5.
+
+Next:
+- 0.4.6 Document IPC v2.

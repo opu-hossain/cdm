@@ -4,6 +4,7 @@
 #include "browser_popup.h"
 
 #include "gui_backend_sdl.h"
+#include "gui_model.h"
 #include "../platform/file_io.h"
 #include "../platform/ipc_socket.h"
 #include "../platform/open_path.h"
@@ -59,8 +60,14 @@ typedef struct {
   char full_path[IPC_MAX_PATH_LEN];
   char error[256];
   IpcBrowserProgress progress;
+  IpcProgressV2 rich_progress;
+  bool has_v2;
   int progress_sock;
-  unsigned char progress_frame[sizeof(MsgHeader) + sizeof(IpcBrowserProgress)];
+  unsigned char progress_frame[
+      sizeof(MsgHeader) +
+      (sizeof(IpcBrowserProgress) > sizeof(IpcProgressV2)
+           ? sizeof(IpcBrowserProgress)
+           : sizeof(IpcProgressV2))];
   size_t progress_frame_bytes;
   uint32_t last_sample_tick;
   uint32_t next_retry_tick;
@@ -188,7 +195,8 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
 static void update_progress(PopupState *state,
                             const IpcBrowserProgress *progress) {
   uint32_t now = SDL_GetTicks();
-  if (state->last_sample_tick && now != state->last_sample_tick &&
+  if (!state->has_v2 && state->last_sample_tick &&
+      now != state->last_sample_tick &&
       progress->bytes_received >= state->last_sample_bytes) {
     double elapsed = (double)(now - state->last_sample_tick) / 1000.0;
     if (elapsed >= 0.2)
@@ -211,7 +219,8 @@ static void update_progress(PopupState *state,
 }
 
 static void connect_progress(PopupState *state) {
-  int sock = ipc_client_connect_compatible(800, NULL);
+  uint16_t version = 1;
+  int sock = ipc_client_connect_compatible(800, &version);
   if (sock < 0)
     goto retry;
   IpcBrowserProgress initial = {0};
@@ -219,8 +228,14 @@ static void connect_progress(PopupState *state) {
     ipc_client_disconnect(sock);
     goto retry;
   }
+  if (version == IPC_PROTOCOL_VERSION && ipc_send_subscribe_v2(sock) != 0) {
+    ipc_client_disconnect(sock);
+    goto retry;
+  }
   state->progress_sock = sock;
   state->progress_frame_bytes = 0;
+  state->has_v2 = false;
+  state->last_sample_tick = 0;
   update_progress(state, &initial);
   state->error[0] = '\0';
   return;
@@ -238,7 +253,18 @@ static void poll_progress(PopupState *state) {
     return;
   }
   for (int i = 0; i < 16; i++) {
-    size_t need = sizeof(state->progress_frame) - state->progress_frame_bytes;
+    size_t target = sizeof(MsgHeader);
+    MsgHeader header = {0};
+    if (state->progress_frame_bytes >= sizeof(header)) {
+      memcpy(&header, state->progress_frame, sizeof(header));
+      if ((header.type != MSG_BROWSER_PROGRESS_EVENT ||
+           header.length != sizeof(IpcBrowserProgress)) &&
+          (header.type != MSG_STATUS_EVENT_V2 ||
+           header.length != sizeof(IpcProgressV2)))
+        break;
+      target += header.length;
+    }
+    size_t need = target - state->progress_frame_bytes;
     ssize_t n = recv(state->progress_sock,
                      state->progress_frame + state->progress_frame_bytes,
                      need, MSG_DONTWAIT);
@@ -250,16 +276,26 @@ static void poll_progress(PopupState *state) {
     if (n == 0)
       break;
     state->progress_frame_bytes += (size_t)n;
-    if (state->progress_frame_bytes >= sizeof(MsgHeader)) {
-      MsgHeader header;
+    if (state->progress_frame_bytes >= sizeof(header)) {
       memcpy(&header, state->progress_frame, sizeof(header));
-      if (header.type != MSG_BROWSER_PROGRESS_EVENT ||
-          header.length != sizeof(IpcBrowserProgress))
+      if ((header.type != MSG_BROWSER_PROGRESS_EVENT ||
+           header.length != sizeof(IpcBrowserProgress)) &&
+          (header.type != MSG_STATUS_EVENT_V2 ||
+           header.length != sizeof(IpcProgressV2)))
         break;
-      if (state->progress_frame_bytes == sizeof(state->progress_frame)) {
-        IpcBrowserProgress event;
-        memcpy(&event, state->progress_frame + sizeof(header), sizeof(event));
-        update_progress(state, &event);
+      if (state->progress_frame_bytes == sizeof(header) + header.length) {
+        if (header.type == MSG_STATUS_EVENT_V2) {
+          IpcProgressV2 rich;
+          memcpy(&rich, state->progress_frame + sizeof(header), sizeof(rich));
+          if (rich.download_id == state->download_id) {
+            state->rich_progress = rich;
+            state->has_v2 = true;
+          }
+        } else {
+          IpcBrowserProgress event;
+          memcpy(&event, state->progress_frame + sizeof(header), sizeof(event));
+          update_progress(state, &event);
+        }
         state->progress_frame_bytes = 0;
       }
     }
@@ -297,16 +333,29 @@ static void draw_progress(struct nk_context *ctx, PopupState *state,
   nk_layout_row_dynamic(ctx, 12, 1);
   nk_progress(ctx, &amount_progress, 1000, nk_false);
   char speed[80], eta[80];
-  snprintf(speed, sizeof(speed), "Speed: %.1f MB/s",
-           state->speed_bps / 1000000.0);
-  if (!done && state->speed_bps > 0 && state->progress.total_bytes >
-                                              state->progress.bytes_received) {
-    double seconds = (double)(state->progress.total_bytes -
-                              state->progress.bytes_received) /
-                     state->speed_bps;
-    snprintf(eta, sizeof(eta), "Time remaining: %.0f sec", seconds);
+  if (state->has_v2) {
+    char amount_per_second[32], formatted_eta[32];
+    gui_format_bytes(state->rich_progress.speed_bps, amount_per_second,
+                     sizeof(amount_per_second));
+    snprintf(speed, sizeof(speed), "Speed: %s/s", amount_per_second);
+    gui_format_eta(state->rich_progress.eta_seconds, formatted_eta,
+                   sizeof(formatted_eta));
+    snprintf(eta, sizeof(eta), "Time remaining: %s",
+             state->rich_progress.eta_seconds == UINT64_MAX
+                 ? "unknown"
+                 : formatted_eta);
   } else {
-    snprintf(eta, sizeof(eta), "Time remaining: unknown");
+    snprintf(speed, sizeof(speed), "Speed: %.1f MB/s",
+             state->speed_bps / 1000000.0);
+    if (!done && state->speed_bps > 0 && state->progress.total_bytes >
+                                                state->progress.bytes_received) {
+      double seconds = (double)(state->progress.total_bytes -
+                                state->progress.bytes_received) /
+                       state->speed_bps;
+      snprintf(eta, sizeof(eta), "Time remaining: %.0f sec", seconds);
+    } else {
+      snprintf(eta, sizeof(eta), "Time remaining: unknown");
+    }
   }
   nk_layout_row_dynamic(ctx, 20, 2);
   nk_label_colored(ctx, speed, NK_TEXT_LEFT, MUTED);
