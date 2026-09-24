@@ -386,3 +386,21 @@ Open questions:
 
 Next:
 - 0.4.6 Document IPC v2.
+
+## 2026-09-25 — Codex, task 0.4.6
+
+Branch: `cdm`
+Commit: `docs(ipc): document protocol v2 and v1 compatibility` (this entry's commit)
+
+Tasks completed:
+- 0.4.6 Documented the full current message registry, request framing and raw response layouts, v2 negotiation and paired event subscriptions, field units and sentinel values, browser offer payloads, ABI limitations, and v1 compatibility rules in `docs/ipc.md`.
+
+Tests:
+- Documentation registry check found all 21 `MSG_*` enum values in the document.
+- `cmake --build build -j` and full CTest passed 27/27.
+
+Open questions:
+- None for task 0.4.6.
+
+Next:
+- 0.5.1 Add offset/limit pagination.
