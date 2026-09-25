@@ -70,6 +70,7 @@ typedef struct {
   uint64_t speed_limit_bps;
   const char *auth_user;
   const char *auth_password;
+  uint32_t queue_id; // 0 = default queue; MSG_ADD_DOWNLOAD_V2 only
 } IpcDownloadOptions;
 
 /* Response to MSG_ADD_DOWNLOAD_V2 and MSG_BROWSER_CONFIRM_V2. */
@@ -112,6 +113,13 @@ int ipc_send_cancel(int sock, uint32_t id);
 /* Transport 0 on success; out is OK, NOT_FOUND, REJECTED, or ERROR. */
 int ipc_send_remove_download(int sock, uint32_t id, bool delete_file,
                              IpcResult *out);
+/* Queue commands require IPC protocol v5. List returns rows copied or -1.
+ * Queue records use the native ABI, consistent with existing raw IPC structs. */
+int ipc_send_queue_list(int sock, Queue *out, int max);
+int ipc_send_queue_create(int sock, const Queue *queue, uint32_t *out_id);
+int ipc_send_queue_update(int sock, const Queue *queue);
+int ipc_send_queue_delete(int sock, uint32_t id);
+int ipc_send_queue_reorder(int sock, uint32_t id, int priority);
 int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max);
 /* Returns rows copied to out, -1 on I/O error. The daemon caps limit at 500.
  * total_out is the full database count, before offset/limit. */

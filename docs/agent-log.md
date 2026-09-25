@@ -804,3 +804,21 @@ Open questions:
 
 Next:
 - 2.1.3 Queue IPC commands. The plan's IDs 35–39 conflict with existing page/details messages; choose new IDs without reusing wire meanings.
+
+## 2026-09-25 — Codex, task 2.1.3
+
+Branch: `cdm`
+Commit: `feat(ipc): queue management commands` (this entry's commit)
+
+Tasks completed:
+- 2.1.3 Added protocol v5 queue list/create/update/delete/reorder requests on free IDs 45–49. The v2 add options JSON accepts `queue_id`, validates that queue, and persists it with the download. Queue deletion moves live entries to the default queue. Successful mutations broadcast `QUEUES_CHANGED` to subscribers. User chose IPC priority range 0–1000. Fixed a subscriber filter bug exposed by queue events with download ID 0.
+
+Tests:
+- Test first: the IPC queue test failed to compile before the new helpers and option existed.
+- Focused IPC test covers CRUD round trips, ordering, invalid priorities, queue assignment, default queue protection, deleted queue reassignment, and a subscriber status event. `cmake --build build -j` and full CTest passed 31/31. The focused Unix socket test is the IPC smoke test.
+
+Open questions:
+- Phase merge gates remain deferred on the user-selected `cdm` branch; queue ID conflict and priority range are resolved in `docs/open-questions.md`.
+
+Next:
+- 2.1.4 GUI queues tab.

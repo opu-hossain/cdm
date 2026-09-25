@@ -41,9 +41,14 @@ typedef enum {
   MSG_ADD_DOWNLOAD_V2 = 42,
   MSG_BROWSER_CONFIRM_V2 = 43,
   MSG_REMOVE_DOWNLOAD = 44, // 34 is already MSG_SUBSCRIBE_V2.
+  MSG_QUEUE_LIST = 45,
+  MSG_QUEUE_CREATE = 46,
+  MSG_QUEUE_UPDATE = 47,
+  MSG_QUEUE_DELETE = 48,
+  MSG_QUEUE_REORDER = 49,
 } MsgType;
 
-#define IPC_PROTOCOL_VERSION 4
+#define IPC_PROTOCOL_VERSION 5
 
 /* Keep the v1 frame header unchanged for legacy clients. Version negotiation
  * uses MSG_HELLO; future versioned payloads use distinct message types. */

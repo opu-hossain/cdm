@@ -156,7 +156,7 @@ static uint32_t add_download(const char *url, const char *dest_path,
 
   d->status = DOWNLOAD_QUEUED;
   d->priority = 0;
-  d->queue_id = 1;
+  d->queue_id = opts && opts->queue_id ? opts->queue_id : 1;
   d->created_at = time(NULL);
   d->transfer_metrics.eta_seconds = UINT64_MAX;
 
@@ -527,6 +527,14 @@ bool queue_manager_resume(uint32_t id) {
 }
 
 /* Internal (use with care) */
+
+void queue_manager_reassign_queue_locked(uint32_t old_id) {
+  if (old_id <= 1)
+    return;
+  for (Download *cur = g_head; cur; cur = cur->next)
+    if (cur->queue_id == old_id)
+      cur->queue_id = 1;
+}
 
 void *queue_manager_get_mutex(void) {
   ensure_mutex();

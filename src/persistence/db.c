@@ -468,8 +468,8 @@ static int insert_download(uint32_t id, const char *url,
       "INSERT OR REPLACE INTO downloads "
       "(id, url, dest_path, status, created_at, cookie, referrer, "
       "extra_headers, expected_sha256, speed_limit_bps, reserved_file, "
-      "auto_filename, auth_user, auth_password) "
-      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+      "auto_filename, auth_user, auth_password, queue_id) "
+      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
     LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
@@ -492,6 +492,8 @@ static int insert_download(uint32_t id, const char *url,
   sqlite3_bind_text(stmt, 12, opts ? opts->auth_user : "", -1, SQLITE_STATIC);
   sqlite3_bind_text(stmt, 13, opts ? opts->auth_password : "", -1,
                     SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 14,
+                     opts && opts->queue_id ? (sqlite3_int64)opts->queue_id : 1);
 
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);

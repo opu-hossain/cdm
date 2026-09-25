@@ -34,6 +34,120 @@ static void teardown_ipc(void) {
 
 TestSuite(ipc, .init = setup_ipc, .fini = teardown_ipc);
 
+static atomic_bool browser_server_running;
+static int browser_server_thread(void *unused);
+
+Test(ipc, queue_commands_round_trip_and_assign_download) {
+  char dir[] = "/tmp/cdm-queue-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  setenv("DOWNLOADMGR_ROOT", dir, 1);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  int subscriber = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(subscriber, 0);
+  ipc_send_subscribe(subscriber);
+  uint16_t version = 0;
+  cr_assert_eq(ipc_client_hello(subscriber, &version), 0);
+  cr_assert_geq(version, 5);
+
+  Queue first = {.priority = 10, .max_concurrent = 2};
+  snprintf(first.name, sizeof(first.name), "Background");
+  Queue second = {.priority = 20, .max_concurrent = 1};
+  snprintf(second.name, sizeof(second.name), "Urgent");
+  uint32_t first_id = 0, second_id = 0;
+  cr_assert_eq(ipc_send_queue_create(client, &first, &first_id), 0);
+  MsgHeader event = {0};
+  cr_assert_eq(ipc_read_exact(subscriber, &event, sizeof(event)), 0);
+  cr_assert_eq(event.type, MSG_STATUS_EVENT);
+  uint32_t event_id = UINT32_MAX;
+  float progress = -1.0f;
+  uint32_t status_len = 0;
+  char status[32] = {0};
+  cr_assert_eq(ipc_read_exact(subscriber, &event_id, sizeof(event_id)), 0);
+  cr_assert_eq(ipc_read_exact(subscriber, &progress, sizeof(progress)), 0);
+  cr_assert_eq(ipc_read_exact(subscriber, &status_len, sizeof(status_len)), 0);
+  cr_assert_lt(status_len, sizeof(status));
+  cr_assert_eq(ipc_read_exact(subscriber, status, status_len), 0);
+  cr_assert_eq(event_id, 0);
+  cr_assert_str_eq(status, "QUEUES_CHANGED");
+  int second_result = ipc_send_queue_create(client, &second, &second_id);
+  cr_assert_eq(second_result, 0, "second queue result=%d id=%u first=%u",
+               second_result, second_id, first_id);
+  cr_assert_neq(first_id, second_id);
+  Queue invalid = {.priority = -1};
+  snprintf(invalid.name, sizeof(invalid.name), "Invalid");
+  uint32_t invalid_id = 0;
+  cr_assert_eq(ipc_send_queue_create(client, &invalid, &invalid_id), -1);
+  cr_assert_eq(invalid_id, 0);
+  invalid.priority = 1001;
+  cr_assert_eq(ipc_send_queue_create(client, &invalid, &invalid_id), -1);
+
+  Queue rows[4] = {0};
+  int count = ipc_send_queue_list(client, rows, 4);
+  cr_assert_eq(count, 3);
+  cr_assert_eq(rows[0].id, second_id);
+  cr_assert_eq(rows[1].id, first_id);
+  cr_assert_eq(rows[2].id, 1);
+
+  first.id = first_id;
+  first.max_concurrent = 3;
+  cr_assert_eq(ipc_send_queue_update(client, &first), IPC_RESULT_OK);
+  first.priority = -1;
+  cr_assert_eq(ipc_send_queue_update(client, &first), IPC_RESULT_REJECTED);
+  first.priority = 10;
+  cr_assert_eq(ipc_send_queue_reorder(client, first_id, 30), IPC_RESULT_OK);
+  cr_assert_eq(ipc_send_queue_reorder(client, first_id, 1001),
+               IPC_RESULT_REJECTED);
+  count = ipc_send_queue_list(client, rows, 4);
+  cr_assert_eq(count, 3);
+  cr_assert_eq(rows[0].id, first_id);
+  cr_assert_eq(rows[0].max_concurrent, 3);
+
+  char dest[128];
+  snprintf(dest, sizeof(dest), "%s/item.bin", dir);
+  IpcDownloadOptions options = {.queue_id = first_id};
+  IpcAddResponse added = {0};
+  cr_assert_eq(ipc_send_add_download_v2(client, "http://127.0.0.1/item",
+                                        dest, &options, false, &added), 0);
+  cr_assert_eq(added.result, IPC_RESULT_OK);
+  uint32_t download_id = added.id;
+  Download *download = queue_manager_find_by_id(added.id);
+  cr_assert_not_null(download);
+  cr_assert_eq(download->queue_id, first_id);
+
+  IpcDownloadOptions invalid_options = {.queue_id = UINT32_MAX};
+  char invalid_dest[128];
+  snprintf(invalid_dest, sizeof(invalid_dest), "%s/invalid.bin", dir);
+  cr_assert_eq(ipc_send_add_download_v2(client, "http://127.0.0.1/invalid",
+                                        invalid_dest, &invalid_options, false,
+                                        &added), 0);
+  cr_assert_eq(added.result, IPC_RESULT_REJECTED);
+  cr_assert_eq(access(invalid_dest, F_OK), -1);
+
+  cr_assert_eq(ipc_send_queue_delete(client, 1), IPC_RESULT_REJECTED);
+  cr_assert_eq(ipc_send_queue_delete(client, first_id), IPC_RESULT_OK);
+  cr_assert_eq(download->queue_id, 1);
+  count = ipc_send_queue_list(client, rows, 4);
+  cr_assert_eq(count, 2);
+  cr_assert_eq(ipc_send_queue_delete(client, first_id), IPC_RESULT_NOT_FOUND);
+
+  ipc_client_disconnect(client);
+  ipc_client_disconnect(subscriber);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  queue_manager_remove(download_id);
+  db_close();
+  unlink(dest);
+  rmdir(dir);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
 Test(ipc, server_start_stop) {
   int rc = ipc_server_start();
   cr_assert_eq(rc, 0);
@@ -74,8 +188,6 @@ Test(ipc, client_connect_send_receive, .disabled = true) {
   ipc_client_disconnect(client_fd);
   ipc_server_stop();
 }
-
-static atomic_bool browser_server_running;
 
 static int browser_server_thread(void *unused) {
   (void)unused;

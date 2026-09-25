@@ -1,5 +1,13 @@
 # Open Questions
 
+## Task 2.1.3 — Queue protocol IDs and priority range (resolved)
+
+The plan assigns queue messages IDs 35–39, but 35–37 already mean paginated
+history and download details. Queue commands use IDs 45–49 and protocol version
+5. The user chose priorities 0–1000 on 2026-09-25; IPC create, update, and
+reorder reject values outside that range. The lower-level queue database API
+still accepts signed integers for existing data and migration compatibility.
+
 ## Task 1.5.2 — Remove command message ID (resolved)
 
 The plan assigns `MSG_REMOVE_DOWNLOAD = 34`, but `src/platform/ipc_protocol.h`

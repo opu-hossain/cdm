@@ -27,6 +27,7 @@ typedef struct {
   uint64_t speed_limit_bps; // 0 = use daemon default
   char auth_user[128];
   char auth_password[256];
+  uint32_t queue_id; // 0 = default queue
 } RequestOptions;
 
 /* Chunk descriptor (one segment of a download) */
@@ -131,6 +132,8 @@ int queue_create(const Queue *q, uint32_t *out_id);
 int queue_update(const Queue *q);
 int queue_delete(uint32_t id); // default queue (id 1) cannot be deleted
 int queue_reorder(uint32_t id, int new_priority);
+/* Caller holds queue mutex after deleting a named queue. */
+void queue_manager_reassign_queue_locked(uint32_t old_id);
 
 /* Queue queries. */
 

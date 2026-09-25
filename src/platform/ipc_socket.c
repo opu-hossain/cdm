@@ -424,6 +424,13 @@ static bool valid_message_header(const MsgHeader *header) {
            header->length <= sizeof(uint32_t) * 2 + IPC_MAX_PATH_LEN - 1;
   case MSG_REMOVE_DOWNLOAD:
     return header->length == sizeof(uint32_t) + sizeof(uint8_t);
+  case MSG_QUEUE_CREATE:
+  case MSG_QUEUE_UPDATE:
+    return header->length == sizeof(Queue);
+  case MSG_QUEUE_DELETE:
+    return header->length == sizeof(uint32_t);
+  case MSG_QUEUE_REORDER:
+    return header->length == sizeof(uint32_t) + sizeof(int32_t);
   case MSG_LIST_PAGE:
   case MSG_LIST_PAGE_WITH_SIZE:
     return header->length == sizeof(uint32_t) * 2;
@@ -433,6 +440,7 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_SUBSCRIBE_V2:
   case MSG_RELOAD_CONFIG:
   case MSG_HELLO:
+  case MSG_QUEUE_LIST:
     return header->length == 0;
   default:
     return false;
@@ -500,6 +508,16 @@ static void send_command_result(int client_fd, IpcResult result) {
   ipc_write_exact(client_fd, &wire_result, sizeof(wire_result));
 }
 
+static bool queue_ipc_valid(const Queue *queue) {
+  return queue && queue->priority >= 0 && queue->priority <= 1000 &&
+         queue->max_concurrent >= 0 && queue->max_concurrent <= 64 &&
+         queue->name[0] && memchr(queue->name, 0, sizeof(queue->name)) &&
+         memchr(queue->schedule_start, 0, sizeof(queue->schedule_start)) &&
+         memchr(queue->schedule_stop, 0, sizeof(queue->schedule_stop)) &&
+         memchr(queue->post_action, 0, sizeof(queue->post_action)) &&
+         memchr(queue->post_action_arg, 0, sizeof(queue->post_action_arg));
+}
+
 static uint32_t reserve_download(const char *url, const char *dest,
                                  const RequestOptions *opts,
                                  bool auto_filename) {
@@ -556,6 +574,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     LOG_INFO("MSG_ADD_DOWNLOAD received: url='%s' dest='%s'", url, dest);
 
     RequestOptions opts = {0};
+    bool invalid_queue_id = false;
     bool auto_filename = hdr->type == MSG_ADD_DOWNLOAD_AUTO;
     if (options_json[0] != '\0') {
       cJSON *root = cJSON_Parse(options_json);
@@ -589,6 +608,15 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         if (hdr->type == MSG_ADD_DOWNLOAD_V2) {
           v = cJSON_GetObjectItemCaseSensitive(root, "auto_filename");
           auto_filename = cJSON_IsTrue(v);
+          v = cJSON_GetObjectItemCaseSensitive(root, "queue_id");
+          if (v) {
+            if (!cJSON_IsNumber(v) || v->valuedouble < 1 ||
+                v->valuedouble > UINT32_MAX ||
+                v->valuedouble != (double)(uint32_t)v->valuedouble)
+              invalid_queue_id = true;
+            else
+              opts.queue_id = (uint32_t)v->valuedouble;
+          }
         }
         cJSON_Delete(root);
       } else {
@@ -599,14 +627,18 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     uint32_t id = 0;
     int found = 0;
     char normalized[IPC_MAX_URL_LEN];
-    if (url_normalize(url, normalized, sizeof(normalized)))
+    if (!invalid_queue_id && opts.queue_id) {
+      Queue selected;
+      invalid_queue_id = queue_get(opts.queue_id, &selected) != 0;
+    }
+    if (!invalid_queue_id && url_normalize(url, normalized, sizeof(normalized)))
       found = db_find_active_by_url(normalized, &id);
-    if (found == 0)
+    if (!invalid_queue_id && found == 0)
       id = reserve_download(url, dest, &opts, auto_filename);
     LOG_INFO("MSG_ADD_DOWNLOAD: queue_manager_add returned id=%u", id);
     if (hdr->type == MSG_ADD_DOWNLOAD_V2) {
       IpcAddResponse response = {
-          .result = found == 1 ? IPC_RESULT_REJECTED
+          .result = invalid_queue_id || found == 1 ? IPC_RESULT_REJECTED
                                : id ? IPC_RESULT_OK : IPC_RESULT_ERROR,
           .id = id};
       ipc_write_exact(client_fd, &response, sizeof(response));
@@ -855,6 +887,75 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     send_command_result(client_fd, result);
     if (result == IPC_RESULT_OK)
       ipc_broadcast_status(id, "REMOVED", 0.0f);
+    break;
+  }
+  case MSG_QUEUE_LIST: {
+    Queue *rows = NULL;
+    size_t count = 0;
+    if (queue_list(&rows, &count) != 0 || count > UINT32_MAX) {
+      uint32_t error = UINT32_MAX;
+      ipc_write_exact(client_fd, &error, sizeof(error));
+    } else {
+      uint32_t wire_count = (uint32_t)count;
+      if (ipc_write_exact(client_fd, &wire_count, sizeof(wire_count)) == 0)
+        ipc_write_exact(client_fd, rows, count * sizeof(*rows));
+    }
+    free(rows);
+    break;
+  }
+  case MSG_QUEUE_CREATE:
+  case MSG_QUEUE_UPDATE: {
+    Queue queue = {0};
+    if (ipc_read_exact(client_fd, &queue, sizeof(queue)) != 0)
+      return;
+    uint32_t id = 0;
+    IpcResult result = IPC_RESULT_REJECTED;
+    if (queue_ipc_valid(&queue) &&
+        (hdr->type == MSG_QUEUE_UPDATE || queue.id == 0)) {
+      dm_mutex_t *mutex = queue_manager_get_mutex();
+      dm_mutex_lock(mutex);
+      int rc = hdr->type == MSG_QUEUE_CREATE
+                   ? queue_create(&queue, &id)
+                   : queue_update(&queue);
+      dm_mutex_unlock(mutex);
+      result = rc == 0 ? IPC_RESULT_OK : IPC_RESULT_ERROR;
+    }
+    send_command_result(client_fd, result);
+    if (hdr->type == MSG_QUEUE_CREATE)
+      ipc_write_exact(client_fd, &id, sizeof(id));
+    if (result == IPC_RESULT_OK)
+      ipc_broadcast_status(0, "QUEUES_CHANGED", 0.0f);
+    break;
+  }
+  case MSG_QUEUE_DELETE:
+  case MSG_QUEUE_REORDER: {
+    uint32_t id = 0;
+    int32_t priority = 0;
+    if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0 ||
+        (hdr->type == MSG_QUEUE_REORDER &&
+         ipc_read_exact(client_fd, &priority, sizeof(priority)) != 0))
+      return;
+    IpcResult result = IPC_RESULT_REJECTED;
+    if (id > 0 && (hdr->type != MSG_QUEUE_DELETE || id > 1) &&
+        (hdr->type != MSG_QUEUE_REORDER ||
+         (priority >= 0 && priority <= 1000))) {
+      dm_mutex_t *mutex = queue_manager_get_mutex();
+      dm_mutex_lock(mutex);
+      Queue existing;
+      if (queue_get(id, &existing) != 0)
+        result = IPC_RESULT_NOT_FOUND;
+      else {
+        int rc = hdr->type == MSG_QUEUE_DELETE ? queue_delete(id)
+                                                : queue_reorder(id, priority);
+        if (rc == 0 && hdr->type == MSG_QUEUE_DELETE)
+          queue_manager_reassign_queue_locked(id);
+        result = rc == 0 ? IPC_RESULT_OK : IPC_RESULT_ERROR;
+      }
+      dm_mutex_unlock(mutex);
+    }
+    send_command_result(client_fd, result);
+    if (result == IPC_RESULT_OK)
+      ipc_broadcast_status(0, "QUEUES_CHANGED", 0.0f);
     break;
   }
   case MSG_LIST: {
@@ -1257,6 +1358,8 @@ static int send_add_download(int sock, MsgType type, const char *url,
       cJSON_AddStringToObject(root, "auth_user", options->auth_user);
     if (options && options->auth_password && options->auth_password[0])
       cJSON_AddStringToObject(root, "auth_password", options->auth_password);
+    if (type == MSG_ADD_DOWNLOAD_V2 && options && options->queue_id)
+      cJSON_AddNumberToObject(root, "queue_id", options->queue_id);
     options_json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!options_json)
@@ -1430,6 +1533,67 @@ int ipc_send_remove_download(int sock, uint32_t id, bool delete_file,
     return -1;
   *out = (IpcResult)result;
   return 0;
+}
+
+int ipc_send_queue_list(int sock, Queue *out, int max) {
+  if (sock < 0 || !out || max < 0)
+    return -1;
+  MsgHeader hdr = {.length = 0, .type = MSG_QUEUE_LIST};
+  uint32_t count = 0;
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0 ||
+      ipc_read_exact(sock, &count, sizeof(count)) != 0 ||
+      count == UINT32_MAX || count > INT32_MAX)
+    return -1;
+  for (uint32_t i = 0; i < count; i++) {
+    Queue row;
+    if (ipc_read_exact(sock, &row, sizeof(row)) != 0)
+      return -1;
+    if (i < (uint32_t)max)
+      out[i] = row;
+  }
+  return (int)count;
+}
+
+int ipc_send_queue_create(int sock, const Queue *queue, uint32_t *out_id) {
+  if (sock < 0 || !queue || !out_id)
+    return -1;
+  *out_id = 0;
+  MsgHeader hdr = {.length = sizeof(*queue), .type = MSG_QUEUE_CREATE};
+  uint8_t result = IPC_RESULT_ERROR;
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0 ||
+      ipc_write_exact(sock, queue, sizeof(*queue)) != 0 ||
+      ipc_read_exact(sock, &result, sizeof(result)) != 0 ||
+      ipc_read_exact(sock, out_id, sizeof(*out_id)) != 0)
+    return -1;
+  return result == IPC_RESULT_OK ? 0 : -1;
+}
+
+static int queue_command(int sock, MsgType type, const void *payload,
+                         uint32_t length) {
+  if (sock < 0 || !payload)
+    return -1;
+  MsgHeader hdr = {.length = length, .type = type};
+  uint8_t result = IPC_RESULT_ERROR;
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0 ||
+      ipc_write_exact(sock, payload, length) != 0 ||
+      ipc_read_exact(sock, &result, sizeof(result)) != 0)
+    return -1;
+  return result;
+}
+
+int ipc_send_queue_update(int sock, const Queue *queue) {
+  if (!queue)
+    return -1;
+  return queue_command(sock, MSG_QUEUE_UPDATE, queue, sizeof(*queue));
+}
+
+int ipc_send_queue_delete(int sock, uint32_t id) {
+  return queue_command(sock, MSG_QUEUE_DELETE, &id, sizeof(id));
+}
+
+int ipc_send_queue_reorder(int sock, uint32_t id, int priority) {
+  int32_t payload[2] = {(int32_t)id, priority};
+  return queue_command(sock, MSG_QUEUE_REORDER, payload, sizeof(payload));
 }
 
 static int read_download_rows(int sock, uint32_t count,
@@ -1796,7 +1960,8 @@ void ipc_broadcast_status(uint32_t download_id, const char *status,
   dm_mutex_lock(&g_client_mutex);
   for (int i = 0; i < g_client_count; i++) {
     if (!g_client_subscribed[i] &&
-        g_client_browser_download[i] != download_id)
+        (g_client_browser_download[i] == 0 ||
+         g_client_browser_download[i] != download_id))
       continue;
 
     int flags = 0;
@@ -1806,10 +1971,12 @@ void ipc_broadcast_status(uint32_t download_id, const char *status,
 #if defined(MSG_DONTWAIT)
     flags |= MSG_DONTWAIT;
 #endif
-    const void *bytes = g_client_browser_download[i] == download_id
+    const void *bytes = g_client_browser_download[i] != 0 &&
+                                g_client_browser_download[i] == download_id
                             ? (const void *)browser_frame
                             : (const void *)frame;
-    size_t bytes_len = g_client_browser_download[i] == download_id
+    size_t bytes_len = g_client_browser_download[i] != 0 &&
+                               g_client_browser_download[i] == download_id
                            ? sizeof(browser_frame)
                            : offset;
     if (g_client_v2_subscribed[i]) {
