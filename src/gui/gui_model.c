@@ -7,6 +7,8 @@
 
 static GuiRow g_rows[GUI_MODEL_MAX_ROWS];
 static int g_row_count = 0;
+static Queue g_queues[GUI_MODEL_MAX_QUEUES];
+static int g_queue_count = 0;
 static dm_mutex_t g_mutex;
 static once_flag g_mutex_once = ONCE_FLAG_INIT;
 
@@ -18,6 +20,7 @@ void gui_model_init(void) {
   ensure_mutex();
   dm_mutex_lock(&g_mutex);
   g_row_count = 0;
+  g_queue_count = 0;
   dm_mutex_unlock(&g_mutex);
   LOG_DEBUG("cleared snapshot state");
 }
@@ -207,6 +210,29 @@ int gui_model_snapshot_rows(GuiRow *out, int max) {
   memcpy(out, g_rows, (size_t)n * sizeof(GuiRow));
   dm_mutex_unlock(&g_mutex);
   return n;
+}
+
+void gui_model_apply_queues(const Queue *queues, int count) {
+  if (count < 0 || count > GUI_MODEL_MAX_QUEUES || (count && !queues))
+    return;
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  if (count)
+    memcpy(g_queues, queues, (size_t)count * sizeof(Queue));
+  g_queue_count = count;
+  dm_mutex_unlock(&g_mutex);
+}
+
+int gui_model_snapshot_queues(Queue *out, int max) {
+  if (!out || max < 0)
+    return -1;
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  int count = g_queue_count < max ? g_queue_count : max;
+  if (count)
+    memcpy(out, g_queues, (size_t)count * sizeof(Queue));
+  dm_mutex_unlock(&g_mutex);
+  return count;
 }
 
 // Called by main_view_draw() to add a brand-new row immediately after a

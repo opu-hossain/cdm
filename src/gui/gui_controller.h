@@ -7,6 +7,7 @@
 
 #define GUI_CONTROLLER_MAX_ROWS 256
 #define GUI_HISTORY_PAGE_ROWS 64
+#define GUI_CONTROLLER_MAX_QUEUES 64
 
 typedef struct {
   uint32_t offset;
@@ -21,6 +22,7 @@ typedef enum {
   GUI_CONTROLLER_EVENT_DETAILS,
   GUI_CONTROLLER_EVENT_CONNECTION,
   GUI_CONTROLLER_EVENT_ERROR,
+  GUI_CONTROLLER_EVENT_QUEUES,
 } GuiControllerEventType;
 
 typedef enum {
@@ -70,6 +72,11 @@ typedef struct {
 } GuiControllerErrorEvent;
 
 typedef struct {
+  Queue queues[GUI_CONTROLLER_MAX_QUEUES];
+  int count;
+} GuiControllerQueuesEvent;
+
+typedef struct {
   GuiControllerEventType type;
   union {
     GuiControllerOperationEvent operation;
@@ -78,6 +85,7 @@ typedef struct {
     GuiControllerDetailsEvent details;
     GuiControllerConnectionEvent connection;
     GuiControllerErrorEvent error;
+    GuiControllerQueuesEvent queues;
   } data;
 } GuiControllerEvent;
 
@@ -98,6 +106,11 @@ bool gui_controller_enqueue_cancel(uint32_t id);
 bool gui_controller_enqueue_remove(uint32_t id, bool delete_file);
 bool gui_controller_enqueue_details(uint32_t id);
 bool gui_controller_request_more(void);
+bool gui_controller_request_queues(void);
+bool gui_controller_enqueue_queue_create(const Queue *queue);
+bool gui_controller_enqueue_queue_update(const Queue *queue);
+bool gui_controller_enqueue_queue_delete(uint32_t id);
+bool gui_controller_enqueue_queue_order(const uint32_t *ids, int count);
 /* Advances a bounded history window; used by the controller worker. */
 bool gui_controller_history_next(GuiHistoryWindow *window);
 

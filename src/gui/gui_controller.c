@@ -21,6 +21,11 @@ typedef enum {
   GUI_CONTROLLER_COMMAND_REMOVE,
   GUI_CONTROLLER_COMMAND_DETAILS,
   GUI_CONTROLLER_COMMAND_PAGE,
+  GUI_CONTROLLER_COMMAND_QUEUE_LIST,
+  GUI_CONTROLLER_COMMAND_QUEUE_CREATE,
+  GUI_CONTROLLER_COMMAND_QUEUE_UPDATE,
+  GUI_CONTROLLER_COMMAND_QUEUE_DELETE,
+  GUI_CONTROLLER_COMMAND_QUEUE_ORDER,
 } GuiControllerCommandType;
 
 typedef struct {
@@ -35,6 +40,9 @@ typedef struct {
   char referrer[2048];
   char extra_headers[4096];
   char expected_sha256[65];
+  Queue queue;
+  uint32_t queue_order[GUI_CONTROLLER_MAX_QUEUES];
+  int queue_order_count;
 } GuiControllerCommand;
 
 static GuiControllerEvent g_events[GUI_CONTROLLER_EVENT_CAP];
@@ -231,6 +239,39 @@ bool gui_controller_request_more(void) {
   return enqueue_id_command(GUI_CONTROLLER_COMMAND_PAGE, 0);
 }
 
+bool gui_controller_request_queues(void) {
+  return enqueue_id_command(GUI_CONTROLLER_COMMAND_QUEUE_LIST, 0);
+}
+
+bool gui_controller_enqueue_queue_create(const Queue *queue) {
+  if (!queue)
+    return false;
+  GuiControllerCommand command = {.type = GUI_CONTROLLER_COMMAND_QUEUE_CREATE,
+                                  .queue = *queue};
+  return enqueue_command(&command);
+}
+
+bool gui_controller_enqueue_queue_update(const Queue *queue) {
+  if (!queue)
+    return false;
+  GuiControllerCommand command = {.type = GUI_CONTROLLER_COMMAND_QUEUE_UPDATE,
+                                  .queue = *queue};
+  return enqueue_command(&command);
+}
+
+bool gui_controller_enqueue_queue_delete(uint32_t id) {
+  return enqueue_id_command(GUI_CONTROLLER_COMMAND_QUEUE_DELETE, id);
+}
+
+bool gui_controller_enqueue_queue_order(const uint32_t *ids, int count) {
+  if (!ids || count < 1 || count > GUI_CONTROLLER_MAX_QUEUES)
+    return false;
+  GuiControllerCommand command = {.type = GUI_CONTROLLER_COMMAND_QUEUE_ORDER,
+                                  .queue_order_count = count};
+  memcpy(command.queue_order, ids, (size_t)count * sizeof(ids[0]));
+  return enqueue_command(&command);
+}
+
 bool gui_controller_history_next(GuiHistoryWindow *window) {
   if (!window || (uint64_t)window->offset + window->count >= window->total)
     return false;
@@ -264,6 +305,18 @@ static void publish_operation(GuiControllerOperation operation, uint32_t id,
 }
 
 static void publish_error(const char *message);
+
+static void publish_queues(void) {
+  GuiControllerEvent event = {.type = GUI_CONTROLLER_EVENT_QUEUES};
+  int count = gui_client_queue_list(event.data.queues.queues,
+                                     GUI_CONTROLLER_MAX_QUEUES);
+  if (count < 0 || count > GUI_CONTROLLER_MAX_QUEUES) {
+    publish_error("Queues could not be loaded");
+    return;
+  }
+  event.data.queues.count = count;
+  gui_controller_publish(&event);
+}
 
 static void publish_snapshot(GuiHistoryWindow *window) {
   GuiDownloadRecord *records = NULL;
@@ -299,6 +352,10 @@ static void publish_client_events(void) {
   GuiClientEvent client_event;
   while (gui_client_poll_event(&client_event)) {
     if (client_event.type == GUI_EVT_STATUS_UPDATE) {
+      if (strcmp(client_event.status, "QUEUES_CHANGED") == 0) {
+        publish_queues();
+        continue;
+      }
       GuiControllerEvent event = {.type = GUI_CONTROLLER_EVENT_STATUS};
       event.data.status.download_id = client_event.download_id;
       event.data.status.progress = client_event.progress;
@@ -313,6 +370,8 @@ static void publish_client_events(void) {
       event.data.connection.connected =
           client_event.type == GUI_EVT_CONNECTION_RESTORED;
       gui_controller_publish(&event);
+      if (client_event.type == GUI_EVT_CONNECTION_RESTORED)
+        publish_queues();
     }
   }
 }
@@ -329,7 +388,8 @@ static void process_command(const GuiControllerCommand *command) {
         command->options.cookie || command->options.referrer ||
                 command->options.extra_headers ||
                 command->options.expected_sha256 ||
-                command->options.speed_limit_bps > 0
+        command->options.speed_limit_bps > 0
+                || command->options.queue_id > 0
             ? &command->options
             : NULL,
         command->auto_filename, &id, &duplicate);
@@ -367,6 +427,33 @@ static void process_command(const GuiControllerCommand *command) {
   }
   case GUI_CONTROLLER_COMMAND_PAGE:
     return; /* handled by the controller loop with its worker-owned window */
+  case GUI_CONTROLLER_COMMAND_QUEUE_LIST:
+    publish_queues();
+    return;
+  case GUI_CONTROLLER_COMMAND_QUEUE_CREATE:
+    succeeded = gui_client_queue_create(&command->queue);
+    break;
+  case GUI_CONTROLLER_COMMAND_QUEUE_UPDATE:
+    succeeded = gui_client_queue_update(&command->queue);
+    break;
+  case GUI_CONTROLLER_COMMAND_QUEUE_DELETE:
+    succeeded = gui_client_queue_delete(command->id);
+    break;
+  case GUI_CONTROLLER_COMMAND_QUEUE_ORDER:
+    succeeded = true;
+    for (int i = 0; i < command->queue_order_count; ++i) {
+      if (!gui_client_queue_reorder(command->queue_order[i], 1000 - i * 15)) {
+        succeeded = false;
+        break;
+      }
+    }
+    break;
+  }
+  if (command->type >= GUI_CONTROLLER_COMMAND_QUEUE_LIST) {
+    if (!succeeded)
+      publish_error("Queue operation failed");
+    publish_queues();
+    return;
   }
   publish_operation(operation, command->id, NULL, NULL, succeeded, false);
   if (!succeeded)
@@ -376,6 +463,7 @@ static void process_command(const GuiControllerCommand *command) {
 static int controller_thread_fn(void *arg) {
   (void)arg;
   GuiHistoryWindow window = {.count = GUI_HISTORY_PAGE_ROWS};
+  publish_queues();
   int refresh_elapsed = GUI_CONTROLLER_REFRESH_MS;
   while (atomic_load(&g_running)) {
     publish_client_events();

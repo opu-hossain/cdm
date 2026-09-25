@@ -6,6 +6,7 @@
 #include <stddef.h>
 
 #define GUI_MODEL_MAX_ROWS 256
+#define GUI_MODEL_MAX_QUEUES 64
 
 /* Lightweight — matches GuiDownloadRecord, no details fields. */
 typedef struct {
@@ -38,5 +39,7 @@ void gui_model_for_each_row(void (*fn)(const GuiRow *row, void *ctx),
                             void *ctx);
 
 int gui_model_snapshot_rows(GuiRow *out, int max);
+void gui_model_apply_queues(const Queue *queues, int count);
+int gui_model_snapshot_queues(Queue *out, int max);
 
 #endif

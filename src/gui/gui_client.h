@@ -52,6 +52,11 @@ bool gui_client_add_download_result(const char *url, const char *dest,
                                     bool auto_filename, uint32_t *out_id,
                                     bool *duplicate);
 bool gui_client_reload_config(void);
+int gui_client_queue_list(Queue *out, int max);
+bool gui_client_queue_create(const Queue *queue);
+bool gui_client_queue_update(const Queue *queue);
+bool gui_client_queue_delete(uint32_t id);
+bool gui_client_queue_reorder(uint32_t id, int priority);
 
 /* Fetch a full snapshot. The caller owns *out_records on success. */
 bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count);

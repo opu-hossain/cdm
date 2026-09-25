@@ -29,7 +29,7 @@
 #define GUI_SHA256_CAP 65
 #define GUI_SEARCH_CAP 256
 
-typedef enum { TAB_ALL, TAB_DOWNLOADING, TAB_COMPLETED } GuiTab;
+typedef enum { TAB_ALL, TAB_DOWNLOADING, TAB_COMPLETED, TAB_QUEUES } GuiTab;
 typedef enum {
   CATEGORY_ALL, CATEGORY_DOCUMENTS, CATEGORY_COMPRESSED,
   CATEGORY_MUSIC, CATEGORY_VIDEO, CATEGORY_PROGRAMS, CATEGORY_COUNT
@@ -81,6 +81,10 @@ typedef struct {
   ProxyMode proxy_mode;
   char proxy_url[512], proxy_username[128], proxy_password[256];
   char numbers[9][16];
+  bool queue_add_open, queue_delete_open;
+  uint32_t queue_edit_id, queue_delete_id, queue_drag_id, add_queue_id;
+  Queue queue_draft;
+  char queue_priority[16], queue_cap[16];
 } UiState;
 
 static void copy_text(char *out, size_t size, const char *text) {
@@ -316,7 +320,7 @@ static void report_enqueue(UiState *ui, bool ok) {
 static bool add_download(const char *url, const char *folder,
                          const char *cookie, const char *referrer,
                          const char *headers, const char *sha256,
-                         uint64_t speed_limit) {
+                         uint64_t speed_limit, uint32_t queue_id) {
   char filename[512];
   char path[IPC_MAX_PATH_LEN];
   char unique_path[IPC_MAX_PATH_LEN];
@@ -333,10 +337,11 @@ static bool add_download(const char *url, const char *folder,
       .extra_headers = headers[0] ? headers : NULL,
       .expected_sha256 = sha256[0] ? sha256 : NULL,
       .speed_limit_bps = speed_limit,
+      .queue_id = queue_id,
   };
   bool has_options = options.cookie || options.referrer ||
                      options.extra_headers || options.expected_sha256 ||
-                     options.speed_limit_bps > 0;
+                     options.speed_limit_bps > 0 || options.queue_id > 0;
   return gui_controller_enqueue_add_auto(url, unique_path,
                                          has_options ? &options : NULL);
 }
@@ -492,18 +497,21 @@ static void draw_chrome(struct nk_context *ctx, UiState *ui,
   fill(ctx, screen_rect(ctx, 0, 51, width, 1), 0, BORDER);
   fill(ctx, screen_rect(ctx, 219, 52, 1, height - 52), 0, BORDER);
   bold_at(ctx, 18, 0, 142, 52, "CDM", 15, TEXT, SURFACE);
-  const char *tabs[] = {"All", "Downloading", "Completed"};
+  const char *tabs[] = {"All", "Downloading", "Completed", "Queues"};
   float tx = 173;
-  const float tw[] = {43, 109, 100};
-  for (int i = 0; i < 3; ++i) {
-    if (nav_button(ctx, tx, 11, tw[i], 30, tabs[i], ui->tab == (GuiTab)i))
+  const float tw[] = {43, 109, 100, 72};
+  for (int i = 0; i < 4; ++i) {
+    if (nav_button(ctx, tx, 11, tw[i], 30, tabs[i], ui->tab == (GuiTab)i)) {
       ui->tab = (GuiTab)i;
+      if (ui->tab == TAB_QUEUES)
+        report_enqueue(ui, gui_controller_request_queues());
+    }
     tx += tw[i] + 4;
   }
   float search_width = width - 602;
   if (search_width > 340)
     search_width = 340;
-  if (search_width > 90) {
+  if (search_width > 90 && ui->tab != TAB_QUEUES) {
     nk_layout_space_push(ctx, nk_rect(width - 122 - search_width, 10,
                                       search_width, 32));
     nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->search,
@@ -518,12 +526,23 @@ static void draw_chrome(struct nk_context *ctx, UiState *ui,
   text_at(ctx, width - 84, 0, 80, 52,
           ui->connected ? "Connected" : "Disconnected", 13, connection,
           SURFACE);
-  if (button(ctx, 14, 66, 192, 40, "+ New Download", true, true))
-    ui->add_open = true;
+  if (button(ctx, 14, 66, 192, 40,
+             ui->tab == TAB_QUEUES ? "+ Add queue" : "+ New Download", true,
+             true)) {
+    if (ui->tab == TAB_QUEUES) {
+      memset(&ui->queue_draft, 0, sizeof(ui->queue_draft));
+      copy_text(ui->queue_draft.post_action,
+                sizeof(ui->queue_draft.post_action), "none");
+      copy_text(ui->queue_priority, sizeof(ui->queue_priority), "0");
+      copy_text(ui->queue_cap, sizeof(ui->queue_cap), "0");
+      ui->queue_add_open = true;
+    } else
+      ui->add_open = true;
+  }
   const char *categories[] = {"All categories", "Documents", "Compressed",
                               "Music",          "Video",     "Programs"};
   const char *icons[] = {"=", "D", "Z", "M", "V", "P"};
-  for (int i = 0; i < 6; ++i) {
+  for (int i = 0; i < 6 && ui->tab != TAB_QUEUES; ++i) {
     float y = 122 + i * 36;
     if (nav_button(ctx, 14, y, 192, 33, "", ui->category == (GuiCategory)i))
       ui->category = (GuiCategory)i;
@@ -555,7 +574,14 @@ static void draw_chrome(struct nk_context *ctx, UiState *ui,
             DISABLED, SURFACE);
   }
   char total[64];
-  if (ui->category == CATEGORY_ALL && ui->tab == TAB_ALL && !ui->search[0])
+  if (ui->tab == TAB_QUEUES) {
+    Queue queues[GUI_MODEL_MAX_QUEUES];
+    int count = gui_model_snapshot_queues(queues, GUI_MODEL_MAX_QUEUES);
+    int written = snprintf(total, sizeof(total), "%d queues", count);
+    if (written < 0 || (size_t)written >= sizeof(total))
+      total[0] = '\0';
+  } else if (ui->category == CATEGORY_ALL && ui->tab == TAB_ALL &&
+             !ui->search[0])
     snprintf(total, sizeof(total), "%d of %u downloads", visible_count,
              ui->history_total);
   else
@@ -1141,6 +1167,23 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
       input_field(ctx, "Referrer", ui->referrer, sizeof(ui->referrer));
       input_field(ctx, "Extra headers", ui->headers, sizeof(ui->headers));
       input_field(ctx, "SHA-256", ui->sha256, sizeof(ui->sha256));
+      Queue queues[GUI_MODEL_MAX_QUEUES];
+      const char *names[GUI_MODEL_MAX_QUEUES];
+      int queue_count = gui_model_snapshot_queues(queues, GUI_MODEL_MAX_QUEUES);
+      int selected = 0;
+      for (int i = 0; i < queue_count; ++i) {
+        names[i] = queues[i].name;
+        if (queues[i].id == (ui->add_queue_id ? ui->add_queue_id : 1))
+          selected = i;
+      }
+      if (queue_count > 0) {
+        nk_layout_row_dynamic(ctx, 24, 1);
+        nk_label(ctx, "Queue", NK_TEXT_LEFT);
+        nk_layout_row_dynamic(ctx, 32, 1);
+        selected = nk_combo(ctx, names, queue_count, selected, 30,
+                            nk_vec2(260, 240));
+        ui->add_queue_id = queues[selected].id;
+      }
       number_field(ctx, "Speed limit (bytes/sec, 0 = unlimited)",
                    ui->numbers[5]);
     }
@@ -1160,17 +1203,228 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
       copy_text(ui->error, sizeof(ui->error),
                 "Speed limit must be between 0 and 1000000000.");
     else if (add_download(ui->url, ui->folder, ui->cookie, ui->referrer,
-                          ui->headers, ui->sha256, (uint64_t)ui->speed_limit)) {
+                          ui->headers, ui->sha256, (uint64_t)ui->speed_limit,
+                          ui->add_queue_id)) {
       ui->add_open = false;
       ui->error[0] = '\0';
       ui->url[0] = ui->folder[0] = ui->cookie[0] = ui->referrer[0] = '\0';
       ui->headers[0] = ui->sha256[0] = '\0';
       ui->speed_limit = 0;
+      ui->add_queue_id = 0;
       copy_text(ui->numbers[5], sizeof(ui->numbers[5]), "0");
       ui->advanced = false;
     } else
       copy_text(ui->error, sizeof(ui->error),
                 "Could not prepare or enqueue the download.");
+  }
+  modal_end(ctx);
+}
+
+static bool queue_draft_valid(UiState *ui) {
+  int priority = 0, cap = 0;
+  if (!ui->queue_draft.name[0] ||
+      !parse_number(ui->queue_priority, 0, 1000, &priority) ||
+      !parse_number(ui->queue_cap, 0, 64, &cap)) {
+    copy_text(ui->error, sizeof(ui->error),
+              "Enter a name, priority 0-1000, and max concurrent 0-64.");
+    return false;
+  }
+  ui->queue_draft.priority = priority;
+  ui->queue_draft.max_concurrent = cap;
+  if (!ui->queue_draft.post_action[0])
+    copy_text(ui->queue_draft.post_action,
+              sizeof(ui->queue_draft.post_action), "none");
+  return true;
+}
+
+static void queue_fields(struct nk_context *ctx, UiState *ui) {
+  input_field(ctx, "Name", ui->queue_draft.name,
+              sizeof(ui->queue_draft.name));
+  number_field(ctx, "Priority (0-1000)", ui->queue_priority);
+  number_field(ctx, "Max concurrent (0 = unlimited)", ui->queue_cap);
+  input_field(ctx, "Schedule start (HH:MM)", ui->queue_draft.schedule_start,
+              sizeof(ui->queue_draft.schedule_start));
+  input_field(ctx, "Schedule stop (HH:MM)", ui->queue_draft.schedule_stop,
+              sizeof(ui->queue_draft.schedule_stop));
+  input_field(ctx, "Post action", ui->queue_draft.post_action,
+              sizeof(ui->queue_draft.post_action));
+  input_field(ctx, "Post action argument", ui->queue_draft.post_action_arg,
+              sizeof(ui->queue_draft.post_action_arg));
+}
+
+static void draw_queue_add(struct nk_context *ctx, UiState *ui, float width,
+                           float height) {
+  float w = 520, h = height * .82f;
+  if (h > 660)
+    h = 660;
+  if (!modal_start(ctx, "queue-add", "Add queue", (width - w) / 2,
+                   (height - h) / 2, w, h, &ui->queue_add_open)) {
+    nk_end(ctx);
+    return;
+  }
+  nk_layout_space_push(ctx, nk_rect(20, 70, w - 40, h - 140));
+  if (nk_group_begin(ctx, "queue-add-fields", 0)) {
+    queue_fields(ctx, ui);
+    nk_group_end(ctx);
+  }
+  text_at(ctx, 20, h - 74, w - 40, 20, ui->error, 11, RED, SURFACE);
+  fill(ctx, screen_rect(ctx, 0, h - 54, w, 1), 0, BORDER);
+  if (button(ctx, w - 230, h - 41, 80, 30, "Cancel", true, false))
+    ui->queue_add_open = false;
+  if (button(ctx, w - 142, h - 41, 122, 30, "Add queue", true, true) &&
+      queue_draft_valid(ui)) {
+    bool queued = gui_controller_enqueue_queue_create(&ui->queue_draft);
+    report_enqueue(ui, queued);
+    if (queued) {
+      ui->queue_add_open = false;
+      ui->error[0] = '\0';
+    }
+  }
+  modal_end(ctx);
+}
+
+static void draw_queues(struct nk_context *ctx, UiState *ui, float width,
+                        float height) {
+  Queue queues[GUI_MODEL_MAX_QUEUES];
+  int count = gui_model_snapshot_queues(queues, GUI_MODEL_MAX_QUEUES);
+  if (count < 0)
+    count = 0;
+  nk_layout_space_push(ctx, nk_rect(220, 102, width - 220, height - 102));
+  if (!nk_group_begin(ctx, "named-queues", 0))
+    return;
+  float content = width - 236;
+  float priority_x = content * .33f, cap_x = content * .44f;
+  float schedule_x = content * .56f, action_x = content * .74f;
+  nk_layout_space_begin(ctx, NK_STATIC, 32, 1);
+  text_at(ctx, 14, 0, 48, 30, "Order", 11, MUTED, BG);
+  text_at(ctx, 68, 0, priority_x - 72, 30, "Name", 11, MUTED, BG);
+  text_at(ctx, priority_x, 0, cap_x - priority_x, 30, "Priority", 11, MUTED,
+          BG);
+  text_at(ctx, cap_x, 0, schedule_x - cap_x, 30, "Max", 11, MUTED, BG);
+  text_at(ctx, schedule_x, 0, action_x - schedule_x, 30, "Schedule", 11,
+          MUTED, BG);
+  text_at(ctx, action_x, 0, content - action_x - 120, 30, "Post action", 11,
+          MUTED, BG);
+  nk_layout_space_end(ctx);
+  for (int i = 0; i < count; ++i) {
+    Queue *queue = &queues[i];
+    nk_layout_space_begin(ctx, NK_STATIC, 56, 1);
+    struct nk_rect row = screen_rect(ctx, 8, 1, content, 52);
+    fill(ctx, row, 8, SURFACE);
+    button(ctx, 14, 12, 44, 30, "Drag", true, false);
+    struct nk_rect grip = screen_rect(ctx, 14, 12, 44, 30);
+    if (nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT) &&
+        nk_input_is_mouse_hovering_rect(&ctx->input, grip))
+      ui->queue_drag_id = queue->id;
+    if (ui->queue_drag_id && ui->queue_drag_id != queue->id &&
+        nk_input_is_mouse_released(&ctx->input, NK_BUTTON_LEFT) &&
+        nk_input_is_mouse_hovering_rect(&ctx->input, row)) {
+      int from = -1;
+      for (int j = 0; j < count; ++j)
+        if (queues[j].id == ui->queue_drag_id)
+          from = j;
+      if (from >= 0) {
+        uint32_t ids[GUI_MODEL_MAX_QUEUES];
+        for (int j = 0; j < count; ++j)
+          ids[j] = queues[j].id;
+        uint32_t moved = ids[from];
+        if (from < i)
+          memmove(&ids[from], &ids[from + 1],
+                  (size_t)(i - from) * sizeof(ids[0]));
+        else
+          memmove(&ids[i + 1], &ids[i],
+                  (size_t)(from - i) * sizeof(ids[0]));
+        ids[i] = moved;
+        report_enqueue(ui, gui_controller_enqueue_queue_order(ids, count));
+      }
+      ui->queue_drag_id = 0;
+    }
+    label(ctx, screen_rect(ctx, 68, 10, priority_x - 72, 32), queue->name, 13,
+          TEXT, SURFACE);
+    char number[32];
+    int written = snprintf(number, sizeof(number), "%d", queue->priority);
+    if (written < 0 || (size_t)written >= sizeof(number))
+      number[0] = '\0';
+    label(ctx, screen_rect(ctx, priority_x, 10, cap_x - priority_x, 32),
+          number, 12, MUTED, SURFACE);
+    written = snprintf(number, sizeof(number), "%d", queue->max_concurrent);
+    if (written < 0 || (size_t)written >= sizeof(number))
+      number[0] = '\0';
+    label(ctx, screen_rect(ctx, cap_x, 10, schedule_x - cap_x, 32), number, 12,
+          MUTED, SURFACE);
+    char schedule[24];
+    if (queue->schedule_start[0] && queue->schedule_stop[0]) {
+      written = snprintf(schedule, sizeof(schedule), "%s-%s",
+                         queue->schedule_start, queue->schedule_stop);
+      if (written < 0 || (size_t)written >= sizeof(schedule))
+        schedule[0] = '\0';
+    } else
+      copy_text(schedule, sizeof(schedule), "Any time");
+    label(ctx, screen_rect(ctx, schedule_x, 10, action_x - schedule_x, 32),
+          schedule, 12, MUTED, SURFACE);
+    label(ctx, screen_rect(ctx, action_x, 10, content - action_x - 124, 32),
+          queue->post_action, 12, MUTED, SURFACE);
+    if (button(ctx, content - 112, 12, 48, 30, "Edit", true, false)) {
+      ui->queue_edit_id = queue->id;
+      ui->queue_draft = *queue;
+      written = snprintf(ui->queue_priority, sizeof(ui->queue_priority), "%d",
+                         queue->priority);
+      if (written < 0 || (size_t)written >= sizeof(ui->queue_priority))
+        ui->queue_priority[0] = '\0';
+      written = snprintf(ui->queue_cap, sizeof(ui->queue_cap), "%d",
+                         queue->max_concurrent);
+      if (written < 0 || (size_t)written >= sizeof(ui->queue_cap))
+        ui->queue_cap[0] = '\0';
+    }
+    if (queue->id == 1)
+      text_at(ctx, content - 53, 12, 44, 30, "-", 12, DISABLED, SURFACE);
+    else if (button(ctx, content - 60, 12, 54, 30, "Delete", true, false)) {
+      ui->queue_delete_id = queue->id;
+      ui->queue_delete_open = true;
+    }
+    nk_layout_space_end(ctx);
+    if (ui->queue_edit_id == queue->id) {
+      nk_layout_space_begin(ctx, NK_STATIC, 500, 1);
+      nk_layout_space_push(ctx, nk_rect(14, 0, content - 28, 490));
+      if (nk_group_begin(ctx, "queue-inline-edit", 0)) {
+        queue_fields(ctx, ui);
+        nk_layout_row_dynamic(ctx, 32, 2);
+        if (nk_button_label(ctx, "Cancel"))
+          ui->queue_edit_id = 0;
+        if (nk_button_label(ctx, "Save") && queue_draft_valid(ui)) {
+          bool queued = gui_controller_enqueue_queue_update(&ui->queue_draft);
+          report_enqueue(ui, queued);
+          if (queued)
+            ui->queue_edit_id = 0;
+        }
+        nk_group_end(ctx);
+      }
+      nk_layout_space_end(ctx);
+    }
+  }
+  if (nk_input_is_mouse_released(&ctx->input, NK_BUTTON_LEFT))
+    ui->queue_drag_id = 0;
+  nk_group_end(ctx);
+}
+
+static void draw_queue_delete(struct nk_context *ctx, UiState *ui,
+                              float width, float height) {
+  float w = 480, h = 220;
+  if (!modal_start(ctx, "queue-delete", "Delete queue", (width - w) / 2,
+                   (height - h) / 2, w, h, &ui->queue_delete_open)) {
+    nk_end(ctx);
+    return;
+  }
+  text_at(ctx, 20, 78, w - 40, 48,
+          "Downloads in this queue will move to Default.", 13, TEXT,
+          SURFACE);
+  if (button(ctx, w - 222, h - 43, 84, 30, "Cancel", true, false))
+    ui->queue_delete_open = false;
+  if (button(ctx, w - 132, h - 43, 112, 30, "Delete", true, true)) {
+    bool queued = gui_controller_enqueue_queue_delete(ui->queue_delete_id);
+    report_enqueue(ui, queued);
+    if (queued)
+      ui->queue_delete_open = false;
   }
   modal_end(ctx);
 }
@@ -1384,6 +1638,10 @@ static void consume_events(UiState *ui) {
       copy_text(ui->error, sizeof(ui->error), event.data.error.message);
       ui->history_loading = false;
       break;
+    case GUI_CONTROLLER_EVENT_QUEUES:
+      gui_model_apply_queues(event.data.queues.queues,
+                             event.data.queues.count);
+      break;
     }
   }
 }
@@ -1447,13 +1705,18 @@ int run_gui(void) {
     SDL_GetWindowSize(SDL_GL_GetCurrentWindow(), &window_width, &window_height);
     float width = (float)window_width, height = (float)window_height;
     bool modal = ui.settings_open || ui.add_open || ui.details_open ||
-                 ui.delete_confirm_open;
+                 ui.delete_confirm_open || ui.queue_add_open ||
+                 ui.queue_delete_open;
     if (modal) {
-      float mw = ui.settings_open ? 460 : ui.add_open || ui.delete_confirm_open
-                                                ? 520 : 580;
+      float mw = ui.settings_open ? 460
+                 : ui.queue_delete_open ? 480
+                 : ui.add_open || ui.delete_confirm_open || ui.queue_add_open
+                     ? 520 : 580;
       float mh =
           ui.settings_open ? (height * .8f > 650 ? 650 : height * .8f)
           : ui.delete_confirm_open ? 230
+          : ui.queue_delete_open ? 220
+          : ui.queue_add_open ? (height * .82f > 660 ? 660 : height * .82f)
           : ui.add_open
               ? (ui.advanced ? (height * .85f > 700 ? 700 : height * .85f)
                              : 350)
@@ -1465,6 +1728,7 @@ int run_gui(void) {
            !nk_input_is_mouse_hovering_rect(&ctx->input, modal_bounds))) {
         ui.settings_open = ui.add_open = ui.details_open =
             ui.delete_confirm_open = false;
+        ui.queue_add_open = ui.queue_delete_open = false;
         modal = false;
       }
     }
@@ -1473,8 +1737,12 @@ int run_gui(void) {
                  NK_WINDOW_NO_SCROLLBAR | (modal ? NK_WINDOW_NO_INPUT : 0))) {
       nk_layout_space_begin(ctx, NK_STATIC, height, 32);
       draw_chrome(ctx, &ui, category_counts, visible_count, width, height);
-      draw_rows(ctx, &ui, visible, visible_count, width, height);
-      draw_toolbar(ctx, &ui, visible, visible_count);
+      if (ui.tab == TAB_QUEUES)
+        draw_queues(ctx, &ui, width, height);
+      else {
+        draw_rows(ctx, &ui, visible, visible_count, width, height);
+        draw_toolbar(ctx, &ui, visible, visible_count);
+      }
       if (ui.error[0]) {
         text_at(ctx, 236, height - 34, width - 290, 32, ui.error, 12,
                 nk_rgb(224, 132, 136), BG);
@@ -1489,7 +1757,7 @@ int run_gui(void) {
     if (!modal)
       draw_toast(ctx, &ui, width, height);
     if (ui.settings_open || ui.add_open || ui.details_open ||
-        ui.delete_confirm_open) {
+        ui.delete_confirm_open || ui.queue_add_open || ui.queue_delete_open) {
       modal_backdrop(ctx, width, height);
       if (ui.settings_open)
         draw_settings(ctx, &ui, width, height);
@@ -1497,6 +1765,10 @@ int run_gui(void) {
         draw_add(ctx, &ui, width, height);
       else if (ui.delete_confirm_open)
         draw_delete_confirmation(ctx, &ui, width, height);
+      else if (ui.queue_add_open)
+        draw_queue_add(ctx, &ui, width, height);
+      else if (ui.queue_delete_open)
+        draw_queue_delete(ctx, &ui, width, height);
       else
         draw_details(ctx, &ui, width, height);
     }

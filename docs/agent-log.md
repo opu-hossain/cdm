@@ -822,3 +822,10 @@ Open questions:
 
 Next:
 - 2.1.4 GUI queues tab.
+
+## 2026-09-25 — Codex, task 2.1.4
+Branch: `cdm`; commit: `feat(gui): add queues tab with priority editing`.
+Completed: queue snapshot/model, worker-thread IPC commands, queues table, inline edit, drag reorder, add/delete confirmation, and add-download queue selection.
+Verification: test-first model test; focused GUI/IPC tests passed; full build and CTest 31/31 passed; isolated offscreen GUI stayed alive for three seconds (click paths unautomated).
+Open questions: phase merge gates remain deferred; queue UI currently displays at most 64 queues and reports an error above that bound.
+Next: 2.2.1 schedule model.

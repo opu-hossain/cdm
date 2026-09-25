@@ -347,6 +347,53 @@ bool gui_client_reload_config(void) {
   return send_with_retry(send_reload_config, 0);
 }
 
+static bool queue_connection(void) {
+  if (g_cmd_fd < 0) {
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                              &g_cmd_version);
+    if (g_cmd_fd < 0) {
+      note_lost();
+      return false;
+    }
+    note_restored();
+  }
+  return g_cmd_version >= 5;
+}
+
+int gui_client_queue_list(Queue *out, int max) {
+  if (!queue_connection())
+    return -1;
+  int count = ipc_send_queue_list(g_cmd_fd, out, max);
+  if (count < 0) {
+    ipc_client_disconnect(g_cmd_fd);
+    g_cmd_fd = -1;
+    note_lost();
+  }
+  return count;
+}
+
+bool gui_client_queue_create(const Queue *queue) {
+  if (!queue_connection())
+    return false;
+  uint32_t id = 0;
+  return ipc_send_queue_create(g_cmd_fd, queue, &id) == 0;
+}
+
+bool gui_client_queue_update(const Queue *queue) {
+  return queue_connection() &&
+         ipc_send_queue_update(g_cmd_fd, queue) == IPC_RESULT_OK;
+}
+
+bool gui_client_queue_delete(uint32_t id) {
+  return queue_connection() &&
+         ipc_send_queue_delete(g_cmd_fd, id) == IPC_RESULT_OK;
+}
+
+bool gui_client_queue_reorder(uint32_t id, int priority) {
+  return queue_connection() &&
+         ipc_send_queue_reorder(g_cmd_fd, id, priority) == IPC_RESULT_OK;
+}
+
 bool gui_client_add_download_result(const char *url, const char *dest,
                                     const IpcDownloadOptions *opts,
                                     bool auto_filename, uint32_t *out_id,
@@ -363,6 +410,9 @@ bool gui_client_add_download_result(const char *url, const char *dest,
     }
     note_restored();
   }
+
+  if (opts && opts->queue_id && g_cmd_version < 5)
+    return false;
 
   IpcAddResponse response = {0};
   if (g_cmd_version >= 3) {

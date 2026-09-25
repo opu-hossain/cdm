@@ -6,6 +6,22 @@
 TestSuite(gui_controller, .init = gui_controller_init,
           .fini = gui_controller_shutdown);
 
+Test(gui_controller, queue_snapshot_replaces_model_in_priority_order) {
+  gui_model_init();
+  Queue queues[2] = {{.id = 2, .priority = 20, .max_concurrent = 2},
+                     {.id = 1, .priority = 0}};
+  strcpy(queues[0].name, "Urgent");
+  strcpy(queues[1].name, "Default");
+  gui_model_apply_queues(queues, 2);
+  Queue visible[2] = {0};
+  cr_assert_eq(gui_model_snapshot_queues(visible, 2), 2);
+  cr_assert_eq(visible[0].id, 2);
+  cr_assert_eq(visible[0].max_concurrent, 2);
+  gui_model_apply_queues(queues + 1, 1);
+  cr_assert_eq(gui_model_snapshot_queues(visible, 2), 1);
+  cr_assert_eq(visible[0].id, 1);
+}
+
 Test(gui_controller, preserves_event_order) {
   GuiControllerEvent first = {.type = GUI_CONTROLLER_EVENT_OPERATION};
   first.data.operation.operation = GUI_CONTROLLER_OPERATION_PAUSE;
