@@ -32,6 +32,25 @@ Test(db, credentials_round_trip_and_restore) {
   queue_manager_remove(93);
 }
 
+Test(db, normalized_url_lookup_only_matches_active_statuses) {
+  cr_assert_eq(db_insert_download(1, "HTTP://Example.COM:80/A?Q=One#part",
+                                  "/tmp/cdm-lookup-1", NULL), 0);
+  cr_assert_eq(db_insert_download(2, "http://example.com/finished",
+                                  "/tmp/cdm-lookup-2", NULL), 0);
+  cr_assert_eq(db_update_status(2, "DONE"), 0);
+  uint32_t id = 0;
+  cr_assert_eq(db_find_active_by_url("http://example.com/A?Q=One", &id), 1);
+  cr_assert_eq(id, 1);
+  cr_assert_eq(db_find_active_by_url("http://example.com/finished", &id), 0);
+  cr_assert_eq(db_update_status(1, "ACTIVE"), 0);
+  cr_assert_eq(db_find_active_by_url("http://example.com/A?Q=One", &id), 1);
+  cr_assert_eq(db_update_status(1, "PAUSED"), 0);
+  cr_assert_eq(db_find_active_by_url("http://example.com/A?Q=One", &id), 1);
+  cr_assert_eq(db_update_status(1, "CANCELED"), 0);
+  cr_assert_eq(db_find_active_by_url("http://example.com/A?Q=One", &id), 0);
+  cr_assert_eq(db_find_active_by_url("http://example.com/A?q=One", &id), 0);
+}
+
 Test(db, history_does_not_block_reusing_deleted_file_path) {
   const char *path = "/tmp/cdm-history-only.apk";
   unlink(path);

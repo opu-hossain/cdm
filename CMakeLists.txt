@@ -146,6 +146,7 @@ set(UTILS_SOURCES
     src/utils/log.c
     src/utils/notify.c
     src/utils/path.c
+    src/utils/url.c
 )
 
 set(ENGINE_SOURCES

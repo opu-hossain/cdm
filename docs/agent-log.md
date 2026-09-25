@@ -661,3 +661,21 @@ Open questions:
 
 Next:
 - 1.4.1 DB lookup by normalized URL. Phase 0 merge gate 0.6.3 remains deferred.
+
+## 2026-09-25 — Codex, task 1.4.1
+
+Branch: `cdm`
+Commit: `feat(db): add normalized url lookup for duplicates` (this entry's commit)
+
+Tasks completed:
+- 1.4.1 Added HTTP(S) URL normalization that lowercases scheme and host, drops default port and fragment, and preserves path/query case. Added a DB lookup for matching `QUEUED`, `ACTIVE`, or `PAUSED` rows, returning the existing download ID. The lookup scans active rows and normalizes stored URLs without a schema migration.
+
+Tests:
+- Test first: new URL tests failed because the helper did not exist; DB lookup test failed to compile without the API.
+- Focused tests cover default/nondefault ports, IPv6, case, query, fragments, invalid input, status filtering and ID return. Full build and CTest passed 30/30.
+
+Open questions:
+- None for this task.
+
+Next:
+- 1.4.2 Enforce duplicate detection on add. Phase 0 merge gate 0.6.3 remains deferred.

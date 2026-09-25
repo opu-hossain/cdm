@@ -17,6 +17,7 @@ set(TEST_SOURCES
     test_path.c
     test_gui_controller.c
     test_config.c
+    test_url.c
 )
 
 foreach(TEST_SOURCE ${TEST_SOURCES})

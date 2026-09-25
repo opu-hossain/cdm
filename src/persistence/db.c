@@ -5,6 +5,7 @@
 
 #include "../core/queue_manager.h"
 #include "../utils/log.h"
+#include "../utils/url.h"
 #include "sqlite3.h"
 
 #include <stdio.h>
@@ -529,6 +530,35 @@ int db_visit_downloads_page(DbDownloadVisitor visitor, void *ctx,
   }
   sqlite3_finalize(stmt);
   return visited;
+}
+
+int db_find_active_by_url(const char *normalized, uint32_t *out_id) {
+  if (!db_ready() || !normalized || !out_id)
+    return -1;
+  *out_id = 0;
+  const char *sql =
+      "SELECT id, url FROM downloads "
+      "WHERE status IN ('QUEUED', 'ACTIVE', 'PAUSED') ORDER BY id DESC";
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+
+  int found = 0;
+  int step;
+  while ((step = sqlite3_step(stmt)) == SQLITE_ROW) {
+    const char *url = (const char *)sqlite3_column_text(stmt, 1);
+    char candidate[sizeof(((Download *)0)->url)];
+    if (url && url_normalize(url, candidate, sizeof(candidate)) &&
+        strcmp(candidate, normalized) == 0) {
+      *out_id = (uint32_t)sqlite3_column_int(stmt, 0);
+      found = 1;
+      break;
+    }
+  }
+  if (!found && step != SQLITE_DONE)
+    found = -1;
+  sqlite3_finalize(stmt);
+  return found;
 }
 
 int db_get_download_details(uint32_t id, IpcDownloadDetails *out) {

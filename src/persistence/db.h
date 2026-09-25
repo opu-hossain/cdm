@@ -71,6 +71,10 @@ int db_visit_downloads_page(DbDownloadVisitor visitor, void *ctx,
                             uint32_t offset, uint32_t limit);
 uint32_t db_get_max_id(void);
 
+/* normalized is a url_normalize() result. Returns 1 if a queued, active or
+ * paused row matches, 0 if absent, -1 on query error. */
+int db_find_active_by_url(const char *normalized, uint32_t *out_id);
+
 /** Single-row fetch of the heavy request-options fields for one download.
     Returns 0 on success (found), -1 if not found or on error. */
 int db_get_download_details(uint32_t id, IpcDownloadDetails *out);
