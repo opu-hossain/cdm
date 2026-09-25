@@ -751,3 +751,20 @@ Open questions:
 
 Next:
 - 1.6.1 Refresh project context and release notes for phase 1. Phase 0 merge gate 0.6.3 remains deferred.
+
+## 2026-09-25 — Codex, task 1.6.1
+
+Branch: `cdm`
+Commit: `docs: refresh context and notes for phase 1` (this entry's commit)
+
+Tasks completed:
+- 1.6.1 Updated the self-contained project context and draft release notes for phase 1: proxy/auth/config defaults, normalized duplicate handling, protocol v4, schema v4, removal semantics, UI behavior, security limits and new tests. Checked the context file map against every tracked file.
+
+Tests:
+- Documentation/file-map audit and `git diff --check` passed. `cmake --build build -j` and full CTest passed 31/31. The affected behavior had already been smoke-tested in tasks 1.4.2–1.5.3.
+
+Open questions:
+- Existing phase merge gates and Basic credential entry/storage policy remain in `docs/open-questions.md`.
+
+Next:
+- 1.6.2 formal phase 1 merge gate; user requested work on `cdm` and no push until the full plan. Continue independent phase 2 tasks without merging until branch/gate questions are resolved.

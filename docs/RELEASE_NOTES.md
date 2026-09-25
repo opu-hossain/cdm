@@ -2,6 +2,16 @@
 
 These notes describe the current source and packaging configuration. This draft does not state that a tag or downloadable package has been published.
 
+## Unreleased — phase 1 transfer parity
+
+- Added HTTP and SOCKS5 proxy settings (URL and optional credentials), applied to metadata probes and download workers. Proxy configuration is editable in the GUI.
+- Added per-download HTTP Basic username/password persistence and curl use for probes and workers. The details IPC reports the username and whether a password exists without returning the password. CLI/GUI credential entry is still absent.
+- Added configurable connections per download (1–16, default 8), User-Agent (default `cdm/0.1`), connect timeout (default 10 seconds) and transfer timeout (default 30 seconds), with GUI controls.
+- Added normalized active-URL duplicate detection. CLI add prints the existing ID and exits successfully; GUI highlights that row and shows a toast; the browser popup shows an existing-download notice.
+- Added GUI `Remove from list` and confirmed `Delete file` actions. The latter deletes the database row and chunks in a transaction, then unlinks the file. ACTIVE downloads are refused. Remove IPC uses type 44 because type 34 was already assigned to v2 subscription; protocol HELLO now reports version 4.
+- Local debug build and full CTest passed 31/31 on 2026-09-25. HTTP/proxy/auth and CLI duplicate integration tests use 127.0.0.1. Offscreen GUI startup passed; menu clicks were not automated.
+- Cookies, HTTP Basic credentials and proxy password remain in plaintext local persistence. See `docs/open-questions.md` for credential entry and storage policy.
+
 ## Unreleased — phase 0 foundations
 
 - Metadata probing falls back from a failed HEAD to a bounded GET `Range: bytes=0-0` request. Automatic filenames now use a safe `Content-Disposition` name when available and decode URL percent escapes; explicitly chosen filenames stay unchanged.

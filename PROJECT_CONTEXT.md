@@ -1,17 +1,17 @@
 # cdm Project Context
 
-Audit refreshed 2026-09-25 after phase 0 task 0.5.3. This document is self-contained for an assistant without repository access. Relative paths refer to the refreshed source state. Literal user data and absolute home paths are omitted or shown as `[REDACTED]`.
+Audit refreshed 2026-09-25 after phase 1 task 1.5.3. This document is self-contained for an assistant without repository access. Relative paths refer to the refreshed source state. Literal user data and absolute home paths are omitted or shown as `[REDACTED]`.
 
 ## 0. Metadata
 
 | Item | Current value |
 |---|---|
-| Audit refresh | 2026-09-25, after phase 0 task 0.5.3; relative path and line references refer to this source state. |
+| Audit refresh | 2026-09-25, after phase 1 task 1.5.3; older line references are approximate where intervening code moved. |
 | Repository root | `[REDACTED]` (this checkout's root; `git rev-parse --show-toplevel`) |
-| Pre-document commit | `c89edebf4b503d0d612607917531c2a7884ce582` (`git rev-parse HEAD`) |
+| Pre-document commit | `18c537046e1ecb1f65a58f7163902324dd5d9879` (`git rev-parse HEAD`) |
 | Branch | `cdm` (`git branch --show-current`; user requested work on this branch) |
-| Last commit before refresh | `c89edebf4b503d0d612607917531c2a7884ce582 2026-09-25 02:12:23 +0600 feat(cli): add paginated list command` |
-| Working tree before refresh | `.gitignore` modified by pre-existing local work; `PROJECT_CONTEXT.md` untracked until this task. `PLAN.md` is ignored locally. The earlier unrelated stash is preserved. |
+| Last commit before refresh | `18c537046e1ecb1f65a58f7163902324dd5d9879 2026-09-25 09:00:09 +0600 feat(gui): enable remove and delete-file from row menu` |
+| Working tree before refresh | `.gitignore` modified by pre-existing local work; `PLAN.md` is ignored locally. The earlier unrelated stash is preserved. This task edits this document and release notes. |
 | Host/toolchain | Linux x86_64, Arch Linux, GCC 16.2.1, CMake 4.4.3; system libcurl 8.22.0, SQLite 3.53.4, SDL2 2.32.72, libnotify 0.8.8, libepoxy 1.5.10, Criterion 2.4.3. |
 | UI library | Vendored Nuklear v4.13.3 (`src/vendor/nuklear.h`); runtime SDL/OpenGL version UNKNOWN, verify with package manager or linked binaries. |
 | Release | `.release.toml` specifies 0.3.0-rc1, CPack 0.3.0~rc1; README's 0.2.0-rc1 remains stale. |
@@ -20,21 +20,21 @@ This is a source and local-test snapshot, not a claim that every runtime path wo
 
 ## 1. Executive Summary
 
-`cdm` is a Linux C11 HTTP(S) download manager. One executable dispatches daemon, CLI, GUI, browser popup, browser host installation, and daemon autostart commands (`src/main.c`). The daemon owns an in-memory queue, SQLite `downloads`/`chunks`, a per-user Unix-domain IPC socket, scheduler threads, and libcurl segment workers (`src/daemon/daemon.c`, `src/core/scheduler.c`). `cdm_native_host` bridges Chromium/Firefox native messaging to daemon offers and starts the confirmation popup (`src/native_host/main_host.c`). Phase 0 added safe probing/naming/resume validators, daemon speed/ETA events, paginated history and `cdm cli list`. The GUI and popup consume rich progress events; GUI history loads a 256-row window in 64-row increments (`src/gui/gui_controller.c`).
+`cdm` is a Linux C11 HTTP(S) download manager. One executable dispatches daemon, CLI, GUI, browser popup, browser host installation, and daemon autostart commands (`src/main.c`). The daemon owns an in-memory queue, SQLite `downloads`/`chunks`, a per-user Unix-domain IPC socket, scheduler threads, and libcurl segment workers (`src/daemon/daemon.c`, `src/core/scheduler.c`). `cdm_native_host` bridges Chromium/Firefox native messaging to daemon offers and starts the confirmation popup (`src/native_host/main_host.c`). Phase 0 added safe probing/naming/resume validators, daemon speed/ETA events, paginated history and `cdm cli list`. Phase 1 added proxy configuration, per-download HTTP Basic credentials, connection/User-Agent/timeout knobs, normalized active-URL duplicate rejection, and history removal with optional file deletion. GUI history loads a 256-row window in 64-row increments (`src/gui/gui_controller.c`).
 
 ## 2. Current Feature Inventory
 
 | Feature | Current implementation and limit |
 |---|---|
-| HTTP(S) segmented download | Up to eight curl workers, ranges/rebalancing, 200/206 validation, fallback, retries (`src/engine/engine_runner.c`, `src/engine/worker_pool.c`). |
+| HTTP(S) segmented download | Default eight curl workers, configurable 1–16, ranges/rebalancing, 200/206 validation, fallback, retries (`src/engine/engine_runner.c`, `src/engine/worker_pool.c`, `src/utils/config.h`). |
 | Metadata probe and naming | HEAD with a GET `Range: bytes=0-0` fallback; bounded body on ignored ranges; `Content-Disposition` `filename`/UTF-8 `filename*`, URL percent decoding, and daemon rename for automatically derived destinations (`src/platform/curl_client.c:111`, `src/utils/path.c`, `src/engine/engine_runner.c:88`). |
 | Resume and integrity | Persisted ETag/Last-Modified; changed validator clears chunks and restarts; `If-Range` on resumed ranges. Size and optional SHA-256 verification remain (`src/engine/engine_runner.c:211`, `src/engine/finalize.c`). |
-| Queue and speed limits | Persisted downloads/chunks, pause/resume/cancel, retry backoff, global/per-download bytes/sec caps (`src/core/scheduler.c`, `src/platform/bandwidth.c`). |
-| IPC progress | Protocol version 2 HELLO, legacy and v2 status events; v2 carries bytes, total, speed B/s, ETA seconds, fraction/status/error (`src/platform/ipc_protocol.h`, `src/platform/ipc_socket.c`). |
+| Queue and speed limits | Persisted downloads/chunks, pause/resume/cancel, retry backoff, global/per-download bytes/sec caps. Proxy HTTP/SOCKS5 and per-download Basic auth apply to probe and workers (`src/core/scheduler.c`, `src/platform/bandwidth.c`, `src/platform/curl_client.c`, `src/engine/worker_pool.c`). |
+| IPC progress | Protocol version 4 HELLO; v2 status event type 33 still carries bytes, total, speed B/s, ETA seconds, fraction/status/error (`src/platform/ipc_protocol.h`, `src/platform/ipc_socket.c`). |
 | History | Legacy `MSG_LIST_ALL` still returns at most 200; type 35 pages 500 max; type 36 adds recorded size per row. GUI scrolls through a bounded window; CLI `list` pages and filters by status (`src/platform/ipc_socket.c`, `src/gui/gui_controller.c`, `src/cli/cli.c`). |
-| GUI/browser | SDL/Nuklear GUI with search/categories, add/details/settings and row actions; popup confirms offered downloads and shows speed/ETA. Chrome, Chromium, Firefox native handoff (`src/gui/gui_nuklear.c`, `src/gui/browser_popup.c`, `browser/`). |
+| GUI/browser | SDL/Nuklear GUI with search/categories, add/details/settings, remove-from-list/delete-file row actions; popup confirms offered downloads and shows speed/ETA or duplicate notice. Chrome, Chromium, Firefox native handoff (`src/gui/gui_nuklear.c`, `src/gui/browser_popup.c`, `browser/`). |
 | Notifications/autostart | libnotify completion/failure, XDG autostart (`src/utils/notify.c`, `src/platform/daemon_autostart.c`). |
-| Missing or partial | No history delete, tray, clipboard monitor, persisted user categories, queue priorities/schedule UI, browser cookies/headers, site rules or broader browser installer support. Global GUI search/category filters apply only to the loaded history window. Cookies remain plaintext in SQLite. |
+| Missing or partial | No tray, clipboard monitor, persisted user categories, queue priorities/schedule UI, browser cookies/headers, site rules or broader browser installer support. Global GUI search/category filters apply only to the loaded history window. Cookies, HTTP Basic password and proxy password remain plaintext in local persistence. |
 
 ## 3. Architecture Overview
 
@@ -58,10 +58,10 @@ flowchart LR
 | Component | Files, public interface, communication/thread/error model |
 |---|---|
 | Entrypoint/daemon | `src/main.c:60`, `src/daemon/daemon.c:96`; main dispatch, singleton `flock`, double fork when stdin is not TTY, 200 ms loop (scheduler, progress DB flush, bandwidth tick, IPC poll). Signal shutdown joins workers before DB close. Returns 1 on startup errors. |
-| Queue/scheduler | `src/core/queue_manager.[ch]`, `scheduler.[ch]`; linked list under global `dm_mutex_t`, atomics for flags and counters; one scheduler thread per active download, max 64 slots (`src/core/scheduler.c:19`); each may spawn up to 8 curl workers. Scheduler maps engine return values to status/retry/notifications. |
+| Queue/scheduler | `src/core/queue_manager.[ch]`, `scheduler.[ch]`; linked list under global `dm_mutex_t`, atomics for flags and counters; one scheduler thread per active download, max 64 slots (`src/core/scheduler.c:19`); each may spawn 1–16 curl workers. Scheduler maps engine return values to status/retry/notifications. `queue_manager_forget_locked()` removes a non-ACTIVE entry without unlinking its file while the queue mutex is held (`src/core/queue_manager.c`). |
 | Engine/platform | `src/engine/{engine_runner,segmenter,worker_pool,finalize}.[ch]`, `src/platform/{curl_client,file_io,bandwidth,sha256,thread}.[ch]`; HEAD with bounded GET range fallback, validator-aware resume, range plan, preallocation, positional writes, work stealing, fallback and verification. Error outcomes `0/-1/-2/-3/-4` in `src/engine/engine_runner.h:20`. |
 | Persistence | `src/persistence/db.[ch]`; one process-global SQLite handle, schema/migration/query/restore. Called by daemon poll and workers; no explicit DB mutex (`src/persistence/db.c:17`). |
-| IPC | `src/platform/{ipc_protocol,ipc_socket}.[ch]`; Linux Unix-domain server, max 16 clients, v2 HELLO on v1 framing, mixed binary/length-prefixed strings/JSON and page types 35/36. Main poll dispatches commands; worker broadcasts use client mutex and nonblocking `send`, dropping slow clients (`src/platform/ipc_socket.c:1363`). |
+| IPC | `src/platform/{ipc_protocol,ipc_socket}.[ch]`; Linux Unix-domain server, max 16 clients, v4 HELLO on v1 framing, mixed binary/length-prefixed strings/JSON, page types 35/36, duplicate response types 42/43 and remove type 44. Main poll dispatches commands; worker broadcasts use client mutex and nonblocking `send`, dropping slow clients (`src/platform/ipc_socket.c`). |
 | GUI | `src/gui/gui_nuklear.c`, `gui_backend_sdl.c`, `gui_controller.c`, `gui_client.c`, `gui_model.c`; SDL/OpenGL main thread draws, controller worker queues commands/events (64/256 slots) and refreshes every 2 s, client listener subscribes to status events (512 slots); mutexed model. See `src/gui/gui_controller.c:12`, `src/gui/gui_client.c:11`. |
 | Browser bridge/popup | `browser/{chromium,firefox}`, `src/native_host/{main_host,browser_install}.c`, `src/gui/browser_popup.c`; native host select loop polls offers every 250 ms, max 64, popup UI uses IPC confirm/dismiss/subscribe. Browser offers expire after 600 seconds unless confirmed and running (`src/platform/ipc_socket.c:33`, `:160`). |
 | Packaging/notifications | `CMakeLists.txt:260`, `resources/autostart/cdm-daemon.desktop.in`, `src/platform/daemon_autostart.c`, `src/utils/notify.c`; installed XDG entry, per-user override, libnotify complete/failure. |
@@ -197,6 +197,8 @@ Full tracked inventory with one-line purposes appears below. Tree (source and su
 | `src/utils/notify.h` | utils notify public declarations/interface. |
 | `src/utils/path.c` | utils path implementation. |
 | `src/utils/path.h` | utils path public declarations/interface. |
+| `src/utils/url.c` | Normalizes HTTP(S) scheme/host/default port/fragment for active URL duplicate lookup. |
+| `src/utils/url.h` | URL normalization interface. |
 | `src/vendor/cJSON.c` | Vendored third-party cJSON.c implementation/interface. |
 | `src/vendor/cJSON.h` | Vendored third-party cJSON.h implementation/interface. |
 | `src/vendor/nuklear.h` | Vendored third-party nuklear.h implementation/interface. |
@@ -212,8 +214,10 @@ Full tracked inventory with one-line purposes appears below. Tree (source and su
 | `tests/test_browser_extensions.js` | Python/JavaScript integration, protocol, browser, or GUI smoke test for test_browser_extensions.js. |
 | `tests/test_browser_install.py` | Python/JavaScript integration, protocol, browser, or GUI smoke test for test_browser_install.py. |
 | `tests/test_cli_headers.py` | Loopback CLI add/header lifetime and destination integration. |
+| `tests/test_cli_duplicates.py` | Loopback daemon/CLI duplicate URL and existing-ID integration. |
 | `tests/test_cli_list.py` | 600-row paginated CLI list/size/status integration. |
 | `tests/test_cli_rejected_add.py` | Daemon rejection must produce nonzero CLI exit. |
+| `tests/test_config.c` | Criterion tests for TOML/defaults, proxy and network settings. |
 | `tests/test_curl_client.c` | Criterion C test for curl client. |
 | `tests/test_curl_http_integration.c` | Criterion C test for curl http integration. |
 | `tests/test_daemon_lifecycle.py` | Python/JavaScript integration, protocol, browser, or GUI smoke test for test_daemon_lifecycle.py. |
@@ -223,6 +227,7 @@ Full tracked inventory with one-line purposes appears below. Tree (source and su
 | `tests/test_file_io.c` | Criterion C test for file io. |
 | `tests/test_finalize.c` | Criterion C test for finalize. |
 | `tests/test_gui_controller.c` | Criterion C test for gui controller. |
+| `tests/test_url.c` | Criterion tests for normalized URL equality and invalid URLs. |
 | `tests/test_ipc.c` | Criterion C test for ipc. |
 | `tests/test_ipc_fallback.py` | Legacy daemon HELLO fallback integration. |
 | `tests/test_ipc_socket.c` | Criterion C test for ipc socket. |
@@ -236,7 +241,7 @@ Full tracked inventory with one-line purposes appears below. Tree (source and su
 | `tests/test_thread.c` | Criterion C test for thread. |
 | `tests/test_worker_pool.c` | Criterion C test for worker pool. |
 
-Pre-task untracked file: `PROJECT_CONTEXT.md` (this file). `PLAN.md` is ignored locally; `.gitignore` has a pre-existing unstaged change. Build/cache outputs are excluded from the tree.
+`PLAN.md` is ignored locally; `.gitignore` has a pre-existing unstaged change. Build/cache outputs are excluded from the tree. This file map reflects the tracked source after phase 1 task 1.5.3.
 
 ## 5. Build, Test, and Run
 
@@ -273,7 +278,7 @@ Source of truth: `src/platform/ipc_protocol.h`, `src/platform/ipc_socket.h`, and
 
 Every **request** and asynchronous **event** begins with the unchanged v1 `MsgHeader`: `uint32_t length` (payload bytes, excluding the header), then `MsgType type` (C enum; four bytes on the supported ABI). The current header is eight bytes. Integers, `float`, and raw structs use native byte order, size, alignment, and padding; this is a local, same-ABI protocol, not a portable network format. Strings in length-prefixed fields are byte sequences without a wire NUL: `uint32_t length`, then exactly that many bytes. Fixed `char[]` fields in raw structs are NUL-terminated when populated. Request payloads over `IPC_MAX_FRAME_SIZE = 16384` bytes or with an invalid type/length are rejected by closing the connection (`src/platform/ipc_socket.c:400`). **Command replies have no `MsgHeader`**; their layouts are listed below. Event frames do have a header.
 
-`MSG_HELLO` (41) is a v1-framed empty request. Its unframed reply is native `uint16_t IPC_PROTOCOL_VERSION`, currently **2**. `ipc_client_connect_compatible()` uses a bounded HELLO exchange; if an old daemon closes or fails the exchange, the client reconnects and treats it as v1. A version other than the client's `IPC_PROTOCOL_VERSION` also uses v1 messages. Only a confirmed v2 client sends `MSG_SUBSCRIBE_V2`. Existing v1 types and payloads must remain byte-compatible; add a new type/versioned payload for new fields, never append fields to an existing wire struct (`src/platform/ipc_protocol.h:42`, `src/platform/ipc_socket.c:1237`).
+`MSG_HELLO` (41) is a v1-framed empty request. Its unframed reply is native `uint16_t IPC_PROTOCOL_VERSION`, currently **4**. `ipc_client_connect_compatible()` uses a bounded HELLO exchange; if an old daemon closes or fails the exchange, the client reconnects and treats it as v1. Clients use capability thresholds: version >=2 for rich progress/pages, >=3 for duplicate-aware add/confirm, >=4 for remove. Existing v1 types and payloads remain byte-compatible; new fields use a new message type, not an appended legacy wire struct (`src/platform/ipc_protocol.h`, `src/platform/ipc_socket.c`).
 
 ### Message registry
 
@@ -303,9 +308,13 @@ Types 1–17 are legacy. Type 7 exists in the enum but has no producer or reques
 | 34 | `MSG_SUBSCRIBE_V2` | Empty → no reply; opts this socket into type 33 events. |
 | 35 | `MSG_LIST_PAGE` | `uint32_t offset`, `uint32_t limit` → `uint32_t total`, `uint32_t returned`, then `returned` rows in the type 9 row layout. `limit` is capped at 500; `total` is the full database count before paging. |
 | 36 | `MSG_LIST_PAGE_WITH_SIZE` | Same request and page header as type 35; each row adds native `uint64_t total_size` (bytes; `0` means unknown) after `float progress`. Used by `cdm cli list`. |
+| 37 | `MSG_GET_DETAILS_V2` | Same `uint32_t download_id` request and legacy details reply as type 10, followed by length-prefixed `auth_user` and `uint8_t has_password`. The password is never sent back. |
 | 41 | `MSG_HELLO` | Empty → raw `uint16_t` daemon protocol version. |
+| 42 | `MSG_ADD_DOWNLOAD_V2` | Same three length-prefixed strings as type 1; options JSON also includes boolean `auto_filename`. Reply is native `uint32_t result`, then `uint32_t id`. Duplicate active URL: `REJECTED` plus existing ID. |
+| 43 | `MSG_BROWSER_CONFIRM_V2` | Same offer ID/path payload as type 14; reply is native `uint32_t result`, then `uint32_t id`. Duplicate URL: `REJECTED` plus existing ID. Reconfirming an offer preserves its result. |
+| 44 | `MSG_REMOVE_DOWNLOAD` | `uint32_t id`, then `uint8_t delete_file` (0 keeps file, nonzero unlinks after DB commit) → `uint8_t IpcResult`. Refuses ACTIVE; emits `REMOVED` status event on success. The plan's proposed ID 34 was occupied by `MSG_SUBSCRIBE_V2`. |
 
-`IpcResult`: `OK=0`, `NOT_FOUND=1`, `REJECTED=2`, `ERROR=3` (`src/platform/ipc_protocol.h`). `MSG_LIST_ALL` and `MSG_LIST_PAGE` rows are **field-by-field**, not raw `DownloadListRecord`: `uint32_t id`, length-prefixed `url`, `dest_path`, `status`, and `float progress` (0–1). Type 36 uses that row layout plus `uint64_t total_size` at the end. `IPC_LIST_ALL_MAX=200` and `IPC_LIST_PAGE_MAX=500` are defined in `src/platform/ipc_socket.h`; listing uses database order, currently newest first (`src/platform/ipc_socket.c`, `src/persistence/db.c`). Old v2 daemons do not know types 35/36 and close the socket when sent one; reconnect and use type 9 when talking to such a daemon. The CLI requires type 36 to report daemon-recorded size and reports an unsupported-daemon error if it is unavailable. `MSG_GET_DETAILS` success data is length-prefixed `cookie`, `referrer`, `extra_headers`, `expected_sha256` strings, followed by `uint64_t speed_limit_bps` (bytes/second). Add options JSON accepts those same keys; `extra_headers` is newline-delimited. Malformed JSON is ignored rather than rejecting the download (`src/platform/ipc_socket.c`). URL capacity is 2048 bytes including NUL, destination 1024 including NUL (`src/platform/ipc_protocol.h`).
+`IpcResult`: `OK=0`, `NOT_FOUND=1`, `REJECTED=2`, `ERROR=3` (`src/platform/ipc_protocol.h`). `MSG_LIST_ALL` and `MSG_LIST_PAGE` rows are **field-by-field**, not raw `DownloadListRecord`: `uint32_t id`, length-prefixed `url`, `dest_path`, `status`, and `float progress` (0–1). Type 36 uses that row layout plus `uint64_t total_size` at the end. `IPC_LIST_ALL_MAX=200` and `IPC_LIST_PAGE_MAX=500` are defined in `src/platform/ipc_socket.h`; listing uses database order, currently newest first (`src/platform/ipc_socket.c`, `src/persistence/db.c`). An old v1 daemon lacks pages; reconnect and use type 9. CLI requires type 36 to report daemon-recorded size. `MSG_GET_DETAILS` success data is length-prefixed `cookie`, `referrer`, `extra_headers`, `expected_sha256` strings, followed by `uint64_t speed_limit_bps` (bytes/second). Type 37 adds `auth_user`/`has_password`. Add options JSON accepts those keys plus `auth_user` and `auth_password`; `extra_headers` is newline-delimited. Malformed JSON is ignored rather than rejecting the download (`src/platform/ipc_socket.c`). URL capacity is 2048 bytes including NUL, destination 1024 including NUL (`src/platform/ipc_protocol.h`).
 
 ### Event structs and subscriptions
 
@@ -330,7 +339,7 @@ A general type 34 subscriber gets **type 33 then type 6** on each status broadca
 
 Type 12 JSON accepts `request_id` (required string, max 127 bytes), `url` (required HTTP(S) string, max 2047), `filename` (optional string, max 511), `mime` (optional string, max 127), `referrer` (optional string, max 2047), and `total_bytes` (optional nonnegative JSON number up to 2^53−1, bytes). The raw `IpcBrowserOffer` reply (`src/platform/ipc_socket.h:29`) has `uint32_t offer_id` (`0` means absent/failure), `uint32_t download_id` (`0` until confirmed), `uint64_t total_bytes` (bytes; `0` unknown), `IpcBrowserOfferState state` (`WAITING=0`, `CONFIRMED=1`, `DISMISSED=2`), and NUL-terminated arrays `request_id[128]`, `url[2048]`, `filename[512]`, `mime[128]`, `referrer[2048]`. Offers are held in 64 in-memory slots for 600 seconds; the same `request_id`/URL retrieves the same offer. Confirming a waiting offer queues once; repeat confirm returns its download ID. Dismiss is idempotent for a dismissed offer (`src/platform/ipc_socket.c:34`, `src/platform/ipc_socket.c:242`, `src/platform/ipc_socket.c:585`).
 
-The socket carries sensitive options and `MSG_GET_DETAILS` can return plaintext cookies and headers. Only connect trusted same-user processes; the protocol has no additional peer authentication or encryption. Raw structs and enum widths must match between client and daemon builds.
+The socket carries sensitive options and `MSG_GET_DETAILS` can return plaintext cookies and headers. HTTP Basic password is accepted on add but hidden from the type 37 response; proxy credentials are in TOML, not sent on this IPC. Only connect trusted same-user processes; the protocol has no additional peer authentication or encryption. Raw structs and enum widths must match between client and daemon builds.
 
 ## 8. Database Schema and Persistence
 
@@ -344,40 +353,41 @@ CREATE TABLE IF NOT EXISTS downloads (
  cookie TEXT DEFAULT '', referrer TEXT DEFAULT '', extra_headers TEXT DEFAULT '',
  expected_sha256 TEXT DEFAULT '', speed_limit_bps INTEGER DEFAULT 0,
  reserved_file INTEGER DEFAULT 0, etag TEXT DEFAULT '',
- last_modified TEXT DEFAULT '', auto_filename INTEGER DEFAULT 0);
+ last_modified TEXT DEFAULT '', auto_filename INTEGER DEFAULT 0,
+ auth_user TEXT DEFAULT '', auth_password TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS chunks (
  download_id INTEGER, range_start INTEGER, range_end INTEGER,
  bytes_done INTEGER DEFAULT 0,
  FOREIGN KEY(download_id) REFERENCES downloads(id) ON DELETE CASCADE);
 ```
 
-No explicit user index/UNIQUE on destination or chunk primary key; `downloads.id` uses SQLite's integer primary-key index. `created_at` is Unix seconds; byte sizes and ranges are stored as signed SQLite INTEGER, used as `uint64_t` in C (`src/persistence/db.c:73`, `:186`). Schema migration checks `PRAGMA table_info(downloads)` for nine optional columns (`cookie`, `referrer`, `extra_headers`, `expected_sha256`, `speed_limit_bps`, `reserved_file`, `etag`, `last_modified`, `auto_filename`), adds missing ones inside one transaction, and sets `user_version=3`; it is idempotent but has no per-version ordered ledger (`src/persistence/db.c:109`). `db_update_validators()` persists ETag and Last-Modified; auto-filename provenance and resolved destination are stored and restored (`src/persistence/db.c:300`, `:584`). Settings stay in TOML; browser offers stay in memory.
+No explicit user index/UNIQUE on destination or chunk primary key; `downloads.id` uses SQLite's integer primary-key index. `created_at` is Unix seconds; byte sizes and ranges are stored as signed SQLite INTEGER, used as `uint64_t` in C (`src/persistence/db.c:75`, `:184`). Schema migration checks `PRAGMA table_info(downloads)` for eleven optional columns (`cookie`, `referrer`, `extra_headers`, `expected_sha256`, `speed_limit_bps`, `reserved_file`, `etag`, `last_modified`, `auto_filename`, `auth_user`, `auth_password`), adds missing ones inside one transaction, and sets `user_version=4`; it is idempotent but has no per-version ordered ledger (`src/persistence/db.c:114`). `db_find_active_by_url()` normalizes URLs while scanning QUEUED/ACTIVE/PAUSED rows; it has no normalized-URL index (`src/persistence/db.c`). `db_delete_download()` checks status, deletes chunks and row in an immediate transaction, then optionally unlinks the file; it returns 0 success, 1 ACTIVE, 2 missing, -1 DB error. Failed unlink logs a warning while the row stays deleted (`src/persistence/db.c`). `db_update_validators()` persists ETag and Last-Modified; auto-filename provenance and resolved destination are stored and restored. Settings stay in TOML; browser offers stay in memory.
 
-Chunk state is `(download_id, inclusive range_start, inclusive range_end, bytes_done)`; live counters flush about every 200 ms, up to 64 chunk snapshots/tick (`src/core/scheduler.c`). Restore reloads unfinished rows and chunk progress, with a maximum of eight chunks per download (`src/persistence/db.c:584`, `src/core/queue_manager.h`). The engine refuses a missing resume file, restarts when a stored validator differs from the new probe, sends `If-Range` on a resumed range when it has a strong ETag or Last-Modified, and still checks size/file length (`src/engine/engine_runner.c:170`, `:211`, `:222`). A validator absent on both old and new responses cannot prove content identity. DB queries include `db_count_downloads_total` and `db_visit_downloads_page` ordered by descending ID with `LIMIT/OFFSET`; legacy `db_count_downloads(max)`/`db_visit_downloads(max)` remain (`src/persistence/db.c:466`, `:488`). `INSERT OR REPLACE` can delete old chunks through the FK on reused IDs. Plaintext cookies, referrers and headers persist and are returned by details IPC. More than `INT64_MAX` bytes is unsupported or unsafe (INFERRED from SQLite signed INTEGER binding).
+Chunk state is `(download_id, inclusive range_start, inclusive range_end, bytes_done)`; live counters flush about every 200 ms, up to 64 chunk snapshots/tick (`src/core/scheduler.c`). Restore reloads unfinished rows and chunk progress, with a maximum of 16 chunks per download (`src/persistence/db.c`, `src/core/queue_manager.h`). The engine refuses a missing resume file, restarts when a stored validator differs from the new probe, sends `If-Range` on a resumed range when it has a strong ETag or Last-Modified, and still checks size/file length (`src/engine/engine_runner.c`). A validator absent on both old and new responses cannot prove content identity. DB queries include `db_count_downloads_total` and `db_visit_downloads_page` ordered by descending ID with `LIMIT/OFFSET`; legacy `db_count_downloads(max)`/`db_visit_downloads(max)` remain (`src/persistence/db.c`). `INSERT OR REPLACE` can delete old chunks through the FK on reused IDs. Plaintext cookies, referrers, headers and HTTP Basic credentials persist. More than `INT64_MAX` bytes is unsupported or unsafe (INFERRED from SQLite signed INTEGER binding).
 
 ## 9. Download Engine Internals
 
 `engine_run_download` (`src/engine/engine_runner.c:170`) checks resume-file existence and HTTP(S) scheme, probes metadata, resolves automatic filename after headers, compares persisted validators/size, builds or resumes ranges, preallocates output, runs workers, flushes counters, retries a single full-file transfer after parallel failure, and verifies. Return codes remain `0` success, `-1` retryable, `-2` verification failure/file deleted, `-3` preexisting destination, `-4` missing resume file (`src/engine/engine_runner.h`). Scheduler retries `-1` with configured exponential backoff (defaults: five attempts, base 2 s, max 60 s); retry state is in memory (`src/core/scheduler.c`). Priority exists in `Download`/DB but has no user control.
 
-Unknown or <1 MiB = one worker; [1,20) MiB = four; >=20 MiB = eight (`src/engine/segmenter.c`). Ranges use inclusive ends. `RebalancePool` has up to eight slots with atomic positions/live ends and a mutex; idle workers steal orphaned slots or split a busy tail if at least 1 MiB remains (`src/engine/worker_pool.c`). The split callback now locks the queue mutex while mutating chunk state (`src/engine/engine_runner.c`). An in-flight curl write near a split boundary still merits stress testing.
+Unknown or <1 MiB = one worker; [1,20) MiB = up to four; >=20 MiB = configured cap (default eight, max sixteen) (`src/engine/segmenter.c`). Ranges use inclusive ends. `RebalancePool` has up to 16 slots with atomic positions/live ends and a mutex; idle workers steal orphaned slots or split a busy tail if at least 1 MiB remains (`src/engine/worker_pool.c`). The split callback locks the queue mutex while mutating chunk state (`src/engine/engine_runner.c`). An in-flight curl write near a split boundary still merits stress testing.
 
-Probe options include `CURLOPT_NOBODY`, redirects up to 10, UA `cdm/0.1`, 30 s total/10 s connect timeout and `FAILONERROR`; on a failed HEAD it retries GET with `Range: 0-0`, aborts an ignored full body, and parses `Content-Range` for a 206 total (`src/platform/curl_client.c:111`). Headers capture Accept-Ranges, Content-Disposition, ETag and Last-Modified. Worker options include ranges, redirects, cookies/referrer/extra headers, low-speed timeout, per-worker cap and `If-Range` on resume (`src/engine/worker_pool.c:310`). `Content-Disposition` prefers valid UTF-8 `filename*`; unsafe names are rejected, URL names are percent-decoded, and explicit filenames stay unchanged (`src/utils/path.c`, `src/engine/engine_runner.c:88`). `engine_finalize` checks expected size and optional SHA-256 (`src/engine/finalize.c`). Whole-file unknown-size transfers and parallel-fallback chunk reset were fixed in phase 0 (`src/engine/worker_pool.c`, `src/engine/engine_runner.c`). Global bandwidth token bucket and per-download curl cap are bytes/sec; per-worker division may underuse the cap if workers idle.
+Probe options include `CURLOPT_NOBODY`, redirects up to 10, configured UA (default `cdm/0.1`), configured total/connect timeouts (defaults 30/10 s) and `FAILONERROR`; on a failed HEAD it retries GET with `Range: 0-0`, aborts an ignored full body, and parses `Content-Range` for a 206 total (`src/platform/curl_client.c`). HTTP/SOCKS5 proxy and HTTP Basic auth are applied on the probe and workers; worker timeout uses `CURLOPT_LOW_SPEED_TIME` plus connect timeout. Headers capture Accept-Ranges, Content-Disposition, ETag and Last-Modified. Worker options include ranges, redirects, cookies/referrer/extra headers, low-speed timeout, per-worker cap and `If-Range` on resume (`src/engine/worker_pool.c`). `Content-Disposition` prefers valid UTF-8 `filename*`; unsafe names are rejected, URL names are percent-decoded, and explicit filenames stay unchanged (`src/utils/path.c`, `src/engine/engine_runner.c`). `engine_finalize` checks expected size and optional SHA-256 (`src/engine/finalize.c`). Whole-file unknown-size transfers and parallel-fallback chunk reset were fixed in phase 0. Global bandwidth token bucket and per-download curl cap are bytes/sec; per-worker division may underuse the cap if workers idle.
 
 Transfer metrics are protected by the queue mutex: monotonic sampling and EMA with alpha 0.3 produce `speed_bps`; ETA is remaining bytes / speed rounded up, `UINT64_MAX` when unknown (`src/core/download_record.h`, `src/core/scheduler.c`). The single global SQLite connection has no explicit application lock despite worker/main-thread calls; confirm SQLite serialized mode and race behavior before widening concurrency. `Download *` returned after queue lock release warrants a lifetime audit (`src/core/queue_manager.c`).
 
 ## 10. CLI Reference
 
-`cdm cli add URL [dest_dir] [--cookie V] [--referrer V] [--header "K: V"]... [--sha256 HEX] [--limit BYTES_PER_SEC]` treats destination as a directory, derives a provisional filename from the URL, reserves a unique path and requests daemon auto-filename resolution (`src/cli/cli.c`). The daemon may rename that provisional path after probing Content-Disposition. Repeated headers are joined with newlines in a caller-owned 4096-byte buffer; invalid option pairs fail; daemon rejection (`ID 0`) returns nonzero. Pause, resume and cancel take a positive uint32 ID and print success or stderr failure.
+`cdm cli add URL [dest_dir] [--cookie V] [--referrer V] [--header "K: V"]... [--sha256 HEX] [--limit BYTES_PER_SEC]` treats destination as a directory, derives a provisional filename from the URL, reserves a unique path and requests daemon auto-filename resolution (`src/cli/cli.c`). The daemon may rename that provisional path after probing Content-Disposition. Repeated headers are joined with newlines in a caller-owned 4096-byte buffer; invalid option pairs fail; daemon rejection (`ID 0`) returns nonzero. On a version 3+ daemon, an active normalized URL duplicate prints `Already downloading (ID N)` and exits 0. There is no CLI flag for HTTP Basic username/password and no CLI history-remove command yet. Pause, resume and cancel take a positive uint32 ID and print success or stderr failure.
 
 `cdm cli list [--offset N] [--limit N] [--status S]` prints TSV columns `id`, `status`, `percent`, `size`, `filename` in descending ID order. Defaults: offset 0, limit 100; limit accepts 1..500. Status is case-insensitive and must be one of QUEUED/ACTIVE/PAUSED/DONE/ERROR/CANCELED. With a status filter, the CLI scans raw daemon pages and applies offset **after** filtering. Size is daemon-recorded `total_size` in bytes; stored zero prints `?`. Unknown progress prints `?`. It uses type 36; a daemon without sized pages yields a clear error. Filenames replace tabs/newlines with spaces for TSV safety (`src/cli/cli.c`, `src/platform/ipc_socket.c`). No continuous CLI progress watch or JSON output exists.
 
 ## 11. GUI Reference
 
-Main window: All/Downloading/Completed tabs, extension-derived sidebar categories, search, toolbar Add/Cancel/Pause/Resume/Settings, row progress/status, and context actions (`src/gui/gui_nuklear.c`). The row now shows received/total bytes, daemon speed (bytes/sec formatted), ETA and per-row error from type 33 when known; v1 daemon fallback shows percent/path (`src/gui/gui_nuklear.c:610`). Add dialog accepts URL/folder, cookie/referrer/headers/SHA-256/per-download speed cap. Details retrieves stored request options via `MSG_GET_DETAILS` (including sensitive fields). Settings edits default directory, concurrency, retry knobs, global bytes/sec; saves TOML and requests daemon reload. Completion toast offers Open/Open folder, while system libnotify is separate. Remove remains disabled pending history-delete IPC (`src/gui/gui_nuklear.c:825`).
+Main window: All/Downloading/Completed tabs, extension-derived sidebar categories, search, toolbar Add/Cancel/Pause/Resume/Settings, row progress/status, and context actions (`src/gui/gui_nuklear.c`). The row shows received/total bytes, daemon speed (bytes/sec formatted), ETA and per-row error from type 33 when known; v1 daemon fallback shows percent/path. Add dialog accepts URL/folder, cookie/referrer/headers/SHA-256/per-download speed cap; it has no HTTP Basic entry fields. Details retrieves stored request options via `MSG_GET_DETAILS` (including sensitive fields). Settings edits default directory, concurrency, retry knobs, global bytes/sec, HTTP/SOCKS5 proxy, connection cap, User-Agent and timeouts; saves TOML and requests daemon reload. Completion toast offers Open/Open folder, while system libnotify is separate. Row menu offers Remove from list, which keeps the file, and Delete file, which opens a confirmation dialog; ACTIVE rows cannot be removed. A duplicate add highlights the existing row and shows a toast (`src/gui/gui_nuklear.c`).
 
 The controller worker fetches history every 2 s using type 35. Initial page is 64 rows; scrolling near the end requests 64 more without blocking rendering. After 256 rows, the window advances by 64 and the GUI adjusts scroll position. It displays loaded/total count and a loading row; an old daemon falls back to legacy type 9, so only its first 200 rows are available (`src/gui/gui_controller.c`, `src/gui/gui_client.c`, `src/gui/gui_nuklear.c`). Search/category/tab filters currently operate on the loaded window, not the full database. The controller has 64 queued commands, 256 events, and 256 row slots; the listener event queue has 512 slots. Model and queues use mutexes, the listener and controller each have a worker thread. No tray or clipboard monitoring; Copy URL uses SDL clipboard.
 
-Browser popup: confirms URL/filename/directory, then shows byte counts, daemon speed and ETA from type 33, with legacy type 17 fallback and Open file/Open folder/Close controls (`src/gui/browser_popup.c`). `docs/ui/*.html` are mockups, not runtime screens.
+Browser popup: confirms URL/filename/directory, then shows byte counts, daemon speed and ETA from type 33, with legacy type 17 fallback and Open file/Open folder/Close controls. If its offered URL is already active, version 3+ confirmation reports the existing download ID and the popup shows `Already downloading` (`src/gui/browser_popup.c`). `docs/ui/*.html` are mockups, not runtime screens.
 
 ## 12. Browser Integration
 
@@ -387,15 +397,15 @@ Host manifest name `org.cdm.browser`, `stdio`; Chromium uses `allowed_origins:["
 
 ## 13. Settings and Configuration
 
-Default file `$HOME/.local/share/cdm/config.toml` (not XDG_CONFIG_HOME); missing/bad TOML falls back to defaults (`src/utils/config.c`). `DownloadManagerConfig` currently contains: max concurrent downloads 3, default directory `$HOME/Downloads`, retry attempts 5, retry base 2 seconds, retry max 60 seconds, and global speed 0 bytes/sec (unlimited) (`src/utils/config.h`, `src/utils/config.c:14`). TOML keys: `[downloads] max_concurrent, default_directory`; `[retry] max_attempts, base_delay_sec, max_delay_sec`; `[throttle] max_speed_bytes_per_sec`. Phase 0 added **no new config keys**. Loader clamps concurrency >=1, attempts >=0, base >=1, max >=base. Default directory must be under HOME, creatable and resolvable. `config_save` writes directly with `fopen(...,"w")`, not atomically, then reloads. Per-download cookie/referrer/headers/hash/speed cap are stored in SQLite; 0 speed means unlimited for that download (`src/core/queue_manager.h`). Logs reside at `$HOME/.local/share/cdm/daemon.log` and rotate at 5 MiB. Autostart uses system and per-user XDG desktop entries (`src/platform/daemon_autostart.c`).
+Default file `$HOME/.local/share/cdm/config.toml` (not XDG_CONFIG_HOME); missing/bad TOML falls back to defaults (`src/utils/config.c`). `DownloadManagerConfig` contains: max concurrent downloads 3, default directory `$HOME/Downloads`, retry attempts 5, retry base 2 seconds, retry max 60 seconds, global speed 0 bytes/sec (unlimited), proxy mode NONE (0)/HTTP (1)/SOCKS5 (2), proxy URL/user/password strings, max connections per download 8 (range 1–16), User-Agent `cdm/0.1`, connect timeout 10 seconds (range 1–600), transfer timeout 30 seconds (range 1–3600) (`src/utils/config.h`, `src/utils/config.c:14`). TOML keys: `[downloads] max_concurrent, default_directory, max_connections_per_download, user_agent`; `[retry] max_attempts, base_delay_sec, max_delay_sec`; `[throttle] max_speed_bytes_per_sec`; `[timeouts] connect_sec, transfer_sec`; `[proxy] mode, url, username, password`. The proxy/network fields use a dedicated `dm_mutex_t` for get/save/reload (`src/utils/config.c:42`). Invalid proxy mode or URL falls back to NONE; `config_save` validates the ranges. Default directory must be under HOME, creatable and resolvable. `config_save` writes directly with `fopen(...,"w")`, not atomically, then reloads. Per-download cookie/referrer/headers/hash/speed cap and HTTP Basic user/password are stored in SQLite; 0 speed means unlimited for that download (`src/core/queue_manager.h`). Logs reside at `$HOME/.local/share/cdm/daemon.log` and rotate at 5 MiB. Autostart uses system and per-user XDG desktop entries (`src/platform/daemon_autostart.c`).
 
 ## 14. Security and Privacy Notes
 
-Plaintext `cookie`, `referrer`, `extra_headers` (including possible Authorization), URL, and destination path persist in SQLite and can be returned over local IPC (`src/persistence/db.c:73`, `src/platform/ipc_socket.c`). Details GUI displays cookie/headers. Logging includes download URLs, which can contain query tokens (`src/core/scheduler.c`, `src/engine/engine_runner.c`). This document contains no live values. Filesystem DB/log permission behavior is not comprehensively established here: UNKNOWN; verify `file_ensure_directory`, process umask, SQLite-created modes. The daemon creates the IPC socket with mode 0600, but runtime directory ownership still needs review (`src/platform/ipc_socket.c:982`). Native-host manifests limit extension identities; daemon IPC has no protocol-level peer authentication. HELLO provides a version number but not capability negotiation. Arbitrary `extra_headers` are passed to curl after newline split; validate header syntax/credential policy before broader browser forwarding. Destination validation checks allowed root and path safety, but symlink/path races merit review (`src/core/queue_manager.c`). Browser offers supply no cookies; URL-only transfers may fail or differ from browser download. SHA-256 is optional and supplied by user, not a trust anchor by itself.
+Plaintext `cookie`, `referrer`, `extra_headers` (including possible Authorization), HTTP Basic `auth_user`/`auth_password`, URL, and destination path persist in SQLite (`src/persistence/db.c`). Proxy username/password persist in plaintext TOML (`src/utils/config.c`). The details IPC returns cookie/headers and user/`has_password`, but not the Basic password. Details GUI displays cookie/headers. Logging includes download URLs, which can contain query tokens (`src/core/scheduler.c`, `src/engine/engine_runner.c`). This document contains no live values. Filesystem DB/log permission behavior is not comprehensively established here: UNKNOWN; verify `file_ensure_directory`, process umask, SQLite-created modes. The daemon creates the IPC socket with mode 0600, but runtime directory ownership still needs review (`src/platform/ipc_socket.c`). Native-host manifests limit extension identities; daemon IPC has no protocol-level peer authentication. HELLO provides a version number but not granular capability negotiation. Arbitrary `extra_headers` are passed to curl after newline split; validate header syntax/credential policy before broader browser forwarding. Destination validation checks allowed root and path safety, but symlink/path races merit review (`src/core/queue_manager.c`). Browser offers supply no cookies; URL-only transfers may fail or differ from browser download. SHA-256 is optional and supplied by user, not a trust anchor by itself.
 
 ## 15. Tests and Quality
 
-Configure/build/run: `cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug`, `cmake --build build -j`, `ctest --test-dir build --output-on-failure`. At this snapshot all **28/28 CTest targets passed** (2026-09-25). They include Criterion unit/integration targets, Python native/browser/daemon/CLI integration, and optional Node extension mocks (`tests/CMakeLists.txt`). New phase 0 coverage exercises HEAD→GET fallback and headers, filename decoding, validators/If-Range/stale restart, unknown-size transfer, chunk fallback, IPC HELLO/v2 progress/600-row paging, GUI window transitions, CLI rejected add/header lifetime and 600-row list/status filtering (`tests/test_curl_http_integration.c`, `tests/test_engine_http_integration.c`, `tests/test_ipc_socket.c`, `tests/test_gui_controller.c`, `tests/test_cli_list.py`). Integration test HTTP servers bind `127.0.0.1`; no external site is required. The offscreen GUI was smoke-tested with 600 completed rows, but scrolling was not visually automated; popup offscreen smoke verified its progress stream. Static analysis gate UNKNOWN; no configured analyzer found in release CI. CMake supports address/undefined/thread sanitizer options and enables warnings. Criterion/nanomsg and IPC tests need permission to bind local sockets; restricted sandbox runs may fail before assertions. No source build warning remains from the earlier `/tmp` IPC fallback truncation issue.
+Configure/build/run: `cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug`, `cmake --build build -j`, `ctest --test-dir build --output-on-failure`. At this snapshot all **31/31 CTest targets passed** (2026-09-25). They include Criterion unit/integration targets, Python native/browser/daemon/CLI integration, and optional Node extension mocks (`tests/CMakeLists.txt`). Phase 0 coverage exercises HEAD→GET fallback and headers, filename decoding, validators/If-Range/stale restart, unknown-size transfer, chunk fallback, IPC HELLO/v2 progress/600-row paging, GUI window transitions, CLI rejected add/header lifetime and 600-row list/status filtering. Phase 1 added proxy HTTP/SOCKS5 loopback tests, HTTP Basic and redirect tests, connection/UA/timeout tests, normalized URL/DB lookup tests, IPC/CLI duplicate tests, DB/IPC removal tests and GUI model removal tests (`tests/test_curl_http_integration.c`, `tests/test_engine_http_integration.c`, `tests/test_url.c`, `tests/test_db.c`, `tests/test_ipc_socket.c`, `tests/test_cli_duplicates.py`, `tests/test_gui_controller.c`). Integration test HTTP servers bind `127.0.0.1`; no external site is required. The offscreen GUI startup smoke stayed active for three seconds after remove UI work; menu clicks were not automated. Static analysis gate UNKNOWN; no configured analyzer found in release CI. CMake supports address/undefined/thread sanitizer options and enables warnings. Criterion/nanomsg and IPC tests need permission to bind local sockets; restricted sandbox runs may fail before assertions.
 
 ## 16. Known Bugs, Risks, and TODOs
 
@@ -407,27 +417,28 @@ Configure/build/run: `cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=
 | Fixed in phase 0 | Failed HEAD probes GET `Range: 0-0`; automatic names honor Content-Disposition and percent-decode URL paths (`src/platform/curl_client.c:171`, `src/utils/path.c`, `src/engine/engine_runner.c`). |
 | Fixed in phase 0 | ETag/Last-Modified persist, validator change restarts stale chunks, resumed ranges can use If-Range (`src/persistence/db.c:300`, `src/engine/engine_runner.c:211`, `src/engine/worker_pool.c:330`). If both responses lack validators, identity remains unproven. |
 | Fixed in phase 0 | Type 33 carries bytes/total/speed/ETA/error and GUI/popup render rich progress; type 35/36 page beyond legacy 200 (`src/platform/ipc_protocol.h`, `src/gui/gui_nuklear.c`, `src/cli/cli.c`). Type 9 remains capped at 200 for legacy compatibility. |
-| Open security risk | Cookies and arbitrary headers are plaintext SQLite fields, retrievable over IPC and shown in GUI details (`src/persistence/db.c:73`, `src/platform/ipc_socket.c`, `src/gui/gui_nuklear.c`). URLs may include query tokens and appear in logs. |
+| Open security risk | Cookies, HTTP Basic password and arbitrary headers are plaintext SQLite fields; proxy password is plaintext TOML. Details IPC does not return the Basic password, but cookies/headers can be retrieved and shown in GUI (`src/persistence/db.c`, `src/platform/ipc_socket.c`, `src/gui/gui_nuklear.c`, `src/utils/config.c`). URLs may include query tokens and appear in logs. |
 | Open concurrency risk | DB uses one global SQLite connection without explicit application mutex; serialized SQLite mode/runtime and cross-thread behavior need verification (`src/persistence/db.c:17`). `Download *` lifetime after queue lock release and writes near a rebalance boundary need stress review (`src/core/queue_manager.c`, `src/engine/worker_pool.c`). |
-| Open compatibility risk | HELLO reports protocol v2, but type 35/36 were introduced later within v2. An older v2 daemon closes on an unknown type. GUI reconnects and falls back to type 9; CLI sized list reports unsupported (`src/gui/gui_client.c`, `src/cli/cli.c`). Raw native structs remain ABI-bound. |
-| Open product gap | History remove/delete still absent (`src/gui/gui_nuklear.c:825`); search/categories only cover the loaded GUI window; no browser credentials, tray or clipboard watcher. |
-| TODO | Windows disk-space API (`src/platform/diskspace.c:25`) and GUI history removal (`src/gui/gui_nuklear.c:825`). No other TODO/FIXME/HACK comments found outside vendored code at snapshot. |
+| Open compatibility risk | HELLO reports protocol v4, but type 35/36 were introduced during v2; an older v2 daemon may close on an unknown type. GUI reconnects and falls back to type 9; CLI sized list reports unsupported. Types 42/43 require v3 and remove type 44 requires v4; existing wire structs remain unchanged. Raw native structs remain ABI-bound (`src/platform/ipc_protocol.h`, `src/gui/gui_client.c`, `src/cli/cli.c`). |
+| Open product gap | GUI search/categories cover only the loaded history window; no CLI remove command or HTTP Basic entry, browser credentials, tray or clipboard watcher. GUI file deletion does not provide an independently recoverable trash operation (`src/gui/gui_nuklear.c`, `src/cli/cli.c`). |
+| Open behavior risk | `db_delete_download()` commits the row deletion before `unlink`; unlink failure leaves the file but no row, by design. GUI remove requires v4 and returns a generic failure with an older daemon (`src/persistence/db.c`, `src/gui/gui_client.c`). |
+| TODO | Windows disk-space API (`src/platform/diskspace.c:25`). The earlier GUI history-removal TODO was resolved. Re-run `rg -n 'TODO|FIXME|HACK' src --glob '!vendor/**'` to verify later additions. |
 | Release drift | `.release.toml` is 0.3.0-rc1 while README/package examples still mention 0.2.0-rc1. |
 
 ## 17. Gap Analysis vs XDM
 
-XDM reference version/features are UNKNOWN: no XDM baseline or Claude report text was supplied. Verify against a specified release before claiming parity. Phase 0 closed the specific requested gaps around probing, filename handling, resume validators, rich progress, and paginated history/CLI list. Remaining source-observed gaps: proxy/auth and configurable curl/connection defaults, duplicate URL policy, history deletion, explicit queue priorities/scheduling, persisted categories, browser cookies/headers/link refresh/site filters, broader browser installer paths, tray and clipboard watcher. `PLAN.md` defines a later multi-phase order; it is ignored locally and may not accompany this document. This section is an audit-derived gap list, not a claim about XDM's exact implementation.
+XDM reference version/features are UNKNOWN: no XDM baseline or Claude report text was supplied. Verify against a specified release before claiming parity. Phases 0–1 closed source-observed gaps around probing, filename handling, resume validators, rich progress, paginated history/CLI list, HTTP/SOCKS5 proxy, per-download Basic auth storage/curl use, configurable connection/User-Agent/timeouts, duplicate active URL rejection, and GUI history removal/delete. Remaining gaps: Basic credential entry in CLI/GUI, explicit queue priorities/scheduling, persisted categories, browser cookies/headers/link refresh/site filters, broader browser installer paths, tray and clipboard watcher. `PLAN.md` defines a later multi-phase order; it is ignored locally and may not accompany this document. This is not a claim about XDM's exact implementation.
 
 ## 18. Suggested Phase Order from Claude Report
 
-The Claude report is unavailable (Appendix B), so its actual phase order is UNKNOWN. Local `PLAN.md` (ignored/untracked at this snapshot) orders work as: phase 0 foundations (now implemented through task 0.5.3), phase 0 context/release wrap-up, phase 1 transfer parity (proxy/auth/config defaults/duplicates/remove), then later browser/UI/product features. This summary is from the local plan, not a quote from Claude. A planning AI without the repository should validate its desired XDM baseline before treating any roadmap as parity-complete.
+The Claude report is unavailable (Appendix B), so its actual phase order is UNKNOWN. Local `PLAN.md` (ignored/untracked at this snapshot) orders work as: phase 0 foundations, phase 1 transfer parity (implemented through task 1.5.3), then phase 2 queues/automation, phase 3 browser integration, phase 4 media, and later phases. Formal phase merge gates remain deferred because the user directed work on `cdm` and no push until the full plan. This summary is from the local plan, not a quote from Claude.
 
 ## 19. Open Design Questions
 
-1. Decide portable IPC encoding or explicit compatibility/capability negotiation; v2 HELLO alone does not distinguish new type 35/36 support (`src/platform/ipc_protocol.h`, `docs/ipc.md` content embedded in §7).
+1. Decide portable IPC encoding or explicit compatibility/capability negotiation; version number alone does not distinguish all historical v2 message support (`src/platform/ipc_protocol.h`).
 2. Decide how to protect or avoid plaintext browser/user credentials in SQLite and details IPC; ensure URL tokens are redacted from logs (`src/persistence/db.c`, `src/platform/ipc_socket.c`).
 3. Define server-side search/status/category filters so GUI results and counts cover all history rather than its 256-row window (`src/gui/gui_controller.c`, `src/platform/ipc_socket.c`).
-4. Define history remove semantics: record only, or record plus destination file; add safe confirmation and persistence/IPC (`src/gui/gui_nuklear.c:825`).
+4. Decide whether CLI removal should be exposed and whether GUI delete should offer trash/recovery; current GUI has both record-only and permanent file deletion actions (`src/gui/gui_nuklear.c`).
 5. Validate SQLite connection threading/lifetime, range rebalance boundary, and actual Windows/macOS target requirements before portability commitments.
 6. Specify an XDM release/feature inventory. The report promised in the original audit request was not supplied (Appendix B).
 
@@ -446,9 +457,11 @@ typedef enum {
   MSG_BROWSER_DISMISS=15, MSG_BROWSER_SUBSCRIBE_PROGRESS=16,
   MSG_BROWSER_PROGRESS_EVENT=17, MSG_ADD_DOWNLOAD_AUTO=32,
   MSG_STATUS_EVENT_V2=33, MSG_SUBSCRIBE_V2=34,
-  MSG_LIST_PAGE=35, MSG_LIST_PAGE_WITH_SIZE=36, MSG_HELLO=41
+  MSG_LIST_PAGE=35, MSG_LIST_PAGE_WITH_SIZE=36, MSG_GET_DETAILS_V2=37,
+  MSG_HELLO=41, MSG_ADD_DOWNLOAD_V2=42,
+  MSG_BROWSER_CONFIRM_V2=43, MSG_REMOVE_DOWNLOAD=44
 } MsgType;
-#define IPC_PROTOCOL_VERSION 2
+#define IPC_PROTOCOL_VERSION 4
 typedef struct { uint32_t length; MsgType type; } MsgHeader;
 typedef struct {
   uint32_t download_id;
@@ -502,13 +515,28 @@ atomic_store(&pool->slots[victim].live_end, split);
 ```
 
 ```c
-/* src/utils/config.h: DownloadManagerConfig; phase 0 did not add fields */
+/* src/utils/config.h: DownloadManagerConfig; defaults in config.c */
 typedef struct {
   int max_concurrent_downloads;
   const char *default_download_dir;
   int retry_max_attempts, retry_base_delay_sec, retry_max_delay_sec;
   uint64_t max_speed_bytes_per_sec;
+  ProxyMode proxy_mode; /* NONE=0, HTTP=1, SOCKS5=2 */
+  char proxy_url[512], proxy_username[128], proxy_password[256];
+  int max_connections_per_download; /* default 8, range 1..16 */
+  char user_agent[256]; /* default cdm/0.1 */
+  int connect_timeout_sec, transfer_timeout_sec; /* defaults 10, 30 */
 } DownloadManagerConfig;
+```
+
+```c
+/* src/platform/ipc_socket.h and src/persistence/db.h */
+typedef struct { uint32_t result; uint32_t id; } IpcAddResponse;
+/* Types 42/43 return this separately from legacy uint32 replies.
+   Type 44 request is uint32 id + uint8 delete_file; reply is uint8 IpcResult. */
+int db_delete_download(uint32_t id, int delete_file);
+/* 0 deleted; 1 ACTIVE; 2 absent; -1 SQL error. Chunks/row are deleted in a
+   transaction, then optional unlink occurs. */
 ```
 
 ```json
@@ -531,7 +559,7 @@ The browser offer JSON and native host responses are described in §12; database
 
 ## 22. Appendix C: Reconciliation Table
 
-The original request supplied seven claims but no actual Claude report text. Status below is checked against the current code, after phase 0 task 0.5.3.
+The original request supplied seven claims but no actual Claude report text. Status below is checked against the current code after phase 1 task 1.5.3.
 
 | Claim in supplied checklist | Actual code status | Evidence | Correction or confirmation |
 |---|---|---|---|
