@@ -71,6 +71,7 @@ typedef struct Download {
   DownloadChunk chunks[QM_MAX_CHUNKS];
   int chunk_count;
   bool reserved_file;
+  bool schedule_paused; // queue mutex; persisted so only scheduled pauses resume
   _Atomic bool auto_filename; // daemon may replace URL-derived name after probe
   int retry_count;
   time_t next_retry_at;
@@ -132,6 +133,10 @@ int queue_create(const Queue *q, uint32_t *out_id);
 int queue_update(const Queue *q);
 int queue_delete(uint32_t id); // default queue (id 1) cannot be deleted
 int queue_reorder(uint32_t id, int new_priority);
+/* Apply one queue's schedule under the queue mutex; resume IDs are returned
+ * for broadcasts after unlocking. */
+int queue_manager_apply_schedule(uint32_t queue_id, bool active,
+                                 uint32_t *resumed_ids, int capacity);
 /* Caller holds queue mutex after deleting a named queue. */
 void queue_manager_reassign_queue_locked(uint32_t old_id);
 

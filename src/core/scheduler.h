@@ -5,6 +5,7 @@
 #define CORE_SCHEDULER_H
 
 #include "download_record.h"
+#include <time.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,6 +18,17 @@ extern "C" {
  * spawning worker threads.
  */
 void scheduler_tick(void);
+
+typedef enum {
+  SCHEDULE_ALWAYS,
+  SCHEDULED_ACTIVE,
+  SCHEDULED_IDLE,
+} SchedulerQueueState;
+
+/* The start minute is inclusive, stop minute exclusive; local wall clock. */
+SchedulerQueueState scheduler_queue_state(const Queue *queue, time_t now);
+/* Evaluate transitions at an injected wall clock for deterministic tests. */
+void scheduler_schedule_tick_at(time_t now);
 
 /** Cancel and join all scheduler workers before shared teardown. */
 void scheduler_shutdown(void);

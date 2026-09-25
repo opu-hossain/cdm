@@ -43,6 +43,16 @@ Test(queue_manager, named_queue_crud_and_priority_selection) {
   cr_assert_eq(fetched.max_concurrent, 1);
   uint32_t duplicate_id = 0;
   cr_assert_eq(queue_create(&fast, &duplicate_id), -1);
+  Queue invalid_schedule = {.priority = 1};
+  strcpy(invalid_schedule.name, "Invalid schedule");
+  strcpy(invalid_schedule.schedule_start, "09:00");
+  strcpy(invalid_schedule.schedule_stop, "09:00");
+  cr_assert_eq(queue_create(&invalid_schedule, &duplicate_id), -1);
+  strcpy(invalid_schedule.schedule_stop, "25:00");
+  cr_assert_eq(queue_create(&invalid_schedule, &duplicate_id), -1);
+  strcpy(invalid_schedule.schedule_stop, "17:00");
+  cr_assert_eq(queue_create(&invalid_schedule, &duplicate_id), 0);
+  cr_assert_eq(queue_delete(duplicate_id), 0);
   cr_assert_eq(queue_get(UINT32_MAX, &fetched), -1);
   Queue *all = NULL;
   size_t count = 0;

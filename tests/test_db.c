@@ -234,7 +234,7 @@ Test(db, version_four_fixture_migrates_to_named_queues) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 5);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 6);
   sqlite3_finalize(statement);
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA foreign_key_check", -1,
                                   &statement, NULL), SQLITE_OK);
@@ -306,7 +306,7 @@ Test(db, legacy_schema_migrates_transactionally) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 5);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 6);
   sqlite3_finalize(statement);
 
   cr_assert_eq(sqlite3_prepare_v2(

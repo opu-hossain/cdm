@@ -13,6 +13,7 @@
 #include "../utils/notify.h"
 
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -28,6 +29,7 @@ typedef struct {
 } SchedulerWorker;
 
 static SchedulerWorker g_workers[SCHEDULER_MAX_WORKERS];
+static _Atomic time_t g_next_schedule_check;
 
 /* Helpers */
 
@@ -103,8 +105,8 @@ static int download_thread_fn(void *arg) {
 
   if (paused) {
     LOG_INFO("Download %u paused", dl->id);
-    queue_manager_update_status(dl->id, DOWNLOAD_PAUSED);
     db_update_status(dl->id, "PAUSED");
+    queue_manager_update_status(dl->id, DOWNLOAD_PAUSED);
     ipc_broadcast_status(dl->id, "Paused", dl->progress);
     return rc;
   }
@@ -183,7 +185,63 @@ static void reap_finished_workers(void) {
 
 /* Public API */
 
+static int parse_schedule_time(const char value[6]) {
+  if (strnlen(value, 6) != 5 || value[2] != ':' ||
+      value[0] < '0' || value[0] > '9' ||
+      value[1] < '0' || value[1] > '9' ||
+      value[3] < '0' || value[3] > '9' ||
+      value[4] < '0' || value[4] > '9')
+    return -1;
+  int hour = (value[0] - '0') * 10 + value[1] - '0';
+  int minute = (value[3] - '0') * 10 + value[4] - '0';
+  return hour < 24 && minute < 60 ? hour * 60 + minute : -1;
+}
+
+SchedulerQueueState scheduler_queue_state(const Queue *queue, time_t now) {
+  if (!queue)
+    return SCHEDULED_IDLE;
+  if (!queue->schedule_start[0] && !queue->schedule_stop[0])
+    return SCHEDULE_ALWAYS;
+  int start = parse_schedule_time(queue->schedule_start);
+  int stop = parse_schedule_time(queue->schedule_stop);
+  if (start < 0 || stop < 0 || start == stop)
+    return SCHEDULED_IDLE;
+  struct tm local;
+  /* TODO(platform): use localtime_s when building this scheduler on Windows. */
+  if (!localtime_r(&now, &local))
+    return SCHEDULED_IDLE;
+  int minute = local.tm_hour * 60 + local.tm_min;
+  bool active = start < stop ? minute >= start && minute < stop
+                             : minute >= start || minute < stop;
+  return active ? SCHEDULED_ACTIVE : SCHEDULED_IDLE;
+}
+
+void scheduler_schedule_tick_at(time_t now) {
+  Queue *queues = NULL;
+  size_t count = 0;
+  if (queue_list(&queues, &count) != 0) {
+    LOG_WARN("Could not evaluate queue schedules");
+    return;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    SchedulerQueueState state = scheduler_queue_state(&queues[i], now);
+    uint32_t resumed_ids[SCHEDULER_MAX_WORKERS];
+    int resumed = queue_manager_apply_schedule(queues[i].id,
+                         state != SCHEDULED_IDLE, resumed_ids,
+                         SCHEDULER_MAX_WORKERS);
+    for (int j = 0; j < resumed; ++j)
+      ipc_broadcast_status(resumed_ids[j], "QUEUED", 0.0f);
+  }
+  free(queues);
+}
+
 void scheduler_tick(void) {
+  time_t now = time(NULL);
+  time_t next = atomic_load(&g_next_schedule_check);
+  if (now != (time_t)-1 && (next == 0 || now >= next || now < next - 60)) {
+    scheduler_schedule_tick_at(now);
+    atomic_store(&g_next_schedule_check, now + 60);
+  }
   reap_finished_workers();
 
   dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
@@ -243,6 +301,7 @@ void scheduler_tick(void) {
 }
 
 void scheduler_shutdown(void) {
+  atomic_store(&g_next_schedule_check, 0);
   for (int i = 0; i < SCHEDULER_MAX_WORKERS; i++) {
     SchedulerWorker *worker = &g_workers[i];
     if (worker->in_use)

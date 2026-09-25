@@ -39,9 +39,159 @@ static void setup_scheduler(void) {
   db_init(":memory:");
 }
 
-static void teardown_scheduler(void) { db_close(); }
+static void teardown_scheduler(void) {
+  scheduler_shutdown();
+  db_close();
+}
 
 TestSuite(scheduler, .init = setup_scheduler, .fini = teardown_scheduler);
+
+static time_t fixed_utc(int day, int hour, int minute) {
+  setenv("TZ", "UTC", 1);
+  tzset();
+  struct tm value = {.tm_year = 126, .tm_mon = 0, .tm_mday = day,
+                     .tm_hour = hour, .tm_min = minute};
+  return mktime(&value);
+}
+
+Test(scheduler, schedule_states_include_boundaries_and_overnight) {
+  Queue queue = {0};
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(1, 12, 0)),
+               SCHEDULE_ALWAYS);
+  strcpy(queue.schedule_start, "09:00");
+  strcpy(queue.schedule_stop, "17:00");
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(1, 8, 59)),
+               SCHEDULED_IDLE);
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(1, 9, 0)),
+               SCHEDULED_ACTIVE);
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(1, 16, 59)),
+               SCHEDULED_ACTIVE);
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(1, 17, 0)),
+               SCHEDULED_IDLE);
+  strcpy(queue.schedule_start, "22:00");
+  strcpy(queue.schedule_stop, "06:00");
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(1, 23, 0)),
+               SCHEDULED_ACTIVE);
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(2, 5, 59)),
+               SCHEDULED_ACTIVE);
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(2, 6, 0)),
+               SCHEDULED_IDLE);
+}
+
+Test(scheduler, schedule_pauses_active_and_resumes_only_its_own_download) {
+  Queue queue = {.max_concurrent = 2};
+  strcpy(queue.name, "Workday");
+  strcpy(queue.schedule_start, "09:00");
+  strcpy(queue.schedule_stop, "17:00");
+  uint32_t queue_id = 0;
+  cr_assert_eq(queue_create(&queue, &queue_id), 0);
+  RequestOptions options = {.queue_id = queue_id};
+  uint32_t active_id = queue_manager_add("http://127.0.0.1/scheduled",
+                                         "/tmp/scheduled-item", &options);
+  uint32_t manual_id = queue_manager_add("http://127.0.0.1/manual",
+                                         "/tmp/manual-item", &options);
+  cr_assert_neq(active_id, 0);
+  cr_assert_neq(manual_id, 0);
+  cr_assert_eq(db_insert_download(active_id, "http://127.0.0.1/scheduled",
+                                  "/tmp/scheduled-item", &options), 0);
+  cr_assert_eq(db_insert_download(manual_id, "http://127.0.0.1/manual",
+                                  "/tmp/manual-item", &options), 0);
+  queue_manager_update_status(active_id, DOWNLOAD_ACTIVE);
+  cr_assert_eq(db_update_status(active_id, "ACTIVE"), 0);
+  queue_manager_pause(manual_id);
+  scheduler_schedule_tick_at(fixed_utc(1, 17, 0));
+  Download *active = queue_manager_find_by_id(active_id);
+  cr_assert_not_null(active);
+  cr_assert(atomic_load(&active->pause_requested));
+  cr_assert(active->schedule_paused);
+  queue_manager_update_status(active_id, DOWNLOAD_PAUSED);
+  cr_assert_eq(db_update_status(active_id, "PAUSED"), 0);
+  scheduler_schedule_tick_at(fixed_utc(2, 9, 0));
+  DownloadStatus status = DOWNLOAD_ERROR;
+  cr_assert(queue_manager_get_status(active_id, &status));
+  cr_assert_eq(status, DOWNLOAD_QUEUED);
+  cr_assert(queue_manager_get_status(manual_id, &status));
+  cr_assert_eq(status, DOWNLOAD_PAUSED);
+  cr_assert_not(active->schedule_paused);
+  queue_manager_remove(active_id);
+  queue_manager_remove(manual_id);
+}
+
+Test(scheduler, scheduled_pause_survives_restart_and_resumes_at_start) {
+  char path[] = "/tmp/cdm-schedule-XXXXXX";
+  int fd = mkstemp(path);
+  cr_assert_geq(fd, 0);
+  close(fd);
+  db_close();
+  cr_assert_eq(db_init(path), 0);
+  Queue queue = {0};
+  strcpy(queue.name, "Restart schedule");
+  strcpy(queue.schedule_start, "09:00");
+  strcpy(queue.schedule_stop, "17:00");
+  uint32_t queue_id = 0;
+  cr_assert_eq(queue_create(&queue, &queue_id), 0);
+  RequestOptions options = {.queue_id = queue_id};
+  uint32_t id = queue_manager_add("http://127.0.0.1/restart",
+                                   "/tmp/schedule-restart", &options);
+  cr_assert_neq(id, 0);
+  cr_assert_eq(db_insert_download(id, "http://127.0.0.1/restart",
+                                  "/tmp/schedule-restart", &options), 0);
+  queue_manager_update_status(id, DOWNLOAD_ACTIVE);
+  cr_assert_eq(db_update_status(id, "ACTIVE"), 0);
+  scheduler_schedule_tick_at(fixed_utc(1, 17, 0));
+  queue_manager_update_status(id, DOWNLOAD_PAUSED);
+  cr_assert_eq(db_update_status(id, "PAUSED"), 0);
+  queue_manager_remove(id);
+  db_close();
+  cr_assert_eq(db_init(path), 0);
+  cr_assert_eq(db_restore_queue(), 0);
+  Download *restored = queue_manager_find_by_id(id);
+  cr_assert_not_null(restored);
+  cr_assert(restored->schedule_paused);
+  cr_assert_eq(restored->status, DOWNLOAD_PAUSED);
+  scheduler_schedule_tick_at(fixed_utc(2, 9, 0));
+  cr_assert_eq(restored->status, DOWNLOAD_QUEUED);
+  cr_assert_not(restored->schedule_paused);
+  queue_manager_remove(id);
+  db_close();
+  unlink(path);
+}
+
+Test(scheduler, schedule_boundary_pauses_running_worker) {
+  Queue queue = {0};
+  strcpy(queue.name, "Worker schedule");
+  uint32_t queue_id = 0;
+  cr_assert_eq(queue_create(&queue, &queue_id), 0);
+  RequestOptions options = {.queue_id = queue_id};
+  uint32_t id = queue_manager_add("http://127.0.0.1/worker",
+                                   "/tmp/schedule-worker", &options);
+  cr_assert_neq(id, 0);
+  cr_assert_eq(db_insert_download(id, "http://127.0.0.1/worker",
+                                  "/tmp/schedule-worker", &options), 0);
+  atomic_store(&hold_workers, true);
+  scheduler_tick();
+  for (int i = 0; i < 1000 && atomic_load(&active_workers) == 0; ++i)
+    dm_thread_sleep_ms(1);
+  cr_assert_eq(atomic_load(&active_workers), 1);
+  queue.id = queue_id;
+  strcpy(queue.schedule_start, "09:00");
+  strcpy(queue.schedule_stop, "17:00");
+  cr_assert_eq(queue_update(&queue), 0);
+  scheduler_schedule_tick_at(fixed_utc(1, 17, 0));
+  DownloadStatus status = DOWNLOAD_ACTIVE;
+  for (int i = 0; i < 1000; ++i) {
+    if (queue_manager_get_status(id, &status) && status == DOWNLOAD_PAUSED)
+      break;
+    dm_thread_sleep_ms(1);
+  }
+  cr_assert_eq(status, DOWNLOAD_PAUSED);
+  scheduler_schedule_tick_at(fixed_utc(2, 9, 0));
+  cr_assert(queue_manager_get_status(id, &status));
+  cr_assert_eq(status, DOWNLOAD_QUEUED);
+  scheduler_shutdown();
+  queue_manager_remove(id);
+  atomic_store(&hold_workers, false);
+}
 
 Test(scheduler, smooths_transfer_speed_and_estimates_eta) {
   DownloadTransferMetrics sample = {.eta_seconds = UINT64_MAX};

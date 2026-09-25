@@ -84,6 +84,8 @@ int db_get_download_details(uint32_t id, IpcDownloadDetails *out);
 
 /** Restore interrupted downloads from the database into memory. */
 int db_restore_queue(void);
+int db_set_schedule_paused(uint32_t id, bool paused);
+int db_resume_scheduled_download(uint32_t id);
 
 #ifdef __cplusplus
 }

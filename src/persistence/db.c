@@ -104,6 +104,7 @@ int db_init(const char *db_path) {
       "  auto_filename   INTEGER DEFAULT 0,"
       "  auth_user       TEXT DEFAULT '',"
       "  auth_password   TEXT DEFAULT '',"
+      "  schedule_paused INTEGER NOT NULL DEFAULT 0,"
       "  queue_id INTEGER DEFAULT 1 REFERENCES queues(id) ON DELETE SET NULL"
       ");"
       ""
@@ -129,14 +130,15 @@ int db_init(const char *db_path) {
                                           "reserved_file", "etag",
                                           "last_modified", "auto_filename",
                                           "auth_user", "auth_password",
-                                          "queue_id"};
+                                          "queue_id", "schedule_paused"};
   static const char *migration_types[] = {"TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "INTEGER DEFAULT 0", "INTEGER DEFAULT 0",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "INTEGER DEFAULT 0", "TEXT DEFAULT ''",
                                           "TEXT DEFAULT ''",
-                                          "INTEGER DEFAULT 1 REFERENCES queues(id) ON DELETE SET NULL"};
+                                          "INTEGER DEFAULT 1 REFERENCES queues(id) ON DELETE SET NULL",
+                                          "INTEGER NOT NULL DEFAULT 0"};
 
   char *migration_error = NULL;
   /* SQLite requires a NULL default when adding REFERENCES with FK checks
@@ -204,7 +206,7 @@ int db_init(const char *db_path) {
   }
   sqlite3_finalize(fk_check);
 
-  rc = sqlite3_exec(g_db, "PRAGMA user_version = 5; COMMIT;", NULL, NULL,
+  rc = sqlite3_exec(g_db, "PRAGMA user_version = 6; COMMIT;", NULL, NULL,
                     &migration_error);
   if (rc != SQLITE_OK) {
     LOG_ERROR("could not commit database migration: %s",
@@ -370,10 +372,26 @@ int queue_get(uint32_t id, Queue *out) {
   return step == SQLITE_ROW ? 0 : -1;
 }
 
+static int schedule_minutes(const char *value) {
+  if (strlen(value) != 5 || value[2] != ':' || value[0] < '0' ||
+      value[0] > '9' || value[1] < '0' || value[1] > '9' ||
+      value[3] < '0' || value[3] > '9' || value[4] < '0' ||
+      value[4] > '9')
+    return -1;
+  int hour = (value[0] - '0') * 10 + (value[1] - '0');
+  int minute = (value[3] - '0') * 10 + (value[4] - '0');
+  return hour < 24 && minute < 60 ? hour * 60 + minute : -1;
+}
+
 static bool queue_fields_valid(const Queue *q) {
+  if (!q || !memchr(q->schedule_start, 0, sizeof(q->schedule_start)) ||
+      !memchr(q->schedule_stop, 0, sizeof(q->schedule_stop)))
+    return false;
+  bool always = !q->schedule_start[0] && !q->schedule_stop[0];
+  int start = always ? 0 : schedule_minutes(q->schedule_start);
+  int stop = always ? 0 : schedule_minutes(q->schedule_stop);
   return q && memchr(q->name, '\0', sizeof(q->name)) && q->name[0] &&
-         memchr(q->schedule_start, '\0', sizeof(q->schedule_start)) &&
-         memchr(q->schedule_stop, '\0', sizeof(q->schedule_stop)) &&
+         (always || (start >= 0 && stop >= 0 && start != stop)) &&
          memchr(q->post_action, '\0', sizeof(q->post_action)) &&
          memchr(q->post_action_arg, '\0', sizeof(q->post_action_arg)) &&
          q->max_concurrent >= 0 && q->max_concurrent <= 64;
@@ -450,6 +468,38 @@ int queue_reorder(uint32_t id, int new_priority) {
     return -1;
   sqlite3_bind_int(stmt, 1, new_priority);
   sqlite3_bind_int64(stmt, 2, (sqlite3_int64)id);
+  int step = sqlite3_step(stmt);
+  int changed = sqlite3_changes(g_db);
+  sqlite3_finalize(stmt);
+  return step == SQLITE_DONE && changed == 1 ? 0 : -1;
+}
+
+int db_set_schedule_paused(uint32_t id, bool paused) {
+  if (!db_ready() || !id)
+    return -1;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db,
+          "UPDATE downloads SET schedule_paused=? WHERE id=?", -1,
+          &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_int(stmt, 1, paused ? 1 : 0);
+  sqlite3_bind_int64(stmt, 2, (sqlite3_int64)id);
+  int step = sqlite3_step(stmt);
+  int changed = sqlite3_changes(g_db);
+  sqlite3_finalize(stmt);
+  return step == SQLITE_DONE && changed == 1 ? 0 : -1;
+}
+
+int db_resume_scheduled_download(uint32_t id) {
+  if (!db_ready() || !id)
+    return -1;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db,
+          "UPDATE downloads SET schedule_paused=0,status='QUEUED' "
+          "WHERE id=? AND schedule_paused=1 AND status='PAUSED'", -1,
+          &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id);
   int step = sqlite3_step(stmt);
   int changed = sqlite3_changes(g_db);
   sqlite3_finalize(stmt);
@@ -909,7 +959,7 @@ int db_restore_queue(void) {
                     "cookie, referrer, extra_headers, expected_sha256, "
                     "speed_limit_bps, reserved_file, auto_filename, etag, "
                     "last_modified, auth_user, auth_password, "
-                    "COALESCE(queue_id,1), created_at "
+                    "COALESCE(queue_id,1), created_at, schedule_paused "
                     "FROM downloads WHERE status != 'DONE'";
 
   sqlite3_stmt *stmt = NULL;
@@ -929,6 +979,7 @@ int db_restore_queue(void) {
     d->priority = sqlite3_column_int(stmt, 5);
     d->queue_id = (uint32_t)sqlite3_column_int(stmt, 17);
     d->created_at = (time_t)sqlite3_column_int64(stmt, 18);
+    d->schedule_paused = sqlite3_column_int(stmt, 19) != 0;
 
     const char *url = (const char *)sqlite3_column_text(stmt, 1);
     const char *path = (const char *)sqlite3_column_text(stmt, 2);

@@ -829,3 +829,10 @@ Completed: queue snapshot/model, worker-thread IPC commands, queues table, inlin
 Verification: test-first model test; focused GUI/IPC tests passed; full build and CTest 31/31 passed; isolated offscreen GUI stayed alive for three seconds (click paths unautomated).
 Open questions: phase merge gates remain deferred; queue UI currently displays at most 64 queues and reports an error above that bound.
 Next: 2.2.1 schedule model.
+
+## 2026-09-25 — Codex, task 2.2.1
+Branch: `cdm`; commit: `feat(scheduler): per-queue start and stop times`.
+Completed: local wall-clock queue states, minute-gated evaluation, idle pause/active resume, restart-safe schedule ownership marker, schema v6 migration, and invalid/equal time rejection.
+Verification: test-first fixed-clock boundaries; worker pause, manual-pause isolation, restart restore, focused DB/queue/scheduler tests; full build and CTest 31/31 passed.
+Open questions: equal times resolved as invalid; Windows `localtime_s` port tracked in `docs/open-questions.md`.
+Next: 2.2.2 schedule editor validation.

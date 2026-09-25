@@ -1,5 +1,14 @@
 # Open Questions
 
+## Task 2.2.1 — Equal schedule bounds and platform clock (partly resolved)
+
+Decision (user, 2026-09-25): Reject equal nonempty start/stop times; empty
+start and stop mean always active. Overnight windows remain valid. Scheduled
+pauses use a persisted marker so a restart resumes only downloads paused by
+the schedule. The local wall clock implementation uses POSIX `localtime_r`.
+`TODO(platform)` in `src/core/scheduler.c` tracks the Windows `localtime_s`
+port if Windows support is implemented later.
+
 ## Task 2.1.3 — Queue protocol IDs and priority range (resolved)
 
 The plan assigns queue messages IDs 35–39, but 35–37 already mean paginated

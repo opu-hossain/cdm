@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Opu Hossain
 
 #include "queue_manager.h"
+#include "scheduler.h"
 #include "../persistence/db.h"
 #include "../platform/thread.h"
 #include "../utils/log.h"
@@ -271,7 +272,7 @@ Download *queue_manager_find_next_queued(void) {
   Queue *queues = NULL;
   size_t queue_count = 0;
   if (queue_list(&queues, &queue_count) != 0)
-    queues = NULL;
+    return NULL;
   int best_queue_priority = 0;
 
   for (Download *cur = g_head; cur != NULL; cur = cur->next) {
@@ -284,11 +285,17 @@ Download *queue_manager_find_next_queued(void) {
     int max_concurrent = 0;
     for (size_t i = 0; i < queue_count; i++) {
       if (queues[i].id == queue_id) {
+        if (scheduler_queue_state(&queues[i], now) == SCHEDULED_IDLE) {
+          queue_id = 0;
+          break;
+        }
         queue_priority = queues[i].priority;
         max_concurrent = queues[i].max_concurrent;
         break;
       }
     }
+    if (queue_id == 0)
+      continue;
     if (max_concurrent > 0) {
       int active_in_queue = 0;
       for (Download *other = g_head; other; other = other->next) {
@@ -311,6 +318,47 @@ Download *queue_manager_find_next_queued(void) {
   }
   free(queues);
   return best;
+}
+
+int queue_manager_apply_schedule(uint32_t queue_id, bool active,
+                                 uint32_t *resumed_ids, int capacity) {
+  if (!queue_id || capacity < 0 || (capacity && !resumed_ids))
+    return -1;
+  ensure_mutex();
+  int resumed = 0;
+  dm_mutex_lock(&g_mutex);
+  for (Download *cur = g_head; cur; cur = cur->next) {
+    if ((cur->queue_id ? cur->queue_id : 1) != queue_id)
+      continue;
+    if (!active && cur->status == DOWNLOAD_ACTIVE &&
+        !cur->schedule_paused && !atomic_load(&cur->pause_requested)) {
+      if (db_set_schedule_paused(cur->id, true) == 0) {
+        cur->schedule_paused = true;
+        atomic_store(&cur->pause_requested, true);
+      } else
+        LOG_WARN("Could not persist scheduled pause for download %u", cur->id);
+    } else if (active && cur->schedule_paused) {
+      if (cur->status == DOWNLOAD_PAUSED) {
+        if (resumed >= capacity)
+          continue;
+        if (db_resume_scheduled_download(cur->id) != 0) {
+          LOG_WARN("Could not resume scheduled download %u", cur->id);
+          continue;
+        }
+        cur->schedule_paused = false;
+        atomic_store(&cur->pause_requested, false);
+        cur->retry_count = 0;
+        cur->next_retry_at = 0;
+        cur->status = DOWNLOAD_QUEUED;
+        resumed_ids[resumed++] = cur->id;
+      } else if (cur->status != DOWNLOAD_ACTIVE &&
+                 db_set_schedule_paused(cur->id, false) == 0) {
+        cur->schedule_paused = false;
+      }
+    }
+  }
+  dm_mutex_unlock(&g_mutex);
+  return resumed;
 }
 
 int queue_manager_count_by_status(DownloadStatus s) {
@@ -512,6 +560,14 @@ bool queue_manager_resume(uint32_t id) {
   for (Download *cur = g_head; cur != NULL; cur = cur->next) {
     if (cur->id == id) {
       if (cur->status == DOWNLOAD_PAUSED || cur->status == DOWNLOAD_ERROR) {
+        if (cur->schedule_paused) {
+          int persisted = cur->status == DOWNLOAD_PAUSED
+                              ? db_resume_scheduled_download(cur->id)
+                              : db_set_schedule_paused(cur->id, false);
+          if (persisted != 0)
+            break;
+        }
+        cur->schedule_paused = false;
         atomic_store(&cur->pause_requested, false);
         atomic_store(&cur->cancel_requested, false);
         cur->retry_count = 0;
