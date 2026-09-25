@@ -715,3 +715,21 @@ Open questions:
 
 Next:
 - 1.5.2 IPC remove command. Its planned message ID 34 conflicts with existing `MSG_SUBSCRIBE_V2 = 34`; resolve the ID without changing the existing wire meaning. Phase 0 merge gate 0.6.3 remains deferred.
+
+## 2026-09-25 — Codex, task 1.5.2
+
+Branch: `cdm`
+Commit: `feat(ipc): add remove-download command` (this entry's commit)
+
+Tasks completed:
+- 1.5.2 Added remove IPC command with an ID, delete-file byte and one-byte result, plus a client helper. Message ID 44 replaces the plan's unavailable ID 34, which is already `MSG_SUBSCRIBE_V2`; protocol version is 4. The handler holds the queue mutex through database deletion, refuses ACTIVE downloads, removes non-active queue entries without unlinking their files, and broadcasts a REMOVED status event after success.
+
+Tests:
+- Test first: IPC remove test failed to compile without the helper.
+- Focused IPC test covers keeping a file, deleting a file, ACTIVE refusal, missing ID, queue cleanup and removal event. `cmake --build build -j` and full CTest passed 31/31. The local IPC test is the affected surface smoke test.
+
+Open questions:
+- The plan's ID 34 conflict is recorded as resolved in `docs/open-questions.md`.
+
+Next:
+- 1.5.3 GUI row menu. Phase 0 merge gate 0.6.3 remains deferred.

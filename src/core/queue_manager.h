@@ -114,6 +114,12 @@ void queue_manager_seed_next_id(uint32_t min_next_id);
 
 /** Remove a download from the queue (thread‑safe). */
 void queue_manager_remove(uint32_t id);
+/* Caller holds queue_manager_get_mutex(). Removes only a non-ACTIVE entry and
+ * leaves its destination file untouched. Returns true if an entry was freed. */
+bool queue_manager_forget_locked(uint32_t id);
+/* Caller holds queue_manager_get_mutex(); missing entries are safe to delete
+ * from persistent history. */
+bool queue_manager_can_forget_locked(uint32_t id);
 
 /* Queue queries. */
 

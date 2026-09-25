@@ -422,6 +422,8 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_BROWSER_CONFIRM_V2:
     return header->length >= sizeof(uint32_t) * 2 &&
            header->length <= sizeof(uint32_t) * 2 + IPC_MAX_PATH_LEN - 1;
+  case MSG_REMOVE_DOWNLOAD:
+    return header->length == sizeof(uint32_t) + sizeof(uint8_t);
   case MSG_LIST_PAGE:
   case MSG_LIST_PAGE_WITH_SIZE:
     return header->length == sizeof(uint32_t) * 2;
@@ -825,6 +827,34 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       db_update_status(id, "CANCELED");
     }
     send_command_result(client_fd, IPC_RESULT_OK);
+    break;
+  }
+  case MSG_REMOVE_DOWNLOAD: {
+    uint32_t id = 0;
+    uint8_t delete_file = 0;
+    if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0 ||
+        ipc_read_exact(client_fd, &delete_file, sizeof(delete_file)) != 0)
+      return;
+    IpcResult result = IPC_RESULT_ERROR;
+    dm_mutex_t *queue_mutex = (dm_mutex_t *)queue_manager_get_mutex();
+    dm_mutex_lock(queue_mutex);
+    /* Keep the queue state stable through the DB transaction. A scheduler
+     * cannot start a queued row while it is being deleted. */
+    int db_result = queue_manager_can_forget_locked(id)
+                        ? db_delete_download(id, delete_file != 0)
+                        : 1;
+    if (db_result == 0) {
+      queue_manager_forget_locked(id);
+      result = IPC_RESULT_OK;
+    } else if (db_result == 1) {
+      result = IPC_RESULT_REJECTED;
+    } else if (db_result == 2) {
+      result = IPC_RESULT_NOT_FOUND;
+    }
+    dm_mutex_unlock(queue_mutex);
+    send_command_result(client_fd, result);
+    if (result == IPC_RESULT_OK)
+      ipc_broadcast_status(id, "REMOVED", 0.0f);
     break;
   }
   case MSG_LIST: {
@@ -1383,6 +1413,23 @@ int ipc_send_cancel(int sock, uint32_t id) {
   if (ipc_read_exact(sock, &result, sizeof(result)) != 0)
     return -1;
   return result == IPC_RESULT_OK ? 0 : -1;
+}
+
+int ipc_send_remove_download(int sock, uint32_t id, bool delete_file,
+                             IpcResult *out) {
+  if (sock < 0 || !id || !out)
+    return -1;
+  MsgHeader hdr = {.length = sizeof(id) + sizeof(uint8_t),
+                   .type = MSG_REMOVE_DOWNLOAD};
+  uint8_t flag = delete_file ? 1 : 0;
+  uint8_t result = IPC_RESULT_ERROR;
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0 ||
+      ipc_write_exact(sock, &id, sizeof(id)) != 0 ||
+      ipc_write_exact(sock, &flag, sizeof(flag)) != 0 ||
+      ipc_read_exact(sock, &result, sizeof(result)) != 0)
+    return -1;
+  *out = (IpcResult)result;
+  return 0;
 }
 
 static int read_download_rows(int sock, uint32_t count,

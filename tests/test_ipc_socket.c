@@ -216,6 +216,76 @@ Test(ipc, duplicate_v2_add_returns_existing_id_without_second_row) {
   unsetenv("DOWNLOADMGR_ROOT");
 }
 
+Test(ipc, remove_download_preserves_or_deletes_file_and_rejects_active) {
+  char dir[] = "/tmp/cdm-remove-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  setenv("DOWNLOADMGR_ROOT", dir, 1);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(1500, NULL);
+  cr_assert_geq(client, 0);
+  char keep[256], remove_path[256];
+  snprintf(keep, sizeof(keep), "%s/keep.bin", dir);
+  snprintf(remove_path, sizeof(remove_path), "%s/remove.bin", dir);
+  uint32_t first = ipc_send_add_download(client, "http://127.0.0.1/keep",
+                                          keep, NULL);
+  cr_assert_neq(first, 0);
+  ipc_send_subscribe(client);
+  IpcResult result = IPC_RESULT_ERROR;
+  cr_assert_eq(ipc_send_remove_download(client, first, false, &result), 0);
+  cr_assert_eq(result, IPC_RESULT_OK);
+  MsgHeader removed_event = {0};
+  cr_assert_eq(ipc_read_exact(client, &removed_event,
+                              sizeof(removed_event)), 0);
+  cr_assert_eq(removed_event.type, MSG_STATUS_EVENT);
+  cr_assert_leq(removed_event.length, 128);
+  char event_payload[128] = {0};
+  cr_assert_eq(ipc_read_exact(client, event_payload, removed_event.length), 0);
+  uint32_t event_id = 0;
+  memcpy(&event_id, event_payload, sizeof(event_id));
+  cr_assert_eq(event_id, first);
+  cr_assert_geq(removed_event.length, 7);
+  cr_assert_eq(memcmp(event_payload + removed_event.length - 7,
+                      "REMOVED", 7), 0);
+  cr_assert_eq(access(keep, F_OK), 0);
+  cr_assert_null(queue_manager_find_by_id(first));
+  cr_assert_eq(db_count_downloads_total(), 0);
+
+  uint32_t second = ipc_send_add_download(client, "http://127.0.0.1/remove",
+                                           remove_path, NULL);
+  cr_assert_neq(second, 0);
+  cr_assert_eq(db_update_status(second, "ACTIVE"), 0);
+  queue_manager_update_status(second, DOWNLOAD_ACTIVE);
+  cr_assert_eq(ipc_send_remove_download(client, second, true, &result), 0);
+  cr_assert_eq(result, IPC_RESULT_REJECTED);
+  cr_assert_eq(access(remove_path, F_OK), 0);
+  cr_assert_eq(db_count_downloads_total(), 1);
+  queue_manager_update_status(second, DOWNLOAD_PAUSED);
+  cr_assert_eq(db_update_status(second, "PAUSED"), 0);
+  cr_assert_eq(ipc_send_remove_download(client, second, true, &result), 0);
+  cr_assert_eq(result, IPC_RESULT_OK);
+  cr_assert_eq(ipc_read_exact(client, &removed_event,
+                              sizeof(removed_event)), 0);
+  cr_assert_eq(removed_event.type, MSG_STATUS_EVENT);
+  cr_assert_leq(removed_event.length, 128);
+  cr_assert_eq(ipc_read_exact(client, event_payload, removed_event.length), 0);
+  cr_assert_eq(access(remove_path, F_OK), -1);
+  cr_assert_null(queue_manager_find_by_id(second));
+  cr_assert_eq(ipc_send_remove_download(client, second, true, &result), 0);
+  cr_assert_eq(result, IPC_RESULT_NOT_FOUND);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  db_close();
+  unlink(keep);
+  rmdir(dir);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
 Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   char dir[] = "/tmp/cdm-browser-ipc-XXXXXX";
   cr_assert_not_null(mkdtemp(dir));

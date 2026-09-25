@@ -1,5 +1,12 @@
 # Open Questions
 
+## Task 1.5.2 — Remove command message ID (resolved)
+
+The plan assigns `MSG_REMOVE_DOWNLOAD = 34`, but `src/platform/ipc_protocol.h`
+already assigns 34 to `MSG_SUBSCRIBE_V2`. Reusing 34 would make the protocol
+ambiguous. The remove command uses the next free ID, 44, and advertises
+protocol version 4. Existing wire message definitions remain unchanged.
+
 ## Task 0.2.4 — Filename resolution ownership
 
 The CLI and GUI submit a complete destination path before the daemon performs

@@ -109,6 +109,9 @@ int ipc_send_add_download_v2(int sock, const char *url, const char *dest_path,
 int ipc_send_pause(int sock, uint32_t id);
 int ipc_send_resume(int sock, uint32_t id);
 int ipc_send_cancel(int sock, uint32_t id);
+/* Transport 0 on success; out is OK, NOT_FOUND, REJECTED, or ERROR. */
+int ipc_send_remove_download(int sock, uint32_t id, bool delete_file,
+                             IpcResult *out);
 int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max);
 /* Returns rows copied to out, -1 on I/O error. The daemon caps limit at 500.
  * total_out is the full database count, before offset/limit. */

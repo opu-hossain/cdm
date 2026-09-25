@@ -220,6 +220,30 @@ void queue_manager_remove(uint32_t id) {
   dm_mutex_unlock(&g_mutex);
 }
 
+bool queue_manager_forget_locked(uint32_t id) {
+  Download **prev_ptr = &g_head;
+  while (*prev_ptr != NULL) {
+    Download *current = *prev_ptr;
+    if (current->id == id) {
+      if (current->status == DOWNLOAD_ACTIVE)
+        return false;
+      *prev_ptr = current->next;
+      free_download(current);
+      return true;
+    }
+    prev_ptr = &current->next;
+  }
+  return false;
+}
+
+bool queue_manager_can_forget_locked(uint32_t id) {
+  for (Download *current = g_head; current; current = current->next) {
+    if (current->id == id)
+      return current->status != DOWNLOAD_ACTIVE;
+  }
+  return true;
+}
+
 /* Query */
 
 Download *queue_manager_find_by_id(uint32_t id) {

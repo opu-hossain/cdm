@@ -40,9 +40,10 @@ typedef enum {
   MSG_HELLO = 41, // v1 header, empty request; uint16_t version response.
   MSG_ADD_DOWNLOAD_V2 = 42,
   MSG_BROWSER_CONFIRM_V2 = 43,
+  MSG_REMOVE_DOWNLOAD = 44, // 34 is already MSG_SUBSCRIBE_V2.
 } MsgType;
 
-#define IPC_PROTOCOL_VERSION 3
+#define IPC_PROTOCOL_VERSION 4
 
 /* Keep the v1 frame header unchanged for legacy clients. Version negotiation
  * uses MSG_HELLO; future versioned payloads use distinct message types. */
