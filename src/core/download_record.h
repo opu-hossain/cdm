@@ -27,6 +27,18 @@ typedef struct {
   uint64_t eta_seconds; // UINT64_MAX = unknown
 } DownloadTransferMetrics;
 
+typedef struct {
+  uint32_t id;
+  char name[128];
+  int priority;
+  int max_concurrent; // 0 = no per-queue limit
+  char schedule_start[6]; // HH:MM or empty
+  char schedule_stop[6];
+  char post_action[16];
+  char post_action_arg[512];
+  int64_t created_at; // Unix seconds
+} Queue;
+
 #ifdef __cplusplus
 }
 #endif

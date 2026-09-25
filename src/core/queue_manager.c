@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Opu Hossain
 
 #include "queue_manager.h"
+#include "../persistence/db.h"
 #include "../platform/thread.h"
 #include "../utils/log.h"
 
@@ -155,6 +156,8 @@ static uint32_t add_download(const char *url, const char *dest_path,
 
   d->status = DOWNLOAD_QUEUED;
   d->priority = 0;
+  d->queue_id = 1;
+  d->created_at = time(NULL);
   d->transfer_metrics.eta_seconds = UINT64_MAX;
 
   dm_mutex_lock(&g_mutex);
@@ -265,16 +268,48 @@ Download *queue_manager_find_next_queued(void) {
   /* Caller must hold g_mutex. */
   Download *best = NULL;
   time_t now = time(NULL);
+  Queue *queues = NULL;
+  size_t queue_count = 0;
+  if (queue_list(&queues, &queue_count) != 0)
+    queues = NULL;
+  int best_queue_priority = 0;
 
   for (Download *cur = g_head; cur != NULL; cur = cur->next) {
     if (cur->status != DOWNLOAD_QUEUED)
       continue;
     if (cur->next_retry_at != 0 && cur->next_retry_at > now)
       continue; // backoff period still active
-
-    if (best == NULL || cur->priority > best->priority)
+    uint32_t queue_id = cur->queue_id ? cur->queue_id : 1;
+    int queue_priority = 0;
+    int max_concurrent = 0;
+    for (size_t i = 0; i < queue_count; i++) {
+      if (queues[i].id == queue_id) {
+        queue_priority = queues[i].priority;
+        max_concurrent = queues[i].max_concurrent;
+        break;
+      }
+    }
+    if (max_concurrent > 0) {
+      int active_in_queue = 0;
+      for (Download *other = g_head; other; other = other->next) {
+        uint32_t other_queue = other->queue_id ? other->queue_id : 1;
+        if (other_queue == queue_id && other->status == DOWNLOAD_ACTIVE)
+          active_in_queue++;
+      }
+      if (active_in_queue >= max_concurrent)
+        continue;
+    }
+    if (best == NULL || queue_priority > best_queue_priority ||
+        (queue_priority == best_queue_priority &&
+         (cur->created_at < best->created_at ||
+          (cur->created_at == best->created_at &&
+           (cur->priority > best->priority ||
+            (cur->priority == best->priority && cur->id < best->id)))))) {
       best = cur;
+      best_queue_priority = queue_priority;
+    }
   }
+  free(queues);
   return best;
 }
 

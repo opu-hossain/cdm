@@ -7,6 +7,7 @@
 #include "download_record.h"
 
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
@@ -48,6 +49,8 @@ typedef enum {
 /* Full download entry */
 typedef struct Download {
   uint32_t id;
+  uint32_t queue_id; // 1 = default queue; 0 maps to default for old rows
+  time_t created_at;
   char url[2048];
   char dest_path[1024];
   char etag[256];
@@ -120,6 +123,14 @@ bool queue_manager_forget_locked(uint32_t id);
 /* Caller holds queue_manager_get_mutex(); missing entries are safe to delete
  * from persistent history. */
 bool queue_manager_can_forget_locked(uint32_t id);
+
+/* Named queues persist in SQLite. queue_list allocates *out; caller frees it. */
+int queue_list(Queue **out, size_t *count);
+int queue_get(uint32_t id, Queue *out);
+int queue_create(const Queue *q, uint32_t *out_id);
+int queue_update(const Queue *q);
+int queue_delete(uint32_t id); // default queue (id 1) cannot be deleted
+int queue_reorder(uint32_t id, int new_priority);
 
 /* Queue queries. */
 

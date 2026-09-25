@@ -786,3 +786,21 @@ Open questions:
 
 Next:
 - 2.1.2 Queue manager API and priority scheduling.
+
+## 2026-09-25 — Codex, task 2.1.2
+
+Branch: `cdm`
+Commit: `feat(queue): named queues with priority ordering` (this entry's commit)
+
+Tasks completed:
+- 2.1.2 Added persistent named-queue CRUD/list/get/reorder APIs, a Queue record, queue ID and creation time on downloads, and restored both fields from SQLite. Scheduler selection reads queue priorities, chooses higher queue priority then older download, and skips a queue at its nonzero concurrency cap. The default queue cannot be deleted. No new shared mutable cache was introduced; the existing queue mutex guards scheduling state.
+
+Tests:
+- Test first: queue tests failed to compile without the new Queue and CRUD API.
+- Focused tests cover CRUD, duplicate name rejection, ordering, default deletion refusal, priority selection, per-queue concurrency caps and queue assignment restore. `cmake --build build -j` and full CTest passed 31/31. Focused queue tests serve as the scheduling smoke test.
+
+Open questions:
+- Priority numeric range is not yet a product rule; the API stores signed integers. IPC input validation belongs to task 2.1.3.
+
+Next:
+- 2.1.3 Queue IPC commands. The plan's IDs 35–39 conflict with existing page/details messages; choose new IDs without reusing wire meanings.

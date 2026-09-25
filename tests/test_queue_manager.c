@@ -1,6 +1,10 @@
 #include "../src/core/queue_manager.h"
+#include "../src/persistence/db.h"
+#include "../src/platform/thread.h"
+#include <sqlite3.h>
 #include <criterion/criterion.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 static void setup(void) {
@@ -23,6 +27,109 @@ Test(queue_manager, add_and_find) {
   cr_assert_str_eq(d->dest_path, "/tmp/file");
   cr_assert_eq(d->status, DOWNLOAD_QUEUED);
   queue_manager_remove(id);
+}
+
+Test(queue_manager, named_queue_crud_and_priority_selection) {
+  cr_assert_eq(db_init(":memory:"), 0);
+  Queue fast = {.priority = 8, .max_concurrent = 1};
+  strcpy(fast.name, "Fast");
+  uint32_t fast_id = 0;
+  cr_assert_eq(queue_create(&fast, &fast_id), 0);
+  cr_assert_neq(fast_id, 0);
+  Queue fetched = {0};
+  cr_assert_eq(queue_get(fast_id, &fetched), 0);
+  cr_assert_str_eq(fetched.name, "Fast");
+  cr_assert_eq(fetched.priority, 8);
+  cr_assert_eq(fetched.max_concurrent, 1);
+  uint32_t duplicate_id = 0;
+  cr_assert_eq(queue_create(&fast, &duplicate_id), -1);
+  cr_assert_eq(queue_get(UINT32_MAX, &fetched), -1);
+  Queue *all = NULL;
+  size_t count = 0;
+  cr_assert_eq(queue_list(&all, &count), 0);
+  cr_assert_eq(count, 2);
+  cr_assert_eq(all[0].id, fast_id);
+  cr_assert_eq(all[1].id, 1);
+  free(all);
+  cr_assert_eq(queue_reorder(fast_id, 9), 0);
+  cr_assert_eq(queue_get(fast_id, &fetched), 0);
+  cr_assert_eq(fetched.priority, 9);
+  fetched.max_concurrent = 2;
+  cr_assert_eq(queue_update(&fetched), 0);
+  cr_assert_eq(queue_get(fast_id, &fetched), 0);
+  cr_assert_eq(fetched.max_concurrent, 2);
+
+  uint32_t old = queue_manager_add("http://127.0.0.1/old", "/tmp/cdm-q-old", NULL);
+  uint32_t newer = queue_manager_add("http://127.0.0.1/new", "/tmp/cdm-q-new", NULL);
+  uint32_t normal = queue_manager_add("http://127.0.0.1/normal", "/tmp/cdm-q-normal", NULL);
+  cr_assert_neq(old, 0);
+  cr_assert_neq(newer, 0);
+  cr_assert_neq(normal, 0);
+  queue_manager_find_by_id(old)->queue_id = fast_id;
+  queue_manager_find_by_id(old)->created_at = 10;
+  queue_manager_find_by_id(newer)->queue_id = fast_id;
+  queue_manager_find_by_id(newer)->created_at = 20;
+  queue_manager_find_by_id(normal)->created_at = 5;
+  dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
+  dm_mutex_lock(mutex);
+  cr_assert_eq(queue_manager_find_next_queued()->id, old);
+  dm_mutex_unlock(mutex);
+  queue_manager_update_status(old, DOWNLOAD_ACTIVE);
+  dm_mutex_lock(mutex);
+  cr_assert_eq(queue_manager_find_next_queued()->id, newer);
+  dm_mutex_unlock(mutex);
+  fetched.max_concurrent = 1;
+  cr_assert_eq(queue_update(&fetched), 0);
+  dm_mutex_lock(mutex);
+  cr_assert_eq(queue_manager_find_next_queued()->id, normal);
+  dm_mutex_unlock(mutex);
+  fetched.max_concurrent = 2;
+  cr_assert_eq(queue_update(&fetched), 0);
+  queue_manager_update_status(newer, DOWNLOAD_ACTIVE);
+  dm_mutex_lock(mutex);
+  cr_assert_eq(queue_manager_find_next_queued()->id, normal);
+  dm_mutex_unlock(mutex);
+  queue_manager_update_status(old, DOWNLOAD_DONE);
+  queue_manager_update_status(newer, DOWNLOAD_DONE);
+  queue_manager_remove(old);
+  queue_manager_remove(newer);
+  queue_manager_remove(normal);
+  cr_assert_eq(queue_delete(1), -1);
+  cr_assert_eq(queue_delete(fast_id), 0);
+  cr_assert_eq(queue_get(fast_id, &fetched), -1);
+  db_close();
+}
+
+Test(queue_manager, restore_keeps_queue_assignment_and_created_at) {
+  char path[] = "/tmp/cdm-queue-restore-XXXXXX";
+  int fd = mkstemp(path);
+  cr_assert_geq(fd, 0);
+  close(fd);
+  cr_assert_eq(db_init(path), 0);
+  Queue extra = {.priority = 4};
+  strcpy(extra.name, "Later");
+  uint32_t queue_id = 0;
+  cr_assert_eq(queue_create(&extra, &queue_id), 0);
+  cr_assert_eq(db_insert_download(910, "http://127.0.0.1/restore",
+                                  "/tmp/cdm-queue-restore-file", NULL), 0);
+  sqlite3 *writer = NULL;
+  cr_assert_eq(sqlite3_open(path, &writer), SQLITE_OK);
+  sqlite3_stmt *statement = NULL;
+  cr_assert_eq(sqlite3_prepare_v2(writer,
+      "UPDATE downloads SET queue_id=?, created_at=42 WHERE id=910", -1,
+      &statement, NULL), SQLITE_OK);
+  sqlite3_bind_int64(statement, 1, (sqlite3_int64)queue_id);
+  cr_assert_eq(sqlite3_step(statement), SQLITE_DONE);
+  sqlite3_finalize(statement);
+  sqlite3_close(writer);
+  cr_assert_eq(db_restore_queue(), 0);
+  Download *restored = queue_manager_find_by_id(910);
+  cr_assert_not_null(restored);
+  cr_assert_eq(restored->queue_id, queue_id);
+  cr_assert_eq(restored->created_at, 42);
+  queue_manager_remove(910);
+  db_close();
+  unlink(path);
 }
 
 Test(queue_manager, update_status) {

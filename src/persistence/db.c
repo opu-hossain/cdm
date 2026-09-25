@@ -294,6 +294,168 @@ rollback:
   return result;
 }
 
+static void read_queue_row(sqlite3_stmt *stmt, Queue *out) {
+  memset(out, 0, sizeof(*out));
+  out->id = (uint32_t)sqlite3_column_int64(stmt, 0);
+  const char *name = (const char *)sqlite3_column_text(stmt, 1);
+  out->priority = sqlite3_column_int(stmt, 2);
+  out->max_concurrent = sqlite3_column_int(stmt, 3);
+  const char *start = (const char *)sqlite3_column_text(stmt, 4);
+  const char *stop = (const char *)sqlite3_column_text(stmt, 5);
+  const char *action = (const char *)sqlite3_column_text(stmt, 6);
+  const char *arg = (const char *)sqlite3_column_text(stmt, 7);
+  out->created_at = sqlite3_column_int64(stmt, 8);
+  snprintf(out->name, sizeof(out->name), "%s", name ? name : "");
+  snprintf(out->schedule_start, sizeof(out->schedule_start), "%s",
+           start ? start : "");
+  snprintf(out->schedule_stop, sizeof(out->schedule_stop), "%s",
+           stop ? stop : "");
+  snprintf(out->post_action, sizeof(out->post_action), "%s",
+           action ? action : "");
+  snprintf(out->post_action_arg, sizeof(out->post_action_arg), "%s",
+           arg ? arg : "");
+}
+
+int queue_list(Queue **out, size_t *count) {
+  if (!db_ready() || !out || !count)
+    return -1;
+  *out = NULL;
+  *count = 0;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, "SELECT COUNT(*) FROM queues", -1,
+                         &stmt, NULL) != SQLITE_OK)
+    return -1;
+  int step = sqlite3_step(stmt);
+  int64_t total = step == SQLITE_ROW ? sqlite3_column_int64(stmt, 0) : -1;
+  sqlite3_finalize(stmt);
+  if (total < 0 || (uint64_t)total > SIZE_MAX / sizeof(Queue))
+    return -1;
+  Queue *rows = calloc((size_t)total ? (size_t)total : 1, sizeof(Queue));
+  if (!rows)
+    return -1;
+  const char *sql = "SELECT id,name,priority,max_concurrent,schedule_start,"
+                    "schedule_stop,post_action,post_action_arg,created_at "
+                    "FROM queues ORDER BY priority DESC,created_at ASC,id ASC";
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    free(rows);
+    return -1;
+  }
+  size_t n = 0;
+  while ((step = sqlite3_step(stmt)) == SQLITE_ROW && n < (size_t)total)
+    read_queue_row(stmt, &rows[n++]);
+  sqlite3_finalize(stmt);
+  if (step != SQLITE_DONE) {
+    free(rows);
+    return -1;
+  }
+  *out = rows;
+  *count = n;
+  return 0;
+}
+
+int queue_get(uint32_t id, Queue *out) {
+  if (!db_ready() || !id || !out)
+    return -1;
+  const char *sql = "SELECT id,name,priority,max_concurrent,schedule_start,"
+                    "schedule_stop,post_action,post_action_arg,created_at "
+                    "FROM queues WHERE id=?";
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id);
+  int step = sqlite3_step(stmt);
+  if (step == SQLITE_ROW)
+    read_queue_row(stmt, out);
+  sqlite3_finalize(stmt);
+  return step == SQLITE_ROW ? 0 : -1;
+}
+
+static bool queue_fields_valid(const Queue *q) {
+  return q && memchr(q->name, '\0', sizeof(q->name)) && q->name[0] &&
+         memchr(q->schedule_start, '\0', sizeof(q->schedule_start)) &&
+         memchr(q->schedule_stop, '\0', sizeof(q->schedule_stop)) &&
+         memchr(q->post_action, '\0', sizeof(q->post_action)) &&
+         memchr(q->post_action_arg, '\0', sizeof(q->post_action_arg)) &&
+         q->max_concurrent >= 0 && q->max_concurrent <= 64;
+}
+
+static void bind_queue_fields(sqlite3_stmt *stmt, const Queue *q) {
+  sqlite3_bind_text(stmt, 1, q->name, -1, SQLITE_STATIC);
+  sqlite3_bind_int(stmt, 2, q->priority);
+  sqlite3_bind_int(stmt, 3, q->max_concurrent);
+  sqlite3_bind_text(stmt, 4, q->schedule_start, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 5, q->schedule_stop, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 6, q->post_action[0] ? q->post_action : "none", -1,
+                    SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 7, q->post_action_arg, -1, SQLITE_STATIC);
+}
+
+int queue_create(const Queue *q, uint32_t *out_id) {
+  if (!db_ready() || !queue_fields_valid(q) || !out_id)
+    return -1;
+  *out_id = 0;
+  const char *sql = "INSERT INTO queues(name,priority,max_concurrent,"
+                    "schedule_start,schedule_stop,post_action,"
+                    "post_action_arg,created_at) VALUES(?,?,?,?,?,?,?,?)";
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  bind_queue_fields(stmt, q);
+  sqlite3_bind_int64(stmt, 8, (sqlite3_int64)time(NULL));
+  int step = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (step != SQLITE_DONE)
+    return -1;
+  *out_id = (uint32_t)sqlite3_last_insert_rowid(g_db);
+  return *out_id ? 0 : -1;
+}
+
+int queue_update(const Queue *q) {
+  if (!db_ready() || !queue_fields_valid(q) || !q->id)
+    return -1;
+  const char *sql = "UPDATE queues SET name=?,priority=?,max_concurrent=?,"
+                    "schedule_start=?,schedule_stop=?,post_action=?,"
+                    "post_action_arg=? WHERE id=?";
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  bind_queue_fields(stmt, q);
+  sqlite3_bind_int64(stmt, 8, (sqlite3_int64)q->id);
+  int step = sqlite3_step(stmt);
+  int changed = sqlite3_changes(g_db);
+  sqlite3_finalize(stmt);
+  return step == SQLITE_DONE && changed == 1 ? 0 : -1;
+}
+
+int queue_delete(uint32_t id) {
+  if (!db_ready() || id <= 1)
+    return -1;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, "DELETE FROM queues WHERE id=?", -1,
+                         &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id);
+  int step = sqlite3_step(stmt);
+  int changed = sqlite3_changes(g_db);
+  sqlite3_finalize(stmt);
+  return step == SQLITE_DONE && changed == 1 ? 0 : -1;
+}
+
+int queue_reorder(uint32_t id, int new_priority) {
+  if (!db_ready() || !id)
+    return -1;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, "UPDATE queues SET priority=? WHERE id=?",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_int(stmt, 1, new_priority);
+  sqlite3_bind_int64(stmt, 2, (sqlite3_int64)id);
+  int step = sqlite3_step(stmt);
+  int changed = sqlite3_changes(g_db);
+  sqlite3_finalize(stmt);
+  return step == SQLITE_DONE && changed == 1 ? 0 : -1;
+}
+
 /* Download persistence */
 
 static int insert_download(uint32_t id, const char *url,
@@ -744,7 +906,8 @@ int db_restore_queue(void) {
   const char *sql = "SELECT id, url, dest_path, total_size, status, priority, "
                     "cookie, referrer, extra_headers, expected_sha256, "
                     "speed_limit_bps, reserved_file, auto_filename, etag, "
-                    "last_modified, auth_user, auth_password "
+                    "last_modified, auth_user, auth_password, "
+                    "COALESCE(queue_id,1), created_at "
                     "FROM downloads WHERE status != 'DONE'";
 
   sqlite3_stmt *stmt = NULL;
@@ -762,6 +925,8 @@ int db_restore_queue(void) {
     d->id = (uint32_t)sqlite3_column_int(stmt, 0);
     d->total_size = (uint64_t)sqlite3_column_int64(stmt, 3);
     d->priority = sqlite3_column_int(stmt, 5);
+    d->queue_id = (uint32_t)sqlite3_column_int(stmt, 17);
+    d->created_at = (time_t)sqlite3_column_int64(stmt, 18);
 
     const char *url = (const char *)sqlite3_column_text(stmt, 1);
     const char *path = (const char *)sqlite3_column_text(stmt, 2);
