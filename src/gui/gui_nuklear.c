@@ -81,10 +81,11 @@ typedef struct {
   ProxyMode proxy_mode;
   char proxy_url[512], proxy_username[128], proxy_password[256];
   char numbers[9][16];
-  bool queue_add_open, queue_delete_open;
+  bool queue_add_open, queue_delete_open, batch_add_open;
   uint32_t queue_edit_id, queue_delete_id, queue_drag_id, add_queue_id;
   Queue queue_draft;
   char queue_priority[16], queue_cap[16];
+  char batch_urls[8192];
   bool clipboard_monitor, clipboard_monitor_enabled, clipboard_offer_open;
   char clipboard_seen[GUI_URL_CAP], clipboard_offer[GUI_URL_CAP];
   uint32_t clipboard_checked_at, clipboard_changed_at;
@@ -1262,6 +1263,12 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
   text_at(ctx, 20, h - 76, w - 40, 22, ui->error, 11, nk_rgb(224, 132, 136),
           SURFACE);
   fill(ctx, screen_rect(ctx, 0, h - 54, w, 1), 0, BORDER);
+  if (button(ctx, 20, h - 41, 200, 30, "Paste multiple URLs", true,
+             false)) {
+    ui->add_open = false;
+    ui->batch_add_open = true;
+    ui->error[0] = '\0';
+  }
   if (button(ctx, w - 232, h - 41, 80, 30, "Cancel", true, false))
     ui->add_open = false;
   if (button(ctx, w - 144, h - 41, 124, 30, "Add download", true, true)) {
@@ -1285,6 +1292,81 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
     } else
       copy_text(ui->error, sizeof(ui->error),
                 "Could not prepare or enqueue the download.");
+  }
+  modal_end(ctx);
+}
+
+static void draw_batch_add(struct nk_context *ctx, UiState *ui, float width,
+                           float height) {
+  float w = 520, h = 550;
+  if (!modal_start(ctx, "batch-add", "Paste multiple URLs",
+                   (width - w) / 2, (height - h) / 2, w, h,
+                   &ui->batch_add_open)) {
+    nk_end(ctx);
+    return;
+  }
+  text_at(ctx, 20, 68, w - 40, 20,
+          "One HTTP(S) URL per line; blank and # lines are ignored.",
+          11, MUTED, SURFACE);
+  nk_layout_space_push(ctx, nk_rect(20, 98, w - 40, 260));
+  nk_edit_string_zero_terminated(ctx, NK_EDIT_BOX, ui->batch_urls,
+                                 sizeof(ui->batch_urls), NULL);
+  text_at(ctx, 20, 368, w - 40, 20, "Save to", 11, MUTED, SURFACE);
+  nk_layout_space_push(ctx, nk_rect(20, 390, w - 40, 32));
+  nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->folder,
+                                 sizeof(ui->folder), NULL);
+  text_at(ctx, 20, h - 90, w - 40, 22, ui->error, 11, RED, SURFACE);
+  fill(ctx, screen_rect(ctx, 0, h - 54, w, 1), 0, BORDER);
+  if (button(ctx, w - 232, h - 41, 80, 30, "Cancel", true, false))
+    ui->batch_add_open = false;
+  if (button(ctx, w - 144, h - 41, 124, 30, "Add all", true, true)) {
+    size_t consumed = 0;
+    int added = 0;
+    bool failed = false;
+    size_t length = strlen(ui->batch_urls);
+    while (consumed < length) {
+      size_t line_end = consumed;
+      while (line_end < length && ui->batch_urls[line_end] != '\n')
+        line_end++;
+      size_t next = line_end < length ? line_end + 1 : line_end;
+      char line[GUI_URL_CAP];
+      size_t segment_length = line_end - consumed;
+      if (segment_length >= sizeof(line)) {
+        memmove(ui->batch_urls, ui->batch_urls + consumed,
+                length - consumed + 1);
+        failed = true;
+        break;
+      }
+      memcpy(line, ui->batch_urls + consumed, segment_length);
+      line[segment_length] = '\0';
+      char *url = line;
+      while (isspace((unsigned char)*url))
+        url++;
+      size_t url_length = strlen(url);
+      while (url_length && isspace((unsigned char)url[url_length - 1]))
+        url[--url_length] = '\0';
+      if (*url && *url != '#') {
+        if (!clipboard_url_valid(url) || !ui->folder[0] ||
+            !add_download(url, ui->folder, "", "", "", "", 0, 0)) {
+          memmove(ui->batch_urls, ui->batch_urls + consumed,
+                  length - consumed + 1);
+          failed = true;
+          break;
+        }
+        added++;
+      }
+      consumed = next;
+    }
+    if (failed)
+      copy_text(ui->error, sizeof(ui->error),
+                "Invalid URL, destination, or command queue full.");
+    else if (!added)
+      copy_text(ui->error, sizeof(ui->error), "Paste at least one URL.");
+    else {
+      ui->batch_urls[0] = '\0';
+      ui->batch_add_open = false;
+      ui->error[0] = '\0';
+    }
   }
   modal_end(ctx);
 }
@@ -1866,19 +1948,21 @@ int run_gui(void) {
     int window_width, window_height;
     SDL_GetWindowSize(SDL_GL_GetCurrentWindow(), &window_width, &window_height);
     float width = (float)window_width, height = (float)window_height;
-    bool modal = ui.settings_open || ui.add_open || ui.details_open ||
+    bool modal = ui.settings_open || ui.add_open || ui.batch_add_open ||
+                 ui.details_open ||
                  ui.delete_confirm_open || ui.queue_add_open ||
                  ui.queue_delete_open;
     if (modal) {
       float mw = ui.settings_open ? 460
                  : ui.queue_delete_open ? 480
-                 : ui.add_open || ui.delete_confirm_open || ui.queue_add_open
+                 : ui.add_open || ui.batch_add_open || ui.delete_confirm_open || ui.queue_add_open
                      ? 520 : 580;
       float mh =
           ui.settings_open ? (height * .8f > 650 ? 650 : height * .8f)
           : ui.delete_confirm_open ? 230
           : ui.queue_delete_open ? 220
           : ui.queue_add_open ? (height * .82f > 660 ? 660 : height * .82f)
+          : ui.batch_add_open ? 550
           : ui.add_open
               ? (ui.advanced ? (height * .85f > 700 ? 700 : height * .85f)
                              : 350)
@@ -1888,7 +1972,7 @@ int run_gui(void) {
       if (SDL_GetKeyboardState(NULL)[SDL_SCANCODE_ESCAPE] ||
           (nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT) &&
            !nk_input_is_mouse_hovering_rect(&ctx->input, modal_bounds))) {
-        ui.settings_open = ui.add_open = ui.details_open =
+        ui.settings_open = ui.add_open = ui.batch_add_open = ui.details_open =
             ui.delete_confirm_open = false;
         ui.queue_add_open = ui.queue_delete_open = false;
         modal = false;
@@ -1918,13 +2002,15 @@ int run_gui(void) {
     nk_end(ctx);
     if (!modal)
       draw_toast(ctx, &ui, width, height);
-    if (ui.settings_open || ui.add_open || ui.details_open ||
+    if (ui.settings_open || ui.add_open || ui.batch_add_open || ui.details_open ||
         ui.delete_confirm_open || ui.queue_add_open || ui.queue_delete_open) {
       modal_backdrop(ctx, width, height);
       if (ui.settings_open)
         draw_settings(ctx, &ui, width, height);
       else if (ui.add_open)
         draw_add(ctx, &ui, width, height);
+      else if (ui.batch_add_open)
+        draw_batch_add(ctx, &ui, width, height);
       else if (ui.delete_confirm_open)
         draw_delete_confirmation(ctx, &ui, width, height);
       else if (ui.queue_add_open)

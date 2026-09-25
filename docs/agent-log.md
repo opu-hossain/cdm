@@ -878,3 +878,10 @@ Completed: default-off `[ui] clipboard_monitor`, settings checkbox, 500 ms stabl
 Verification: test-first config round trip, focused config test, full build and CTest 32/32 passed; live clipboard popup smoke UNKNOWN without a graphical desktop.
 Open questions: none for implementation; graphical smoke remains pending.
 Next: 2.5.2 batch add.
+
+## 2026-09-25 — Codex, task 2.5.2
+Branch: `cdm`; commit: `feat(cli): batch add from a text file`.
+Completed: `add --file` with line results and 0/1/2 exit status, plus a themed multiline GUI review dialog using existing add commands.
+Verification: test-first loopback CLI fixture covers two URLs, comments/blanks, malformed input, and missing file; full build and CTest 33/33 passed.
+Open questions: GUI dialog interaction smoke UNKNOWN without a graphical desktop.
+Next: 2.6.1 categories schema.

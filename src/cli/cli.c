@@ -206,6 +206,98 @@ static int run_list(int sock, uint16_t daemon_version, int argc, char **argv) {
   return result;
 }
 
+static int submit_add(int sock, uint16_t daemon_version, const char *url,
+                      const char *dest_dir, const IpcDownloadOptions *opts) {
+  char filename[512];
+  char full_path[IPC_MAX_PATH_LEN];
+  char unique_path[IPC_MAX_PATH_LEN];
+  if (!dest_dir || !dest_dir[0])
+    dest_dir = config_get_default_download_dir();
+  path_filename_from_url(url, filename, sizeof(filename));
+  if (!path_join(dest_dir, filename, full_path, sizeof(full_path)) ||
+      !path_make_unique(full_path, unique_path, sizeof(unique_path))) {
+    fprintf(stderr, "Could not create a destination path\n");
+    return 1;
+  }
+  IpcAddResponse add = {0};
+  if (daemon_version >= 3) {
+    if (ipc_send_add_download_v2(sock, url, unique_path, opts, true, &add) != 0)
+      add.result = IPC_RESULT_ERROR;
+  } else {
+    add.id = ipc_send_add_download_auto(sock, url, unique_path, opts);
+    add.result = add.id ? IPC_RESULT_OK : IPC_RESULT_ERROR;
+  }
+  if (!add.id) {
+    fprintf(stderr, "Daemon rejected the download\n");
+    return 1;
+  }
+  if (add.result == IPC_RESULT_REJECTED)
+    printf("Already downloading (ID %u)\n", add.id);
+  else
+    printf("Download added (ID: %u, initial path %s; final filename may "
+           "change after probing)\n", add.id, unique_path);
+  return 0;
+}
+
+static bool batch_url_valid(const char *url) {
+  const char *host = NULL;
+  if (strncmp(url, "https://", 8) == 0)
+    host = url + 8;
+  else if (strncmp(url, "http://", 7) == 0)
+    host = url + 7;
+  if (!host || !*host || *host == '/' || *host == '?' || *host == '#')
+    return false;
+  for (const unsigned char *p = (const unsigned char *)url; *p; ++p)
+    if (isspace(*p) || iscntrl(*p))
+      return false;
+  return true;
+}
+
+static int run_batch_add(int sock, uint16_t daemon_version, const char *file,
+                         const char *dest_dir) {
+  FILE *fp = fopen(file, "r");
+  if (!fp) {
+    fprintf(stderr, "Could not read URL file: %s\n", strerror(errno));
+    return 2;
+  }
+  char line[4096];
+  unsigned long line_number = 0;
+  int result = 0;
+  while (fgets(line, sizeof(line), fp)) {
+    line_number++;
+    size_t length = strlen(line);
+    bool complete = length && line[length - 1] == '\n';
+    if (!complete && !feof(fp)) {
+      int ch;
+      while ((ch = fgetc(fp)) != '\n' && ch != EOF) {}
+      fprintf(stderr, "Line %lu: URL too long\n", line_number);
+      result = 1;
+      continue;
+    }
+    while (length && (line[length - 1] == '\n' ||
+                      line[length - 1] == '\r' ||
+                      isspace((unsigned char)line[length - 1])))
+      line[--length] = '\0';
+    char *url = line;
+    while (isspace((unsigned char)*url))
+      url++;
+    if (!*url || *url == '#')
+      continue;
+    printf("Line %lu: ", line_number);
+    if (!batch_url_valid(url) ||
+        submit_add(sock, daemon_version, url, dest_dir, NULL) != 0) {
+      puts("failed");
+      result = 1;
+    }
+  }
+  if (ferror(fp)) {
+    fprintf(stderr, "Could not read URL file: %s\n", strerror(errno));
+    result = 2;
+  }
+  fclose(fp);
+  return result;
+}
+
 /* Public API */
 
 int run_cli(int argc, char **argv) {
@@ -216,11 +308,22 @@ int run_cli(int argc, char **argv) {
     printf("  add <url> [dest_dir] [--cookie V] [--referrer V] "
            "[--header \"K: V\"] [--sha256 HEX] [--limit BYTES_PER_SEC]\n");
     printf("         (--header may be repeated)\n");
+    printf("  add --file list.txt [dest_dir]  Add one URL per line\n");
     printf("  pause  <id>          Pause a download\n");
     printf("  resume <id>          Resume a download\n");
     printf("  cancel <id>          Cancel a download\n");
     printf("  list [--offset N] [--limit N] [--status S]\n");
     return 1;
+  }
+
+  if (argc >= 4 && strcmp(argv[1], "add") == 0 &&
+      strcmp(argv[2], "--file") == 0) {
+    FILE *probe = fopen(argv[3], "r");
+    if (!probe) {
+      fprintf(stderr, "Could not read URL file: %s\n", strerror(errno));
+      return 2;
+    }
+    fclose(probe);
   }
 
   /* ---------- connect to daemon ---------- */
@@ -240,6 +343,15 @@ int run_cli(int argc, char **argv) {
   if (strcmp(cmd, "list") == 0) {
     ret = run_list(sock, daemon_version, argc, argv);
 
+  } else if (strcmp(cmd, "add") == 0 && argc >= 3 &&
+             strcmp(argv[2], "--file") == 0) {
+    if (argc < 4 || argc > 5) {
+      fprintf(stderr, "Usage: cdm cli add --file list.txt [dest_dir]\n");
+      ret = 1;
+    } else
+      ret = run_batch_add(sock, daemon_version, argv[3],
+                          argc == 5 ? argv[4] : NULL);
+
   } else if (strcmp(cmd, "add") == 0 && argc >= 3) {
     const char *url = argv[2];
     int first_opt_index = 3;
@@ -249,24 +361,6 @@ int run_cli(int argc, char **argv) {
       dest_dir = argv[3];
       first_opt_index = 4;
     }
-    char filename[512];
-    char full_path[IPC_MAX_PATH_LEN];
-    char unique_path[IPC_MAX_PATH_LEN];
-    if (!dest_dir || dest_dir[0] == '\0') {
-      dest_dir = config_get_default_download_dir();
-    }
-    path_filename_from_url(url, filename, sizeof(filename));
-    if (!path_join(dest_dir, filename, full_path, sizeof(full_path))) {
-      LOG_ERROR("Destination path too long");
-      ipc_client_disconnect(sock);
-      return 1;
-    }
-    if (!path_make_unique(full_path, unique_path, sizeof(unique_path))) {
-      LOG_ERROR("Could not find an available destination path");
-      ipc_client_disconnect(sock);
-      return 1;
-    }
-
     IpcDownloadOptions opts;
     char headers_buf[4096] = {0};
     bool valid_opts = false;
@@ -279,27 +373,8 @@ int run_cli(int argc, char **argv) {
       return 1;
     }
 
-    IpcAddResponse add = {0};
-    if (daemon_version >= 3) {
-      if (ipc_send_add_download_v2(sock, url, unique_path,
-                                   has_opts ? &opts : NULL, true, &add) != 0)
-        add.result = IPC_RESULT_ERROR;
-    } else {
-      add.id = ipc_send_add_download_auto(
-          sock, url, unique_path, has_opts ? &opts : NULL);
-      add.result = add.id ? IPC_RESULT_OK : IPC_RESULT_ERROR;
-    }
-    uint32_t id = add.id;
-    if (id == 0) {
-      LOG_WARN("Daemon rejected the download (invalid or unsafe destination "
-               "path?)");
-      ret = 1;
-    } else if (add.result == IPC_RESULT_REJECTED) {
-      printf("Already downloading (ID %u)\n", id);
-    } else {
-      printf("Download added (ID: %u, initial path %s; final filename may "
-             "change after probing)\n", id, unique_path);
-    }
+    ret = submit_add(sock, daemon_version, url, dest_dir,
+                     has_opts ? &opts : NULL);
 
   } else if (strcmp(cmd, "pause") == 0 && argc >= 3) {
     uint32_t id = 0;
