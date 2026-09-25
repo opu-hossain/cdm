@@ -679,3 +679,21 @@ Open questions:
 
 Next:
 - 1.4.2 Enforce duplicate detection on add. Phase 0 merge gate 0.6.3 remains deferred.
+
+## 2026-09-25 — Codex, task 1.4.2
+
+Branch: `cdm`
+Commit: `feat(ipc): reject duplicate active downloads by url` (this entry's commit)
+
+Tasks completed:
+- 1.4.2 Added version 3 add and browser-confirm messages with result and ID responses. Active duplicate URLs return the existing ID, including normalized URL variants. CLI reports `Already downloading (ID N)` with exit status 0. GUI highlights the row and shows a duplicate toast; browser popup shows a duplicate notice. Version 2 progress and list features remain available when the protocol version is 3.
+
+Tests:
+- Test first: the new IPC duplicate test failed to compile before the versioned API existed.
+- IPC tests cover duplicate direct adds and browser offers, including repeated confirmation. A local 127.0.0.1 CLI integration test verifies the duplicate message and exit status. `cmake --build build -j` and full CTest passed 31/31. CLI integration serves as the affected CLI smoke test; interactive GUI clicks were not automated.
+
+Open questions:
+- None for this task.
+
+Next:
+- 1.5.1 DB delete. Phase 0 merge gate 0.6.3 remains deferred.

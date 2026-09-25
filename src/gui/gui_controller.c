@@ -240,7 +240,7 @@ bool gui_controller_history_next(GuiHistoryWindow *window) {
 
 static void publish_operation(GuiControllerOperation operation, uint32_t id,
                               const char *url, const char *dest_path,
-                              bool succeeded) {
+                              bool succeeded, bool duplicate) {
   GuiControllerEvent event = {.type = GUI_CONTROLLER_EVENT_OPERATION};
   event.data.operation.operation = operation;
   event.data.operation.download_id = id;
@@ -251,6 +251,7 @@ static void publish_operation(GuiControllerOperation operation, uint32_t id,
     snprintf(event.data.operation.dest_path,
              sizeof(event.data.operation.dest_path), "%s", dest_path);
   event.data.operation.succeeded = succeeded;
+  event.data.operation.duplicate = duplicate;
   gui_controller_publish(&event);
 }
 
@@ -314,8 +315,8 @@ static void process_command(const GuiControllerCommand *command) {
   switch (command->type) {
   case GUI_CONTROLLER_COMMAND_ADD: {
     uint32_t id = 0;
-    succeeded = (command->auto_filename ? gui_client_add_download_auto
-                                        : gui_client_add_download)(
+    bool duplicate = false;
+    succeeded = gui_client_add_download_result(
         command->url, command->dest_path,
         command->options.cookie || command->options.referrer ||
                 command->options.extra_headers ||
@@ -323,9 +324,9 @@ static void process_command(const GuiControllerCommand *command) {
                 command->options.speed_limit_bps > 0
             ? &command->options
             : NULL,
-        &id);
+        command->auto_filename, &id, &duplicate);
     publish_operation(GUI_CONTROLLER_OPERATION_ADD, id, command->url,
-                      command->dest_path, succeeded);
+                      command->dest_path, succeeded, duplicate);
     if (!succeeded)
       publish_error("Download could not be added");
     return;
@@ -355,7 +356,7 @@ static void process_command(const GuiControllerCommand *command) {
   case GUI_CONTROLLER_COMMAND_PAGE:
     return; /* handled by the controller loop with its worker-owned window */
   }
-  publish_operation(operation, command->id, NULL, NULL, succeeded);
+  publish_operation(operation, command->id, NULL, NULL, succeeded, false);
   if (!succeeded)
     publish_error("Download operation failed");
 }

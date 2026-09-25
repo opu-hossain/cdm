@@ -54,7 +54,8 @@ static const struct nk_user_font *fonts[6]; /* 11 through 16 px */
 
 typedef struct {
   bool connected, add_open, settings_open, details_open, details_found;
-  bool advanced, toast_open, menu_just_opened;
+  bool advanced, toast_open, duplicate_toast_open, menu_just_opened;
+  uint32_t duplicate_id;
   bool history_loading;
   uint32_t history_offset, history_total, pending_scroll_adjust;
   uint32_t selected_id, menu_id;
@@ -1194,6 +1195,19 @@ static void draw_details(struct nk_context *ctx, UiState *ui, float width,
 
 static void draw_toast(struct nk_context *ctx, UiState *ui, float width,
                        float height) {
+  if (ui->duplicate_toast_open) {
+    if (nk_begin(ctx, "duplicate-toast",
+                 nk_rect(width - 300, height - 100, 280, 80),
+                 NK_WINDOW_NO_SCROLLBAR)) {
+      nk_layout_row_dynamic(ctx, 24, 1);
+      nk_labelf(ctx, NK_TEXT_LEFT, "Already downloading (ID %u)",
+                ui->duplicate_id);
+      nk_layout_row_dynamic(ctx, 28, 1);
+      if (nk_button_label(ctx, "Close"))
+        ui->duplicate_toast_open = false;
+    }
+    nk_end(ctx);
+  }
   if (!ui->toast_open)
     return;
   if (nk_begin(ctx, "completion-toast",
@@ -1290,8 +1304,14 @@ static void consume_events(UiState *ui) {
         uint32_t id = event.data.operation.download_id;
         switch (event.data.operation.operation) {
         case GUI_CONTROLLER_OPERATION_ADD:
-          gui_model_add_local_row(id, event.data.operation.url,
-                                  event.data.operation.dest_path);
+          if (event.data.operation.duplicate) {
+            ui->selected_id = id;
+            ui->duplicate_id = id;
+            ui->duplicate_toast_open = true;
+          } else {
+            gui_model_add_local_row(id, event.data.operation.url,
+                                    event.data.operation.dest_path);
+          }
           break;
         case GUI_CONTROLLER_OPERATION_PAUSE:
           gui_model_apply_optimistic(id, "PAUSED");

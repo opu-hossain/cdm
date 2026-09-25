@@ -55,6 +55,8 @@ static void report_popup_ready(void) {
 typedef struct {
   IpcBrowserOffer offer;
   uint32_t download_id;
+  uint16_t daemon_version;
+  bool duplicate;
   char filename[IPC_BROWSER_FILENAME_MAX];
   char folder[IPC_MAX_PATH_LEN];
   char full_path[IPC_MAX_PATH_LEN];
@@ -180,13 +182,20 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
                    sizeof(state->full_path))) {
       snprintf(state->error, sizeof(state->error),
                "Choose a valid folder and filename.");
-    } else if (ipc_browser_confirm(daemon, state->offer.offer_id,
-                                   state->full_path,
-                                   &state->download_id) != 0) {
+    } else {
+      IpcAddResponse response = {0};
+      int result = state->daemon_version >= 3
+          ? ipc_browser_confirm_v2(daemon, state->offer.offer_id,
+                                   state->full_path, &response)
+          : ipc_browser_confirm(daemon, state->offer.offer_id,
+                                state->full_path, &response.id);
+      state->download_id = response.id;
+      state->duplicate = response.result == IPC_RESULT_REJECTED;
+      if (result != 0)
       snprintf(state->error, sizeof(state->error),
                "Could not start download. Check the destination.");
-    } else {
-      state->error[0] = '\0';
+      else
+        state->error[0] = '\0';
     }
   }
   nk_layout_row_end(ctx);
@@ -228,7 +237,7 @@ static void connect_progress(PopupState *state) {
     ipc_client_disconnect(sock);
     goto retry;
   }
-  if (version == IPC_PROTOCOL_VERSION && ipc_send_subscribe_v2(sock) != 0) {
+  if (version >= 2 && ipc_send_subscribe_v2(sock) != 0) {
     ipc_client_disconnect(sock);
     goto retry;
   }
@@ -314,6 +323,11 @@ static void draw_progress(struct nk_context *ctx, PopupState *state,
                  strcmp(state->progress.status, "CANCELED") == 0;
   nk_layout_row_dynamic(ctx, 30, 1);
   nk_label(ctx, done ? "Download complete" : "Downloading", NK_TEXT_LEFT);
+  if (state->duplicate) {
+    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_labelf_colored(ctx, NK_TEXT_LEFT, ACCENT,
+                      "Already downloading (ID %u)", state->download_id);
+  }
   nk_layout_row_dynamic(ctx, 24, 1);
   nk_label(ctx, state->filename, NK_TEXT_LEFT);
   nk_layout_row_dynamic(ctx, 30, 1);
@@ -401,10 +415,12 @@ static void draw_progress(struct nk_context *ctx, PopupState *state,
 }
 
 int run_browser_popup(uint32_t offer_id) {
-  int daemon = ipc_client_connect_compatible(1500, NULL);
+  uint16_t daemon_version = 1;
+  int daemon = ipc_client_connect_compatible(1500, &daemon_version);
   if (daemon < 0)
     return 1;
   PopupState state = {.progress_sock = -1};
+  state.daemon_version = daemon_version;
   if (ipc_browser_get_offer(daemon, offer_id, &state.offer) != 0 ||
       state.offer.state != IPC_BROWSER_WAITING) {
     ipc_client_disconnect(daemon);

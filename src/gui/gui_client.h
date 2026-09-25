@@ -46,6 +46,10 @@ bool gui_client_add_download(const char *url, const char *dest,
 bool gui_client_add_download_auto(const char *url, const char *dest,
                                   const IpcDownloadOptions *opts,
                                   uint32_t *out_id);
+bool gui_client_add_download_result(const char *url, const char *dest,
+                                    const IpcDownloadOptions *opts,
+                                    bool auto_filename, uint32_t *out_id,
+                                    bool *duplicate);
 bool gui_client_reload_config(void);
 
 /* Fetch a full snapshot. The caller owns *out_records on success. */

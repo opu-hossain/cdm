@@ -179,6 +179,43 @@ Test(ipc, add_credentials_details_never_return_password) {
   unsetenv("DOWNLOADMGR_ROOT");
 }
 
+Test(ipc, duplicate_v2_add_returns_existing_id_without_second_row) {
+  char dir[] = "/tmp/cdm-duplicate-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  setenv("DOWNLOADMGR_ROOT", dir, 1);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  char first[128], second[128];
+  snprintf(first, sizeof(first), "%s/first.bin", dir);
+  snprintf(second, sizeof(second), "%s/second.bin", dir);
+  IpcAddResponse result = {0};
+  cr_assert_eq(ipc_send_add_download_v2(client,
+      "HTTP://127.0.0.1:80/File?Q=One#part", first, NULL, true, &result), 0);
+  cr_assert_eq(result.result, IPC_RESULT_OK);
+  cr_assert_neq(result.id, 0);
+  uint32_t existing = result.id;
+  cr_assert_eq(ipc_send_add_download_v2(client,
+      "http://127.0.0.1/File?Q=One", second, NULL, true, &result), 0);
+  cr_assert_eq(result.result, IPC_RESULT_REJECTED);
+  cr_assert_eq(result.id, existing);
+  cr_assert_eq(db_count_downloads_total(), 1);
+  cr_assert_eq(access(second, F_OK), -1);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  queue_manager_remove(existing);
+  db_close();
+  unlink(first);
+  rmdir(dir);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
 Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   char dir[] = "/tmp/cdm-browser-ipc-XXXXXX";
   cr_assert_not_null(mkdtemp(dir));
@@ -234,6 +271,24 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   cr_assert_eq(ipc_browser_confirm(client, first.offer_id, dest,
                                    &second_id), 0);
   cr_assert_eq(second_id, download_id);
+  IpcBrowserOffer duplicate_request = {0}, duplicate_offer = {0};
+  strcpy(duplicate_request.request_id, "ipc-test-offer-duplicate");
+  strcpy(duplicate_request.url, "https://EXAMPLE.org:443/archive.tar.zst#x");
+  strcpy(duplicate_request.filename, "duplicate.tar.zst");
+  cr_assert_eq(ipc_browser_offer(client, &duplicate_request,
+                                 &duplicate_offer), 0);
+  char duplicate_dest[1024];
+  snprintf(duplicate_dest, sizeof(duplicate_dest), "%s/duplicate.tar.zst",
+           dir);
+  IpcAddResponse duplicate_result = {0};
+  cr_assert_eq(ipc_browser_confirm_v2(client, duplicate_offer.offer_id,
+                                      duplicate_dest, &duplicate_result), 0);
+  cr_assert_eq(duplicate_result.result, IPC_RESULT_REJECTED);
+  cr_assert_eq(duplicate_result.id, download_id);
+  cr_assert_eq(ipc_browser_confirm_v2(client, duplicate_offer.offer_id,
+                                      duplicate_dest, &duplicate_result), 0);
+  cr_assert_eq(duplicate_result.result, IPC_RESULT_REJECTED);
+  cr_assert_eq(db_count_downloads_total(), 1);
   cr_assert_eq(queue_manager_count_by_status(DOWNLOAD_QUEUED), 1);
   cr_assert_neq(ipc_browser_dismiss(client, first.offer_id), 0);
 

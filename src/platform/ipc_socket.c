@@ -7,6 +7,7 @@
 #include "../persistence/db.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
+#include "../utils/url.h"
 #include "../utils/path.h"
 #include "../vendor/cJSON.h"
 #include "file_io.h"
@@ -173,6 +174,7 @@ static once_flag g_client_mutex_once = ONCE_FLAG_INIT;
 typedef struct {
   IpcBrowserOffer offer;
   time_t touched_at;
+  bool duplicate;
 } BrowserOfferSlot;
 
 /* Only the daemon's IPC poll thread reads or mutates these slots. */
@@ -404,6 +406,7 @@ static bool valid_message_header(const MsgHeader *header) {
   switch (header->type) {
   case MSG_ADD_DOWNLOAD:
   case MSG_ADD_DOWNLOAD_AUTO:
+  case MSG_ADD_DOWNLOAD_V2:
   case MSG_BROWSER_OFFER:
     return header->length <= IPC_MAX_FRAME_SIZE;
   case MSG_PAUSE:
@@ -416,6 +419,7 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_BROWSER_SUBSCRIBE_PROGRESS:
     return header->length == sizeof(uint32_t);
   case MSG_BROWSER_CONFIRM:
+  case MSG_BROWSER_CONFIRM_V2:
     return header->length >= sizeof(uint32_t) * 2 &&
            header->length <= sizeof(uint32_t) * 2 + IPC_MAX_PATH_LEN - 1;
   case MSG_LIST_PAGE:
@@ -538,7 +542,8 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     break;
   }
   case MSG_ADD_DOWNLOAD:
-  case MSG_ADD_DOWNLOAD_AUTO: {
+  case MSG_ADD_DOWNLOAD_AUTO:
+  case MSG_ADD_DOWNLOAD_V2: {
     char url[IPC_MAX_URL_LEN];
     char dest[IPC_MAX_PATH_LEN];
     char options_json[8192];
@@ -549,6 +554,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     LOG_INFO("MSG_ADD_DOWNLOAD received: url='%s' dest='%s'", url, dest);
 
     RequestOptions opts = {0};
+    bool auto_filename = hdr->type == MSG_ADD_DOWNLOAD_AUTO;
     if (options_json[0] != '\0') {
       cJSON *root = cJSON_Parse(options_json);
       if (root) {
@@ -578,17 +584,33 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         if (cJSON_IsString(v) && v->valuestring)
           strncpy(opts.auth_password, v->valuestring,
                   sizeof(opts.auth_password) - 1);
+        if (hdr->type == MSG_ADD_DOWNLOAD_V2) {
+          v = cJSON_GetObjectItemCaseSensitive(root, "auto_filename");
+          auto_filename = cJSON_IsTrue(v);
+        }
         cJSON_Delete(root);
       } else {
         LOG_WARN("MSG_ADD_DOWNLOAD: malformed options JSON, ignoring");
       }
     }
 
-    uint32_t id = reserve_download(url, dest, &opts,
-                                   hdr->type == MSG_ADD_DOWNLOAD_AUTO);
+    uint32_t id = 0;
+    int found = 0;
+    char normalized[IPC_MAX_URL_LEN];
+    if (url_normalize(url, normalized, sizeof(normalized)))
+      found = db_find_active_by_url(normalized, &id);
+    if (found == 0)
+      id = reserve_download(url, dest, &opts, auto_filename);
     LOG_INFO("MSG_ADD_DOWNLOAD: queue_manager_add returned id=%u", id);
-
-    ipc_write_exact(client_fd, &id, sizeof(id));
+    if (hdr->type == MSG_ADD_DOWNLOAD_V2) {
+      IpcAddResponse response = {
+          .result = found == 1 ? IPC_RESULT_REJECTED
+                               : id ? IPC_RESULT_OK : IPC_RESULT_ERROR,
+          .id = id};
+      ipc_write_exact(client_fd, &response, sizeof(response));
+    } else {
+      ipc_write_exact(client_fd, &id, sizeof(id));
+    }
     break;
   }
   case MSG_BROWSER_OFFER: {
@@ -647,9 +669,11 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     ipc_write_exact(client_fd, &response, sizeof(response));
     break;
   }
-  case MSG_BROWSER_CONFIRM: {
+  case MSG_BROWSER_CONFIRM:
+  case MSG_BROWSER_CONFIRM_V2: {
     char payload[sizeof(uint32_t) * 2 + IPC_MAX_PATH_LEN];
     uint32_t download_id = 0;
+    bool duplicate = false;
     if (ipc_read_exact(client_fd, payload, hdr->length) != 0)
       return;
     uint32_t offer_id = 0, path_len = 0;
@@ -662,14 +686,22 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       memcpy(dest, payload + sizeof(uint32_t) * 2, path_len);
       dest[path_len] = '\0';
       BrowserOfferSlot *slot = browser_find_offer(offer_id);
-      if (slot && slot->offer.state == IPC_BROWSER_CONFIRMED)
+      if (slot && slot->offer.state == IPC_BROWSER_CONFIRMED) {
         download_id = slot->offer.download_id;
-      else if (slot && slot->offer.state == IPC_BROWSER_WAITING) {
+        duplicate = slot->duplicate;
+      } else if (slot && slot->offer.state == IPC_BROWSER_WAITING) {
         RequestOptions opts = {0};
         snprintf(opts.referrer, sizeof(opts.referrer), "%s",
                  slot->offer.referrer);
-        download_id = reserve_download(slot->offer.url, dest, &opts, false);
+        char normalized[IPC_MAX_URL_LEN];
+        int found = 0;
+        if (url_normalize(slot->offer.url, normalized, sizeof(normalized)))
+          found = db_find_active_by_url(normalized, &download_id);
+        if (found == 0)
+          download_id = reserve_download(slot->offer.url, dest, &opts, false);
         if (download_id) {
+          slot->duplicate = found == 1;
+          duplicate = slot->duplicate;
           slot->offer.download_id = download_id;
           slot->offer.state = IPC_BROWSER_CONFIRMED;
           slot->touched_at = time(NULL);
@@ -678,7 +710,15 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         }
       }
     }
-    ipc_write_exact(client_fd, &download_id, sizeof(download_id));
+    if (hdr->type == MSG_BROWSER_CONFIRM_V2) {
+      IpcAddResponse response = {
+          .result = duplicate ? IPC_RESULT_REJECTED
+                              : download_id ? IPC_RESULT_OK : IPC_RESULT_ERROR,
+          .id = download_id};
+      ipc_write_exact(client_fd, &response, sizeof(response));
+    } else {
+      ipc_write_exact(client_fd, &download_id, sizeof(download_id));
+    }
     break;
   }
   case MSG_BROWSER_DISMISS: {
@@ -1157,33 +1197,40 @@ void ipc_client_disconnect(int fd) {
 
 /* High‑level request / response */
 
-static uint32_t send_add_download(int sock, MsgType type, const char *url,
-                                  const char *dest_path,
-                                  const IpcDownloadOptions *options) {
+static int send_add_download(int sock, MsgType type, const char *url,
+                             const char *dest_path,
+                             const IpcDownloadOptions *options,
+                             bool auto_filename, IpcAddResponse *out) {
   if (sock < 0 || !url || !dest_path)
-    return 0;
+    return -1;
 
   char *options_json = NULL;
-  if (options) {
+  if (options || type == MSG_ADD_DOWNLOAD_V2) {
     cJSON *root = cJSON_CreateObject();
-    if (options->cookie && options->cookie[0])
+    if (!root)
+      return -1;
+    if (type == MSG_ADD_DOWNLOAD_V2)
+      cJSON_AddBoolToObject(root, "auto_filename", auto_filename);
+    if (options && options->cookie && options->cookie[0])
       cJSON_AddStringToObject(root, "cookie", options->cookie);
-    if (options->referrer && options->referrer[0])
+    if (options && options->referrer && options->referrer[0])
       cJSON_AddStringToObject(root, "referrer", options->referrer);
-    if (options->extra_headers && options->extra_headers[0])
+    if (options && options->extra_headers && options->extra_headers[0])
       cJSON_AddStringToObject(root, "extra_headers", options->extra_headers);
-    if (options->expected_sha256 && options->expected_sha256[0])
+    if (options && options->expected_sha256 && options->expected_sha256[0])
       cJSON_AddStringToObject(root, "expected_sha256",
                               options->expected_sha256);
-    if (options->speed_limit_bps > 0)
+    if (options && options->speed_limit_bps > 0)
       cJSON_AddNumberToObject(root, "speed_limit_bps",
                               (double)options->speed_limit_bps);
-    if (options->auth_user && options->auth_user[0])
+    if (options && options->auth_user && options->auth_user[0])
       cJSON_AddStringToObject(root, "auth_user", options->auth_user);
-    if (options->auth_password && options->auth_password[0])
+    if (options && options->auth_password && options->auth_password[0])
       cJSON_AddStringToObject(root, "auth_password", options->auth_password);
     options_json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
+    if (!options_json)
+      return -1;
   }
 
   const char *json_str = options_json ? options_json : "";
@@ -1209,25 +1256,43 @@ static uint32_t send_add_download(int sock, MsgType type, const char *url,
   if (sent && json_str[0] != '\0')
     sent = ipc_write_exact(sock, json_str, strlen(json_str)) == 0;
 
-  uint32_t id = 0;
-  if (sent)
-    sent = ipc_read_exact(sock, &id, sizeof(id)) == 0;
+  IpcAddResponse response = {0};
+  if (sent && type == MSG_ADD_DOWNLOAD_V2)
+    sent = ipc_read_exact(sock, &response, sizeof(response)) == 0;
+  else if (sent) {
+    sent = ipc_read_exact(sock, &response.id, sizeof(response.id)) == 0;
+    response.result = response.id ? IPC_RESULT_OK : IPC_RESULT_ERROR;
+  }
 
   if (options_json)
     cJSON_free(options_json);
-  return sent ? id : 0;
+  if (out)
+    *out = response;
+  return sent ? 0 : -1;
 }
 
 uint32_t ipc_send_add_download(int sock, const char *url, const char *dest_path,
                                const IpcDownloadOptions *options) {
-  return send_add_download(sock, MSG_ADD_DOWNLOAD, url, dest_path, options);
+  IpcAddResponse response = {0};
+  return send_add_download(sock, MSG_ADD_DOWNLOAD, url, dest_path, options,
+                           false, &response) == 0 ? response.id : 0;
 }
 
 uint32_t ipc_send_add_download_auto(int sock, const char *url,
                                     const char *dest_path,
                                     const IpcDownloadOptions *options) {
+  IpcAddResponse response = {0};
   return send_add_download(sock, MSG_ADD_DOWNLOAD_AUTO, url, dest_path,
-                           options);
+                           options, true, &response) == 0 ? response.id : 0;
+}
+
+int ipc_send_add_download_v2(int sock, const char *url, const char *dest_path,
+                             const IpcDownloadOptions *options,
+                             bool auto_filename, IpcAddResponse *out) {
+  if (!out)
+    return -1;
+  return send_add_download(sock, MSG_ADD_DOWNLOAD_V2, url, dest_path, options,
+                           auto_filename, out);
 }
 
 int ipc_client_connect_timeout(int timeout_ms) {
@@ -1266,7 +1331,7 @@ int ipc_client_connect_compatible(int timeout_ms, uint16_t *daemon_version) {
       return -1;
     version = 1;
   }
-  if (version != IPC_PROTOCOL_VERSION)
+  if (version < 2)
     LOG_WARN("IPC daemon version %u differs from client version %u; using v1 messages",
              (unsigned)version, (unsigned)IPC_PROTOCOL_VERSION);
   if (daemon_version)
@@ -1516,9 +1581,9 @@ int ipc_browser_get_offer(int sock, uint32_t offer_id, IpcBrowserOffer *out) {
   return out->offer_id ? 0 : -1;
 }
 
-int ipc_browser_confirm(int sock, uint32_t offer_id, const char *dest_path,
-                        uint32_t *download_id) {
-  if (!offer_id || !dest_path || !download_id)
+static int browser_confirm_request(int sock, MsgType type, uint32_t offer_id,
+                                   const char *dest_path, IpcAddResponse *out) {
+  if (!offer_id || !dest_path || !out)
     return -1;
   size_t len = strlen(dest_path);
   if (!len || len >= IPC_MAX_PATH_LEN)
@@ -1528,11 +1593,35 @@ int ipc_browser_confirm(int sock, uint32_t offer_id, const char *dest_path,
   memcpy(payload, &offer_id, sizeof(offer_id));
   memcpy(payload + sizeof(offer_id), &wire_len, sizeof(wire_len));
   memcpy(payload + sizeof(uint32_t) * 2, dest_path, len);
-  if (browser_write_request(sock, MSG_BROWSER_CONFIRM, payload,
-                            (uint32_t)(sizeof(uint32_t) * 2 + len)) != 0 ||
-      ipc_read_exact(sock, download_id, sizeof(*download_id)) != 0)
+  if (browser_write_request(sock, type, payload,
+                            (uint32_t)(sizeof(uint32_t) * 2 + len)) != 0)
     return -1;
-  return *download_id ? 0 : -1;
+  if (type == MSG_BROWSER_CONFIRM_V2) {
+    if (ipc_read_exact(sock, out, sizeof(*out)) != 0)
+      return -1;
+  } else {
+    if (ipc_read_exact(sock, &out->id, sizeof(out->id)) != 0)
+      return -1;
+    out->result = out->id ? IPC_RESULT_OK : IPC_RESULT_ERROR;
+  }
+  return out->id ? 0 : -1;
+}
+
+int ipc_browser_confirm(int sock, uint32_t offer_id, const char *dest_path,
+                        uint32_t *download_id) {
+  if (!download_id)
+    return -1;
+  IpcAddResponse response = {0};
+  int result = browser_confirm_request(sock, MSG_BROWSER_CONFIRM, offer_id,
+                                       dest_path, &response);
+  *download_id = response.id;
+  return result;
+}
+
+int ipc_browser_confirm_v2(int sock, uint32_t offer_id, const char *dest_path,
+                           IpcAddResponse *out) {
+  return browser_confirm_request(sock, MSG_BROWSER_CONFIRM_V2, offer_id,
+                                 dest_path, out);
 }
 
 int ipc_browser_dismiss(int sock, uint32_t offer_id) {

@@ -72,6 +72,12 @@ typedef struct {
   const char *auth_password;
 } IpcDownloadOptions;
 
+/* Response to MSG_ADD_DOWNLOAD_V2 and MSG_BROWSER_CONFIRM_V2. */
+typedef struct {
+  uint32_t result; // IpcResult
+  uint32_t id; // new ID, or existing ID when result is REJECTED
+} IpcAddResponse;
+
 /* Server operations. */
 /* 0: acquired; 1: another daemon holds it; -1: error. Caller closes fd. */
 int ipc_daemon_lock_acquire(int *fd_out);
@@ -97,6 +103,9 @@ uint32_t ipc_send_add_download(int sock, const char *url, const char *dest_path,
 uint32_t ipc_send_add_download_auto(int sock, const char *url,
                                     const char *dest_path,
                                     const IpcDownloadOptions *options);
+int ipc_send_add_download_v2(int sock, const char *url, const char *dest_path,
+                             const IpcDownloadOptions *options,
+                             bool auto_filename, IpcAddResponse *out);
 int ipc_send_pause(int sock, uint32_t id);
 int ipc_send_resume(int sock, uint32_t id);
 int ipc_send_cancel(int sock, uint32_t id);
@@ -120,6 +129,8 @@ int ipc_browser_offer(int sock, const IpcBrowserOffer *offer,
 int ipc_browser_get_offer(int sock, uint32_t offer_id, IpcBrowserOffer *out);
 int ipc_browser_confirm(int sock, uint32_t offer_id, const char *dest_path,
                         uint32_t *download_id);
+int ipc_browser_confirm_v2(int sock, uint32_t offer_id, const char *dest_path,
+                           IpcAddResponse *out);
 int ipc_browser_dismiss(int sock, uint32_t offer_id);
 int ipc_browser_subscribe_progress(int sock, uint32_t download_id,
                                    IpcBrowserProgress *initial);

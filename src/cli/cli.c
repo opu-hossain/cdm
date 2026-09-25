@@ -163,7 +163,7 @@ static int run_list(int sock, uint16_t daemon_version, int argc, char **argv) {
     }
   }
 
-  if (daemon_version != IPC_PROTOCOL_VERSION) {
+  if (daemon_version < 2) {
     fprintf(stderr, "Daemon does not support history rows with size\n");
     return 1;
   }
@@ -279,12 +279,23 @@ int run_cli(int argc, char **argv) {
       return 1;
     }
 
-    uint32_t id = ipc_send_add_download_auto(
-        sock, url, unique_path, has_opts ? &opts : NULL);
+    IpcAddResponse add = {0};
+    if (daemon_version >= 3) {
+      if (ipc_send_add_download_v2(sock, url, unique_path,
+                                   has_opts ? &opts : NULL, true, &add) != 0)
+        add.result = IPC_RESULT_ERROR;
+    } else {
+      add.id = ipc_send_add_download_auto(
+          sock, url, unique_path, has_opts ? &opts : NULL);
+      add.result = add.id ? IPC_RESULT_OK : IPC_RESULT_ERROR;
+    }
+    uint32_t id = add.id;
     if (id == 0) {
       LOG_WARN("Daemon rejected the download (invalid or unsafe destination "
                "path?)");
       ret = 1;
+    } else if (add.result == IPC_RESULT_REJECTED) {
+      printf("Already downloading (ID %u)\n", id);
     } else {
       printf("Download added (ID: %u, initial path %s; final filename may "
              "change after probing)\n", id, unique_path);

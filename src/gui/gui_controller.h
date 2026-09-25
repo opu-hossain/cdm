@@ -36,6 +36,7 @@ typedef struct {
   char url[IPC_MAX_URL_LEN];
   char dest_path[IPC_MAX_PATH_LEN];
   bool succeeded;
+  bool duplicate;
 } GuiControllerOperationEvent;
 
 typedef struct {

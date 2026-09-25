@@ -13,6 +13,7 @@
 
 static int g_cmd_fd = -1;
 static bool g_cmd_page_supported = false;
+static uint16_t g_cmd_version = 1;
 static int g_listener_fd = -1;
 static dm_thread_t g_listener_thread;
 static bool g_listener_started = false;
@@ -117,7 +118,7 @@ static bool drain_payload(int fd, uint32_t length) {
 }
 
 static void subscribe_listener(int fd, uint16_t version) {
-  if (version == IPC_PROTOCOL_VERSION)
+  if (version >= 2)
     ipc_send_subscribe_v2(fd);
   else
     ipc_send_subscribe(fd);
@@ -227,7 +228,8 @@ bool gui_client_connect(void) {
                                              &command_version);
   if (g_cmd_fd < 0)
     return false;
-  g_cmd_page_supported = command_version == IPC_PROTOCOL_VERSION;
+  g_cmd_version = command_version;
+  g_cmd_page_supported = command_version >= 2;
 
   uint16_t version = 1;
   g_listener_fd = ipc_client_connect_compatible(-1, &version);
@@ -286,7 +288,8 @@ typedef int (*FireAndForgetFn)(int sock, uint32_t id);
 static bool send_with_retry(FireAndForgetFn fn, uint32_t id) {
   for (int attempt = 0; attempt < 2; attempt++) {
     if (g_cmd_fd < 0) {
-      g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, NULL);
+      g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                               &g_cmd_version);
       if (g_cmd_fd < 0)
         continue;
       note_restored();
@@ -322,11 +325,16 @@ bool gui_client_reload_config(void) {
   return send_with_retry(send_reload_config, 0);
 }
 
-static bool client_add_download(const char *url, const char *dest,
-                                const IpcDownloadOptions *opts,
-                                uint32_t *out_id, bool auto_filename) {
+bool gui_client_add_download_result(const char *url, const char *dest,
+                                    const IpcDownloadOptions *opts,
+                                    bool auto_filename, uint32_t *out_id,
+                                    bool *duplicate) {
+  if (!out_id || !duplicate)
+    return false;
+  *duplicate = false;
   if (g_cmd_fd < 0) {
-    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, NULL);
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                              &g_cmd_version);
     if (g_cmd_fd < 0) {
       note_lost();
       return false;
@@ -334,30 +342,42 @@ static bool client_add_download(const char *url, const char *dest,
     note_restored();
   }
 
-  uint32_t id = auto_filename
-                    ? ipc_send_add_download_auto(g_cmd_fd, url, dest, opts)
-                    : ipc_send_add_download(g_cmd_fd, url, dest, opts);
+  IpcAddResponse response = {0};
+  if (g_cmd_version >= 3) {
+    if (ipc_send_add_download_v2(g_cmd_fd, url, dest, opts, auto_filename,
+                                 &response) != 0)
+      response.result = IPC_RESULT_ERROR;
+  } else {
+    response.id = auto_filename
+                      ? ipc_send_add_download_auto(g_cmd_fd, url, dest, opts)
+                      : ipc_send_add_download(g_cmd_fd, url, dest, opts);
+  }
   // Do not retry an add after an IPC failure: the request may have reached the
   // daemon even if its response was lost, and retrying could create a
   // duplicate.
-  *out_id = id;
-  if (id == 0) {
+  *out_id = response.id;
+  *duplicate = response.result == IPC_RESULT_REJECTED && response.id != 0;
+  if (response.id == 0) {
     ipc_client_disconnect(g_cmd_fd);
     g_cmd_fd = -1;
     note_lost();
   }
-  return id != 0;
+  return response.id != 0;
 }
 
 bool gui_client_add_download(const char *url, const char *dest,
                              const IpcDownloadOptions *opts, uint32_t *out_id) {
-  return client_add_download(url, dest, opts, out_id, false);
+  bool duplicate = false;
+  return gui_client_add_download_result(url, dest, opts, false, out_id,
+                                        &duplicate);
 }
 
 bool gui_client_add_download_auto(const char *url, const char *dest,
                                   const IpcDownloadOptions *opts,
                                   uint32_t *out_id) {
-  return client_add_download(url, dest, opts, out_id, true);
+  bool duplicate = false;
+  return gui_client_add_download_result(url, dest, opts, true, out_id,
+                                        &duplicate);
 }
 
 bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count) {
@@ -365,7 +385,8 @@ bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count) {
   *out_count = 0;
 
   if (g_cmd_fd < 0) {
-    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, NULL);
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                             &g_cmd_version);
     if (g_cmd_fd < 0) {
       note_lost();
       return false;
@@ -451,7 +472,8 @@ bool gui_client_list_page(uint32_t offset, uint32_t limit,
       note_lost();
       return false;
     }
-    g_cmd_page_supported = version == IPC_PROTOCOL_VERSION;
+    g_cmd_version = version;
+    g_cmd_page_supported = version >= 2;
     note_restored();
   }
 
@@ -492,7 +514,8 @@ bool gui_client_list_page(uint32_t offset, uint32_t limit,
 
 bool gui_client_get_details(uint32_t id, GuiDownloadDetails *out) {
   if (g_cmd_fd < 0) {
-    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, NULL);
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                             &g_cmd_version);
     if (g_cmd_fd < 0) {
       note_lost();
       return false;
