@@ -52,3 +52,16 @@ reports were written only in temporary build/test output, not committed.
 Task 0.6.3 remains unchecked. Clarify whether the `cdm` branch replaces the
 plan's per-phase merges and how to treat the quantitative test-count and TSan
 gates before any merge. No push is authorized by the user's latest preference.
+
+## Task 1.2.1 — Credential entry and storage policy
+
+Step 1.2 defines persistence, IPC ingestion, and curl use of per-download HTTP
+Basic credentials, but specifies no CLI flag or GUI input for users to provide
+them. The IPC API can submit them after task 1.2.1. Decide where the user-facing
+entry belongs before calling HTTP Basic auth complete.
+
+The requested `auth_password` database column stores the password in plaintext,
+like the existing cookie column. A future credential storage policy should
+cover database access permissions, export behavior, and whether encryption or
+OS keyring integration is required. The new details response exposes only
+`auth_user` and a boolean indicating whether a password exists.

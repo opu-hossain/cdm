@@ -12,7 +12,13 @@
 #include <threads.h>
 #include <unistd.h>
 
+static char ipc_runtime_dir[64];
+
 static void setup_ipc(void) {
+  snprintf(ipc_runtime_dir, sizeof(ipc_runtime_dir),
+           "/tmp/cdm-ipc-test-XXXXXX");
+  cr_assert_not_null(mkdtemp(ipc_runtime_dir));
+  cr_assert_eq(setenv("XDG_RUNTIME_DIR", ipc_runtime_dir, 1), 0);
   if (ipc_server_is_running()) {
     ipc_server_stop();
   }
@@ -22,6 +28,8 @@ static void setup_ipc(void) {
 static void teardown_ipc(void) {
   ipc_server_stop();
   log_close();
+  unsetenv("XDG_RUNTIME_DIR");
+  rmdir(ipc_runtime_dir);
 }
 
 TestSuite(ipc, .init = setup_ipc, .fini = teardown_ipc);
@@ -123,6 +131,50 @@ Test(ipc, list_page_covers_history_beyond_legacy_limit) {
   thrd_join(server, NULL);
   ipc_server_stop();
   db_close();
+  rmdir(dir);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
+Test(ipc, add_credentials_details_never_return_password) {
+  char dir[] = "/tmp/cdm-auth-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  setenv("DOWNLOADMGR_ROOT", dir, 1);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  char dest[128];
+  snprintf(dest, sizeof(dest), "%s/protected.bin", dir);
+  IpcDownloadOptions options = {.auth_user = "example-user",
+                                .auth_password = "example-secret"};
+  uint32_t id = ipc_send_add_download(client, "http://127.0.0.1/protected",
+                                      dest, &options);
+  cr_assert_neq(id, 0);
+  IpcDownloadDetails details = {0};
+  cr_assert_eq(ipc_send_get_details_v2(client, id, &details), 0);
+  cr_assert_str_eq(details.auth_user, "example-user");
+  cr_assert(details.has_password);
+  cr_assert_eq(ipc_send_get_details(client, id, &details), 0);
+  cr_assert_str_empty(details.auth_user);
+  cr_assert_not(details.has_password);
+  cr_assert_null(memmem(&details, sizeof(details), "example-secret",
+                       strlen("example-secret")));
+  RequestOptions stored = {0};
+  Download *download = queue_manager_find_by_id(id);
+  cr_assert_not_null(download);
+  cr_assert_not_null(download->request);
+  stored = *download->request;
+  cr_assert_str_eq(stored.auth_password, "example-secret");
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  queue_manager_remove(id);
+  db_close();
+  unlink(dest);
   rmdir(dir);
   unsetenv("DOWNLOADMGR_ROOT");
 }

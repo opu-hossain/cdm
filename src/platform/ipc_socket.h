@@ -57,6 +57,8 @@ typedef struct {
   char extra_headers[4096];
   char expected_sha256[65];
   uint64_t speed_limit_bps;
+  char auth_user[128];
+  bool has_password;
 } IpcDownloadDetails;
 
 /* Options sent with an MSG_ADD_DOWNLOAD request */
@@ -66,6 +68,8 @@ typedef struct {
   const char *extra_headers;
   const char *expected_sha256;
   uint64_t speed_limit_bps;
+  const char *auth_user;
+  const char *auth_password;
 } IpcDownloadOptions;
 
 /* Server operations. */
@@ -106,6 +110,8 @@ int ipc_send_list_page_with_size(int sock, uint32_t offset, uint32_t limit,
                                   IpcDownloadRecord *out, int max,
                                   uint32_t *total_out);
 int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out);
+/* v2 adds auth_user and has_password after the legacy details payload. */
+int ipc_send_get_details_v2(int sock, uint32_t id, IpcDownloadDetails *out);
 int ipc_send_reload_config(int sock);
 void ipc_send_subscribe(int sock);
 int ipc_send_subscribe_v2(int sock);

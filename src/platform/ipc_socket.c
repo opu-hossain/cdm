@@ -410,6 +410,7 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_RESUME:
   case MSG_CANCEL:
   case MSG_GET_DETAILS:
+  case MSG_GET_DETAILS_V2:
   case MSG_BROWSER_GET_OFFER:
   case MSG_BROWSER_DISMISS:
   case MSG_BROWSER_SUBSCRIBE_PROGRESS:
@@ -569,6 +570,14 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         v = cJSON_GetObjectItemCaseSensitive(root, "speed_limit_bps");
         if (cJSON_IsNumber(v) && v->valuedouble > 0)
           opts.speed_limit_bps = (uint64_t)v->valuedouble;
+        v = cJSON_GetObjectItemCaseSensitive(root, "auth_user");
+        if (cJSON_IsString(v) && v->valuestring)
+          strncpy(opts.auth_user, v->valuestring,
+                  sizeof(opts.auth_user) - 1);
+        v = cJSON_GetObjectItemCaseSensitive(root, "auth_password");
+        if (cJSON_IsString(v) && v->valuestring)
+          strncpy(opts.auth_password, v->valuestring,
+                  sizeof(opts.auth_password) - 1);
         cJSON_Delete(root);
       } else {
         LOG_WARN("MSG_ADD_DOWNLOAD: malformed options JSON, ignoring");
@@ -834,7 +843,8 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     free(page.rows);
     break;
   }
-  case MSG_GET_DETAILS: {
+  case MSG_GET_DETAILS:
+  case MSG_GET_DETAILS_V2: {
     uint32_t id;
     ipc_read_exact(client_fd, &id, sizeof(id));
 
@@ -849,6 +859,11 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       write_string(client_fd, details.expected_sha256);
       ipc_write_exact(client_fd, &details.speed_limit_bps,
                       sizeof(details.speed_limit_bps));
+      if (hdr->type == MSG_GET_DETAILS_V2) {
+        write_string(client_fd, details.auth_user);
+        uint8_t has_password = details.has_password ? 1 : 0;
+        ipc_write_exact(client_fd, &has_password, sizeof(has_password));
+      }
     }
     break;
   }
@@ -1163,6 +1178,10 @@ static uint32_t send_add_download(int sock, MsgType type, const char *url,
     if (options->speed_limit_bps > 0)
       cJSON_AddNumberToObject(root, "speed_limit_bps",
                               (double)options->speed_limit_bps);
+    if (options->auth_user && options->auth_user[0])
+      cJSON_AddStringToObject(root, "auth_user", options->auth_user);
+    if (options->auth_password && options->auth_password[0])
+      cJSON_AddStringToObject(root, "auth_password", options->auth_password);
     options_json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
   }
@@ -1385,8 +1404,12 @@ int ipc_send_list_page_with_size(int sock, uint32_t offset, uint32_t limit,
                              out, max, total_out);
 }
 
-int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out) {
-  MsgHeader hdr = {.length = sizeof(id), .type = MSG_GET_DETAILS};
+static int send_get_details_type(int sock, MsgType type, uint32_t id,
+                                 IpcDownloadDetails *out) {
+  if (!out)
+    return -1;
+  memset(out, 0, sizeof(*out));
+  MsgHeader hdr = {.length = sizeof(id), .type = type};
   if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0)
     return -1;
   if (ipc_write_exact(sock, &id, sizeof(id)) != 0)
@@ -1404,8 +1427,26 @@ int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out) {
       read_string(sock, out->expected_sha256, sizeof(out->expected_sha256)) !=
           0)
     return -1;
-  return ipc_read_exact(sock, &out->speed_limit_bps,
-                        sizeof(out->speed_limit_bps));
+  if (ipc_read_exact(sock, &out->speed_limit_bps,
+                     sizeof(out->speed_limit_bps)) != 0)
+    return -1;
+  if (type == MSG_GET_DETAILS_V2) {
+    if (read_string(sock, out->auth_user, sizeof(out->auth_user)) != 0)
+      return -1;
+    uint8_t has_password = 0;
+    if (ipc_read_exact(sock, &has_password, sizeof(has_password)) != 0)
+      return -1;
+    out->has_password = has_password != 0;
+  }
+  return 0;
+}
+
+int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out) {
+  return send_get_details_type(sock, MSG_GET_DETAILS, id, out);
+}
+
+int ipc_send_get_details_v2(int sock, uint32_t id, IpcDownloadDetails *out) {
+  return send_get_details_type(sock, MSG_GET_DETAILS_V2, id, out);
 }
 
 void ipc_send_subscribe(int sock) {

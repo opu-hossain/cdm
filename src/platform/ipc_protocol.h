@@ -36,6 +36,7 @@ typedef enum {
   MSG_SUBSCRIBE_V2 = 34,
   MSG_LIST_PAGE = 35,
   MSG_LIST_PAGE_WITH_SIZE = 36,
+  MSG_GET_DETAILS_V2 = 37,
   MSG_HELLO = 41, // v1 header, empty request; uint16_t version response.
 } MsgType;
 

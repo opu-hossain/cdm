@@ -12,6 +12,26 @@ static void close_db(void) { db_close(); }
 
 TestSuite(db, .init = setup_db, .fini = close_db);
 
+Test(db, credentials_round_trip_and_restore) {
+  RequestOptions options = {0};
+  snprintf(options.auth_user, sizeof(options.auth_user), "example-user");
+  snprintf(options.auth_password, sizeof(options.auth_password),
+           "example-secret");
+  cr_assert_eq(db_insert_download(93, "http://127.0.0.1/protected",
+                                  "/tmp/cdm-auth-roundtrip", &options), 0);
+  IpcDownloadDetails details = {0};
+  cr_assert_eq(db_get_download_details(93, &details), 0);
+  cr_assert_str_eq(details.auth_user, "example-user");
+  cr_assert(details.has_password);
+  cr_assert_eq(db_restore_queue(), 0);
+  Download *download = queue_manager_find_by_id(93);
+  cr_assert_not_null(download);
+  cr_assert_not_null(download->request);
+  cr_assert_str_eq(download->request->auth_user, "example-user");
+  cr_assert_str_eq(download->request->auth_password, "example-secret");
+  queue_manager_remove(93);
+}
+
 Test(db, history_does_not_block_reusing_deleted_file_path) {
   const char *path = "/tmp/cdm-history-only.apk";
   unlink(path);
@@ -130,17 +150,20 @@ Test(db, legacy_schema_migrates_transactionally) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 3);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 4);
   sqlite3_finalize(statement);
 
   cr_assert_eq(sqlite3_prepare_v2(
-                   reader, "SELECT etag,last_modified,auto_filename,status FROM downloads "
+                   reader, "SELECT etag,last_modified,auto_filename,status,"
+                           "auth_user,auth_password FROM downloads "
                            "WHERE id=7", -1, &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
   cr_assert_str_eq((const char *)sqlite3_column_text(statement, 0), "");
   cr_assert_str_eq((const char *)sqlite3_column_text(statement, 1), "");
   cr_assert_eq(sqlite3_column_int(statement, 2), 0);
   cr_assert_str_eq((const char *)sqlite3_column_text(statement, 3), "PAUSED");
+  cr_assert_str_eq((const char *)sqlite3_column_text(statement, 4), "");
+  cr_assert_str_eq((const char *)sqlite3_column_text(statement, 5), "");
   sqlite3_finalize(statement);
   sqlite3_close(reader);
 

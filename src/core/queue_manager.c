@@ -24,7 +24,8 @@ static bool request_options_present(const RequestOptions *opts) {
   return opts &&
          (opts->cookie[0] != '\0' || opts->referrer[0] != '\0' ||
           opts->extra_headers[0] != '\0' || opts->expected_sha256[0] != '\0' ||
-          opts->speed_limit_bps != 0);
+          opts->speed_limit_bps != 0 || opts->auth_user[0] != '\0' ||
+          opts->auth_password[0] != '\0');
 }
 
 static void free_download(Download *download) {

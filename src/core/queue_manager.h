@@ -24,6 +24,8 @@ typedef struct {
   char extra_headers[4096]; // raw "Key: Value" lines separated by '\n'
   char expected_sha256[65]; // 64 hex chars + NUL, empty = no check
   uint64_t speed_limit_bps; // 0 = use daemon default
+  char auth_user[128];
+  char auth_password[256];
 } RequestOptions;
 
 /* Chunk descriptor (one segment of a download) */

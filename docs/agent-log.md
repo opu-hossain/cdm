@@ -571,3 +571,22 @@ Open questions:
 
 Next:
 - 1.2.1 Per-download credentials. Phase 0 merge gate 0.6.3 remains deferred.
+
+## 2026-09-25 — Codex, task 1.2.1
+
+Branch: `cdm`
+Commit: `feat(auth): support per-download http basic credentials` (this entry's commit)
+
+Tasks completed:
+- 1.2.1 Added per-download Basic auth user/password to request options, SQLite schema version 4 and migration, queue restore, and IPC add options JSON. New `MSG_GET_DETAILS_V2` returns username and a `has_password` flag while the legacy details response remains unchanged and neither response sends the password.
+- Recorded the missing CLI/GUI credential entry step and plaintext storage policy in `docs/open-questions.md`.
+
+Tests:
+- Test first: DB and IPC credential cases failed to compile without the new fields and helper. Focused tests pass after implementation.
+- Isolated each Criterion IPC test socket before its first path lookup to prevent parallel test collisions. Full build and CTest passed 29/29. The IPC test exercises add, persisted queue options, both details message types, and password redaction.
+
+Open questions:
+- See task 1.2.1 in `docs/open-questions.md` for credential entry and storage policy.
+
+Next:
+- 1.2.2 Apply credentials in curl. Phase 0 merge gate 0.6.3 remains deferred.

@@ -87,7 +87,9 @@ int db_init(const char *db_path) {
       "  reserved_file   INTEGER DEFAULT 0,"
       "  etag            TEXT DEFAULT '',"
       "  last_modified   TEXT DEFAULT '',"
-      "  auto_filename   INTEGER DEFAULT 0"
+      "  auto_filename   INTEGER DEFAULT 0,"
+      "  auth_user       TEXT DEFAULT '',"
+      "  auth_password   TEXT DEFAULT ''"
       ");"
       ""
       "CREATE TABLE IF NOT EXISTS chunks ("
@@ -110,12 +112,14 @@ int db_init(const char *db_path) {
   static const char *migration_names[] = {"cookie", "referrer", "extra_headers",
                                           "expected_sha256", "speed_limit_bps",
                                           "reserved_file", "etag",
-                                          "last_modified", "auto_filename"};
+                                          "last_modified", "auto_filename",
+                                          "auth_user", "auth_password"};
   static const char *migration_types[] = {"TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "INTEGER DEFAULT 0", "INTEGER DEFAULT 0",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
-                                          "INTEGER DEFAULT 0"};
+                                          "INTEGER DEFAULT 0", "TEXT DEFAULT ''",
+                                          "TEXT DEFAULT ''"};
 
   char *migration_error = NULL;
   rc = sqlite3_exec(g_db, "BEGIN;", NULL, NULL, &migration_error);
@@ -147,7 +151,7 @@ int db_init(const char *db_path) {
     sqlite3_free(migration_error);
   }
 
-  rc = sqlite3_exec(g_db, "PRAGMA user_version = 3; COMMIT;", NULL, NULL,
+  rc = sqlite3_exec(g_db, "PRAGMA user_version = 4; COMMIT;", NULL, NULL,
                     &migration_error);
   if (rc != SQLITE_OK) {
     LOG_ERROR("could not commit database migration: %s",
@@ -182,8 +186,8 @@ static int insert_download(uint32_t id, const char *url,
       "INSERT OR REPLACE INTO downloads "
       "(id, url, dest_path, status, created_at, cookie, referrer, "
       "extra_headers, expected_sha256, speed_limit_bps, reserved_file, "
-      "auto_filename) "
-      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?)";
+      "auto_filename, auth_user, auth_password) "
+      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
     LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
@@ -203,6 +207,9 @@ static int insert_download(uint32_t id, const char *url,
                      (sqlite3_int64)(opts ? opts->speed_limit_bps : 0));
   sqlite3_bind_int(stmt, 10, reserved ? 1 : 0);
   sqlite3_bind_int(stmt, 11, auto_filename ? 1 : 0);
+  sqlite3_bind_text(stmt, 12, opts ? opts->auth_user : "", -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 13, opts ? opts->auth_password : "", -1,
+                    SQLITE_STATIC);
 
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
@@ -528,7 +535,8 @@ int db_get_download_details(uint32_t id, IpcDownloadDetails *out) {
   if (!db_ready() || !out)
     return -1;
   const char *sql = "SELECT cookie, referrer, extra_headers, expected_sha256, "
-                    "speed_limit_bps FROM downloads WHERE id = ?";
+                    "speed_limit_bps, auth_user, auth_password != '' "
+                    "FROM downloads WHERE id = ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
     LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
@@ -543,6 +551,11 @@ int db_get_download_details(uint32_t id, IpcDownloadDetails *out) {
     const char *headers = (const char *)sqlite3_column_text(stmt, 2);
     const char *sha256 = (const char *)sqlite3_column_text(stmt, 3);
     out->speed_limit_bps = (uint64_t)sqlite3_column_int64(stmt, 4);
+    const char *auth_user = (const char *)sqlite3_column_text(stmt, 5);
+    out->has_password = sqlite3_column_int(stmt, 6) != 0;
+    strncpy(out->auth_user, auth_user ? auth_user : "",
+            sizeof(out->auth_user) - 1);
+    out->auth_user[sizeof(out->auth_user) - 1] = '\0';
 
     strncpy(out->cookie, cookie ? cookie : "", sizeof(out->cookie) - 1);
     out->cookie[sizeof(out->cookie) - 1] = '\0';
@@ -582,7 +595,7 @@ int db_restore_queue(void) {
   const char *sql = "SELECT id, url, dest_path, total_size, status, priority, "
                     "cookie, referrer, extra_headers, expected_sha256, "
                     "speed_limit_bps, reserved_file, auto_filename, etag, "
-                    "last_modified "
+                    "last_modified, auth_user, auth_password "
                     "FROM downloads WHERE status != 'DONE'";
 
   sqlite3_stmt *stmt = NULL;
@@ -613,6 +626,8 @@ int db_restore_queue(void) {
     atomic_store(&d->auto_filename, sqlite3_column_int(stmt, 12) != 0);
     const char *etag = (const char *)sqlite3_column_text(stmt, 13);
     const char *last_modified = (const char *)sqlite3_column_text(stmt, 14);
+    const char *auth_user = (const char *)sqlite3_column_text(stmt, 15);
+    const char *auth_password = (const char *)sqlite3_column_text(stmt, 16);
 
     strncpy(d->url, url ? url : "", sizeof(d->url) - 1);
     strncpy(d->dest_path, path ? path : "", sizeof(d->dest_path) - 1);
@@ -628,10 +643,15 @@ int db_restore_queue(void) {
     strncpy(options.expected_sha256, sha256 ? sha256 : "",
             sizeof(options.expected_sha256) - 1);
     options.speed_limit_bps = speed_limit;
+    strncpy(options.auth_user, auth_user ? auth_user : "",
+            sizeof(options.auth_user) - 1);
+    strncpy(options.auth_password, auth_password ? auth_password : "",
+            sizeof(options.auth_password) - 1);
 
     if (options.cookie[0] != '\0' || options.referrer[0] != '\0' ||
         options.extra_headers[0] != '\0' ||
-        options.expected_sha256[0] != '\0' || options.speed_limit_bps != 0) {
+        options.expected_sha256[0] != '\0' || options.speed_limit_bps != 0 ||
+        options.auth_user[0] != '\0' || options.auth_password[0] != '\0') {
       d->request = malloc(sizeof(*d->request));
       if (!d->request) {
         free(d);
