@@ -22,6 +22,19 @@ Test(gui_controller, queue_snapshot_replaces_model_in_priority_order) {
   cr_assert_eq(visible[0].id, 1);
 }
 
+Test(gui_controller, queue_schedule_fields_require_valid_distinct_times) {
+  cr_assert(gui_schedule_valid("", ""));
+  cr_assert(gui_schedule_valid("08:30", "17:00"));
+  cr_assert(gui_schedule_valid("22:00", "06:00"));
+  cr_assert_not(gui_schedule_valid("08:30", ""));
+  cr_assert_not(gui_schedule_valid("", "17:00"));
+  cr_assert_not(gui_schedule_valid("08:30", "08:30"));
+  cr_assert_not(gui_schedule_valid("24:00", "17:00"));
+  cr_assert_not(gui_schedule_valid("08:60", "17:00"));
+  cr_assert_not(gui_schedule_valid("8:30", "17:00"));
+  cr_assert_not(gui_schedule_valid("08-30", "17:00"));
+}
+
 Test(gui_controller, preserves_event_order) {
   GuiControllerEvent first = {.type = GUI_CONTROLLER_EVENT_OPERATION};
   first.data.operation.operation = GUI_CONTROLLER_OPERATION_PAUSE;

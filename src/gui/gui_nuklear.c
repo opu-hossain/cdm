@@ -1229,6 +1229,13 @@ static bool queue_draft_valid(UiState *ui) {
               "Enter a name, priority 0-1000, and max concurrent 0-64.");
     return false;
   }
+  if (!gui_schedule_valid(ui->queue_draft.schedule_start,
+                          ui->queue_draft.schedule_stop)) {
+    copy_text(ui->error, sizeof(ui->error),
+              "Enter two different HH:MM times, or leave both empty.");
+    return false;
+  }
+  ui->error[0] = '\0';
   ui->queue_draft.priority = priority;
   ui->queue_draft.max_concurrent = cap;
   if (!ui->queue_draft.post_action[0])
@@ -1246,6 +1253,17 @@ static void queue_fields(struct nk_context *ctx, UiState *ui) {
               sizeof(ui->queue_draft.schedule_start));
   input_field(ctx, "Schedule stop (HH:MM)", ui->queue_draft.schedule_stop,
               sizeof(ui->queue_draft.schedule_stop));
+  nk_layout_row_dynamic(ctx, 20, 1);
+  if (!ui->queue_draft.schedule_start[0] &&
+      !ui->queue_draft.schedule_stop[0])
+    nk_label_colored(ctx, "Always", NK_TEXT_LEFT, MUTED);
+  else if (!gui_schedule_valid(ui->queue_draft.schedule_start,
+                               ui->queue_draft.schedule_stop))
+    nk_label_colored(ctx, "Use two different HH:MM times (00:00-23:59).",
+                     NK_TEXT_LEFT, RED);
+  else
+    nk_label_colored(ctx, "Active during this time window", NK_TEXT_LEFT,
+                     MUTED);
   input_field(ctx, "Post action", ui->queue_draft.post_action,
               sizeof(ui->queue_draft.post_action));
   input_field(ctx, "Post action argument", ui->queue_draft.post_action_arg,
@@ -1359,7 +1377,7 @@ static void draw_queues(struct nk_context *ctx, UiState *ui, float width,
       if (written < 0 || (size_t)written >= sizeof(schedule))
         schedule[0] = '\0';
     } else
-      copy_text(schedule, sizeof(schedule), "Any time");
+      copy_text(schedule, sizeof(schedule), "Always");
     label(ctx, screen_rect(ctx, schedule_x, 10, action_x - schedule_x, 32),
           schedule, 12, MUTED, SURFACE);
     label(ctx, screen_rect(ctx, action_x, 10, content - action_x - 124, 32),

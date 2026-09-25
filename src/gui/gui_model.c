@@ -16,6 +16,28 @@ static void initialize_mutex(void) { dm_mutex_init(&g_mutex); }
 
 static void ensure_mutex(void) { call_once(&g_mutex_once, initialize_mutex); }
 
+static int schedule_minutes(const char *value) {
+  if (strlen(value) != 5 || value[2] != ':' || value[0] < '0' ||
+      value[0] > '9' || value[1] < '0' || value[1] > '9' ||
+      value[3] < '0' || value[3] > '9' || value[4] < '0' ||
+      value[4] > '9')
+    return -1;
+  int hour = (value[0] - '0') * 10 + (value[1] - '0');
+  int minute = (value[3] - '0') * 10 + (value[4] - '0');
+  return hour < 24 && minute < 60 ? hour * 60 + minute : -1;
+}
+
+bool gui_schedule_valid(const char *start, const char *stop) {
+  if (!start || !stop)
+    return false;
+  if (!start[0] && !stop[0])
+    return true;
+  int start_minute = schedule_minutes(start);
+  int stop_minute = schedule_minutes(stop);
+  return start_minute >= 0 && stop_minute >= 0 &&
+         start_minute != stop_minute;
+}
+
 void gui_model_init(void) {
   ensure_mutex();
   dm_mutex_lock(&g_mutex);

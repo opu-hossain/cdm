@@ -836,3 +836,10 @@ Completed: local wall-clock queue states, minute-gated evaluation, idle pause/ac
 Verification: test-first fixed-clock boundaries; worker pause, manual-pause isolation, restart restore, focused DB/queue/scheduler tests; full build and CTest 31/31 passed.
 Open questions: equal times resolved as invalid; Windows `localtime_s` port tracked in `docs/open-questions.md`.
 Next: 2.2.2 schedule editor validation.
+
+## 2026-09-25 — Codex, task 2.2.2
+Branch: `cdm`; commit: `feat(gui): schedule fields in queue editor`.
+Completed: inline `HH:MM` validation, `Always` empty state, and save blocking for invalid or equal bounds.
+Verification: test-first GUI model validation; focused test and full build/CTest 31/31 passed; isolated offscreen GUI stayed alive for three seconds (sandbox blocked detached daemon listener).
+Open questions: none for this task.
+Next: 2.3.1 post-actions on queue completion.
