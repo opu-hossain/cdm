@@ -73,6 +73,8 @@ typedef struct {
   int speed_limit;
   char directory[GUI_FOLDER_CAP];
   int concurrent, attempts, base_delay, max_delay, global_speed;
+  ProxyMode proxy_mode;
+  char proxy_url[512], proxy_username[128], proxy_password[256];
   char numbers[6][16];
 } UiState;
 
@@ -400,6 +402,12 @@ static void open_settings(UiState *ui) {
   ui->global_speed = (int)(config.max_speed_bytes_per_sec > 1000000000ULL
                                ? 1000000000
                                : config.max_speed_bytes_per_sec);
+  ui->proxy_mode = config.proxy_mode;
+  copy_text(ui->proxy_url, sizeof(ui->proxy_url), config.proxy_url);
+  copy_text(ui->proxy_username, sizeof(ui->proxy_username),
+            config.proxy_username);
+  copy_text(ui->proxy_password, sizeof(ui->proxy_password),
+            config.proxy_password);
   int values[] = {ui->concurrent, ui->attempts, ui->base_delay, ui->max_delay,
                   ui->global_speed};
   for (int i = 0; i < 5; ++i)
@@ -916,6 +924,7 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
   }
   text_at(ctx, 20, 70, w - 40, 20,
           "Saved to config.toml and applied immediately.", 11, MUTED, SURFACE);
+  bool proxy_url_ok = true;
   nk_layout_space_push(ctx, nk_rect(20, 108, w - 40, h - 188));
   nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
                            nk_style_item_color(SURFACE));
@@ -950,6 +959,44 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     nk_layout_row_dynamic(ctx, 20, 1);
     nk_label_colored(ctx, "0 disables the limit entirely.", NK_TEXT_LEFT,
                      MUTED);
+    section(ctx, "PROXY");
+    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_label(ctx, "Mode", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 34, 1);
+    const char *modes[] = {"None", "HTTP", "SOCKS5"};
+    ui->proxy_mode = (ProxyMode)nk_combo(ctx, modes, 3, ui->proxy_mode, 30,
+                                         nk_vec2(400, 110));
+    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_label(ctx, "Proxy URL", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 34, 1);
+    nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->proxy_url,
+                                   sizeof(ui->proxy_url), NULL);
+    const char *scheme = strstr(ui->proxy_url, "://");
+    proxy_url_ok = ui->proxy_mode == PROXY_NONE ||
+                   (scheme && scheme != ui->proxy_url && scheme[3] &&
+                    scheme[3] != ':' && scheme[3] != '/');
+    if (!proxy_url_ok) {
+      nk_layout_row_dynamic(ctx, 22, 1);
+      nk_label_colored(ctx, "Enter a proxy URL with scheme and host.",
+                       NK_TEXT_LEFT, RED);
+    }
+    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_label(ctx, "Username", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 34, 1);
+    nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->proxy_username,
+                                   sizeof(ui->proxy_username), NULL);
+    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_label(ctx, "Password", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 34, 2);
+    if (nk_button_label(ctx, ui->proxy_password[0] ? "Change password..."
+                                                  : "Set password...")) {
+      char *value = tinyfd_inputBox("Proxy password", "Enter proxy password",
+                                   NULL); /* NULL requests a masked input box. */
+      if (value)
+        copy_text(ui->proxy_password, sizeof(ui->proxy_password), value);
+    }
+    if (nk_button_label(ctx, "Clear password"))
+      ui->proxy_password[0] = '\0';
     nk_group_end(ctx);
   }
   nk_style_pop_style_item(ctx);
@@ -964,16 +1011,26 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
                  parse_number(ui->numbers[2], 1, 3600, &ui->base_delay) &&
                  parse_number(ui->numbers[3], 1, 86400, &ui->max_delay) &&
                  parse_number(ui->numbers[4], 0, 1000000000, &ui->global_speed);
-    DownloadManagerConfig config = {.default_download_dir = ui->directory,
-                                    .max_concurrent_downloads = ui->concurrent,
-                                    .retry_max_attempts = ui->attempts,
-                                    .retry_base_delay_sec = ui->base_delay,
-                                    .retry_max_delay_sec = ui->max_delay,
-                                    .max_speed_bytes_per_sec =
-                                        (uint64_t)ui->global_speed};
+    DownloadManagerConfig config;
+    config_get(&config);
+    config.default_download_dir = ui->directory;
+    config.max_concurrent_downloads = ui->concurrent;
+    config.retry_max_attempts = ui->attempts;
+    config.retry_base_delay_sec = ui->base_delay;
+    config.retry_max_delay_sec = ui->max_delay;
+    config.max_speed_bytes_per_sec = (uint64_t)ui->global_speed;
+    config.proxy_mode = ui->proxy_mode;
+    copy_text(config.proxy_url, sizeof(config.proxy_url), ui->proxy_url);
+    copy_text(config.proxy_username, sizeof(config.proxy_username),
+              ui->proxy_username);
+    copy_text(config.proxy_password, sizeof(config.proxy_password),
+              ui->proxy_password);
     if (!valid)
       copy_text(ui->settings_message, sizeof(ui->settings_message),
                 "Invalid number. Check the allowed range in each field.");
+    else if (!proxy_url_ok)
+      copy_text(ui->settings_message, sizeof(ui->settings_message),
+                "Proxy URL needs a scheme and host.");
     else if (config_save(&config) && gui_client_reload_config()) {
       copy_text(ui->folder, sizeof(ui->folder), ui->directory);
       ui->disk_checked_at = UINT32_MAX;

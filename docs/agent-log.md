@@ -553,3 +553,21 @@ Open questions:
 
 Next:
 - 1.1.3 GUI proxy fields. Phase 0 merge gate 0.6.3 remains deferred.
+
+## 2026-09-25 — Codex, task 1.1.3
+
+Branch: `cdm`
+Commit: `feat(gui): add proxy settings to settings dialog` (this entry's commit)
+
+Tasks completed:
+- 1.1.3 Added proxy mode, URL, username, and masked native password entry to the existing Nuklear settings dialog. The dialog shows an inline URL error and saves a complete config snapshot, preserving proxy values when other settings change.
+
+Tests:
+- `cmake --build build -j` and full CTest passed 29/29.
+- GUI startup smoke with an isolated temporary home and daemon stayed active for three seconds and loaded its embedded font atlas; both processes were terminated afterward. Interactive settings clicks were not automated in this environment.
+
+Open questions:
+- None for this task.
+
+Next:
+- 1.2.1 Per-download credentials. Phase 0 merge gate 0.6.3 remains deferred.
