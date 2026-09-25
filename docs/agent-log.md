@@ -643,3 +643,21 @@ Open questions:
 
 Next:
 - 1.3.3 GUI fields for connection cap, User-Agent and timeouts. Phase 0 merge gate 0.6.3 remains deferred.
+
+## 2026-09-25 — Codex, task 1.3.3
+
+Branch: `cdm`
+Commit: `feat(gui): expose connection, ua and timeout settings` (this entry's commit)
+
+Tasks completed:
+- 1.3.3 Added connection cap, connect timeout, transfer timeout and User-Agent controls to the existing Nuklear settings group. Empty User-Agent input shows the current value and preserves it on save. Kept per-download speed-limit input in its original number slot.
+
+Tests:
+- `cmake --build build -j` and full CTest passed 29/29.
+- GUI startup smoke in an isolated temporary home ran for three seconds, loaded the embedded font atlas, then terminated with its temporary daemon. Interactive settings clicks were not automated.
+
+Open questions:
+- None for this task.
+
+Next:
+- 1.4.1 DB lookup by normalized URL. Phase 0 merge gate 0.6.3 remains deferred.

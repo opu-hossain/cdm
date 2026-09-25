@@ -73,9 +73,11 @@ typedef struct {
   int speed_limit;
   char directory[GUI_FOLDER_CAP];
   int concurrent, attempts, base_delay, max_delay, global_speed;
+  int max_connections, connect_timeout, transfer_timeout;
+  char user_agent[256];
   ProxyMode proxy_mode;
   char proxy_url[512], proxy_username[128], proxy_password[256];
-  char numbers[6][16];
+  char numbers[9][16];
 } UiState;
 
 static void copy_text(char *out, size_t size, const char *text) {
@@ -402,16 +404,23 @@ static void open_settings(UiState *ui) {
   ui->global_speed = (int)(config.max_speed_bytes_per_sec > 1000000000ULL
                                ? 1000000000
                                : config.max_speed_bytes_per_sec);
+  ui->max_connections = config.max_connections_per_download;
+  ui->connect_timeout = config.connect_timeout_sec;
+  ui->transfer_timeout = config.transfer_timeout_sec;
+  copy_text(ui->user_agent, sizeof(ui->user_agent), config.user_agent);
   ui->proxy_mode = config.proxy_mode;
   copy_text(ui->proxy_url, sizeof(ui->proxy_url), config.proxy_url);
   copy_text(ui->proxy_username, sizeof(ui->proxy_username),
             config.proxy_username);
   copy_text(ui->proxy_password, sizeof(ui->proxy_password),
             config.proxy_password);
-  int values[] = {ui->concurrent, ui->attempts, ui->base_delay, ui->max_delay,
-                  ui->global_speed};
+  int values[] = {ui->concurrent, ui->attempts, ui->base_delay,
+                  ui->max_delay, ui->global_speed};
   for (int i = 0; i < 5; ++i)
     snprintf(ui->numbers[i], sizeof(ui->numbers[i]), "%d", values[i]);
+  snprintf(ui->numbers[6], sizeof(ui->numbers[6]), "%d", ui->max_connections);
+  snprintf(ui->numbers[7], sizeof(ui->numbers[7]), "%d", ui->connect_timeout);
+  snprintf(ui->numbers[8], sizeof(ui->numbers[8]), "%d", ui->transfer_timeout);
   ui->settings_message[0] = '\0';
   ui->settings_open = true;
   ui->menu_id = 0;
@@ -949,6 +958,22 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     nk_layout_row_dynamic(ctx, 12, 1);
     nk_label(ctx, "", NK_TEXT_LEFT);
     number_field(ctx, "Maximum concurrent downloads", ui->numbers[0]);
+    section(ctx, "CONNECTIONS");
+    number_field(ctx, "Connections per download (1-16)", ui->numbers[6]);
+    number_field(ctx, "Connect timeout (seconds)", ui->numbers[7]);
+    number_field(ctx, "Transfer timeout (seconds)", ui->numbers[8]);
+    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_label(ctx, "User-Agent", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, 34, 1);
+    nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->user_agent,
+                                   sizeof(ui->user_agent), NULL);
+    if (!ui->user_agent[0]) {
+      DownloadManagerConfig current;
+      config_get(&current);
+      nk_layout_row_dynamic(ctx, 20, 1);
+      nk_labelf_colored(ctx, NK_TEXT_LEFT, MUTED, "Current: %s",
+                        current.user_agent);
+    }
     section(ctx, "RETRIES");
     number_field(ctx, "Maximum retry attempts", ui->numbers[1]);
     number_field(ctx, "Retry base delay (seconds)", ui->numbers[2]);
@@ -1010,7 +1035,10 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
                  parse_number(ui->numbers[1], 0, 100, &ui->attempts) &&
                  parse_number(ui->numbers[2], 1, 3600, &ui->base_delay) &&
                  parse_number(ui->numbers[3], 1, 86400, &ui->max_delay) &&
-                 parse_number(ui->numbers[4], 0, 1000000000, &ui->global_speed);
+                 parse_number(ui->numbers[4], 0, 1000000000, &ui->global_speed) &&
+                 parse_number(ui->numbers[6], 1, 16, &ui->max_connections) &&
+                 parse_number(ui->numbers[7], 1, 600, &ui->connect_timeout) &&
+                 parse_number(ui->numbers[8], 1, 3600, &ui->transfer_timeout);
     DownloadManagerConfig config;
     config_get(&config);
     config.default_download_dir = ui->directory;
@@ -1019,6 +1047,11 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     config.retry_base_delay_sec = ui->base_delay;
     config.retry_max_delay_sec = ui->max_delay;
     config.max_speed_bytes_per_sec = (uint64_t)ui->global_speed;
+    config.max_connections_per_download = ui->max_connections;
+    config.connect_timeout_sec = ui->connect_timeout;
+    config.transfer_timeout_sec = ui->transfer_timeout;
+    if (ui->user_agent[0])
+      copy_text(config.user_agent, sizeof(config.user_agent), ui->user_agent);
     config.proxy_mode = ui->proxy_mode;
     copy_text(config.proxy_url, sizeof(config.proxy_url), ui->proxy_url);
     copy_text(config.proxy_username, sizeof(config.proxy_username),
