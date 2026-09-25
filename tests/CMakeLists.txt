@@ -9,6 +9,7 @@ set(TEST_SOURCES
     test_curl_client.c
     test_log.c
     test_thread.c
+    test_tray.c
     test_spawn.c
     test_ipc_socket.c
     test_scheduler.c
@@ -35,6 +36,10 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             ${CMAKE_SOURCE_DIR}/src/gui/gui_client.c
             ${CMAKE_SOURCE_DIR}/src/gui/gui_model.c
         )
+    elseif(TEST_NAME STREQUAL test_tray AND DOWNLOADMGR_ENABLE_TRAY
+           AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+           AND TRAY_GIO_FOUND AND TRAY_MENU_FOUND)
+        target_compile_definitions(${TEST_NAME} PRIVATE CDM_HAVE_TRAY=1)
     endif()
     if(TEST_NAME STREQUAL test_db)
         target_compile_definitions(${TEST_NAME} PRIVATE

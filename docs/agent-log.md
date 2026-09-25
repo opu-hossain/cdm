@@ -857,3 +857,10 @@ Completed: queue action dropdown, config-gated disabled choices, command-only in
 Verification: full build and CTest 31/31 passed; isolated offscreen GUI stayed alive three seconds (daemon listener blocked by sandbox; menu clicks unautomated).
 Open questions: none for this task.
 Next: 2.4.1 tray backend research and implementation.
+
+## 2026-09-25 — Codex, task 2.4.1
+Branch: `cdm`; commit: `feat(platform): system tray backend`.
+Completed: optional Linux SNI/DBusMenu backend on GIO without GTK, daemon-loop API, progress tooltip, menu callbacks, and nonfatal no-host fallback; `docs/tray.md` records manual checks.
+Verification: private D-Bus fake host checked registration, properties, menu layout/click; missing-bus and tray-disabled builds passed; full build and CTest 32/32 passed.
+Open questions: real desktop host smoke remains UNKNOWN in headless workspace.
+Next: 2.4.2 wire tray to daemon.

@@ -62,6 +62,11 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBNOTIFY REQUIRED IMPORTED_TARGET libnotify)
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
 pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
+option(DOWNLOADMGR_ENABLE_TRAY "Build the Linux tray backend when available" ON)
+if(DOWNLOADMGR_ENABLE_TRAY AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    pkg_check_modules(TRAY_GIO QUIET IMPORTED_TARGET gio-2.0)
+    pkg_check_modules(TRAY_MENU QUIET IMPORTED_TARGET dbusmenu-glib-0.4)
+endif()
 find_package(OpenGL REQUIRED)
 
 if(BUILD_TESTING)
@@ -139,6 +144,7 @@ set(PLATFORM_SOURCES
     src/platform/sha256.c
     src/platform/spawn.c
     src/platform/thread.c
+    src/platform/tray.c
 )
 
 set(UTILS_SOURCES
@@ -183,6 +189,12 @@ target_link_libraries(downloadmgr_core PUBLIC
     cdm_sqlite
     PkgConfig::LIBNOTIFY
 )
+if(DOWNLOADMGR_ENABLE_TRAY AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+   AND TRAY_GIO_FOUND AND TRAY_MENU_FOUND)
+    target_compile_definitions(downloadmgr_core PRIVATE CDM_HAVE_TRAY=1)
+    target_link_libraries(downloadmgr_core PUBLIC
+        PkgConfig::TRAY_GIO PkgConfig::TRAY_MENU)
+endif()
 
 if(WIN32)
     target_link_libraries(downloadmgr_core PUBLIC ws2_32 comdlg32 ole32 shell32)
