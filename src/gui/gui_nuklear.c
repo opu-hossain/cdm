@@ -1235,6 +1235,18 @@ static bool queue_draft_valid(UiState *ui) {
               "Enter two different HH:MM times, or leave both empty.");
     return false;
   }
+  if (ui->queue_draft.post_action[0] &&
+      strcmp(ui->queue_draft.post_action, "none") != 0 &&
+      !config_post_action_enabled(ui->queue_draft.post_action)) {
+    copy_text(ui->error, sizeof(ui->error),
+              "Enable this post-action in [post_actions] before saving.");
+    return false;
+  }
+  if (strcmp(ui->queue_draft.post_action, "command") == 0 &&
+      !ui->queue_draft.post_action_arg[0]) {
+    copy_text(ui->error, sizeof(ui->error), "Enter a command to run.");
+    return false;
+  }
   ui->error[0] = '\0';
   ui->queue_draft.priority = priority;
   ui->queue_draft.max_concurrent = cap;
@@ -1264,10 +1276,45 @@ static void queue_fields(struct nk_context *ctx, UiState *ui) {
   else
     nk_label_colored(ctx, "Active during this time window", NK_TEXT_LEFT,
                      MUTED);
-  input_field(ctx, "Post action", ui->queue_draft.post_action,
-              sizeof(ui->queue_draft.post_action));
-  input_field(ctx, "Post action argument", ui->queue_draft.post_action_arg,
-              sizeof(ui->queue_draft.post_action_arg));
+  static const char *actions[] = {"none", "shutdown", "sleep", "command"};
+  static const char *labels[] = {"None", "Shut down", "Sleep", "Run command"};
+  int selected = 0;
+  for (int i = 1; i < 4; ++i)
+    if (strcmp(ui->queue_draft.post_action, actions[i]) == 0)
+      selected = i;
+  nk_layout_row_dynamic(ctx, 22, 1);
+  nk_label(ctx, "Post action", NK_TEXT_LEFT);
+  nk_layout_row_dynamic(ctx, 34, 1);
+  if (nk_combo_begin_label(ctx, labels[selected], nk_vec2(400, 150))) {
+    nk_layout_row_dynamic(ctx, 30, 1);
+    for (int i = 0; i < 4; ++i) {
+      bool enabled = i == 0 || config_post_action_enabled(actions[i]);
+      if (!enabled)
+        nk_widget_disable_begin(ctx);
+      if (nk_combo_item_label(ctx, labels[i], NK_TEXT_LEFT) && enabled) {
+        copy_text(ui->queue_draft.post_action,
+                  sizeof(ui->queue_draft.post_action), actions[i]);
+        if (i != 3)
+          ui->queue_draft.post_action_arg[0] = '\0';
+      }
+      if (!enabled)
+        nk_widget_disable_end(ctx);
+    }
+    nk_combo_end(ctx);
+  }
+  nk_layout_row_dynamic(ctx, 20, 1);
+  if (selected && !config_post_action_enabled(actions[selected]))
+    nk_label_colored(ctx,
+        "Enable this action under [post_actions] in config.toml.",
+        NK_TEXT_LEFT, MUTED);
+  else
+    nk_label_colored(ctx,
+        "Power and command actions need explicit config enablement.",
+        NK_TEXT_LEFT, MUTED);
+  if (strcmp(ui->queue_draft.post_action, "command") == 0)
+    input_field(ctx, "Command (executable and arguments)",
+                ui->queue_draft.post_action_arg,
+                sizeof(ui->queue_draft.post_action_arg));
 }
 
 static void draw_queue_add(struct nk_context *ctx, UiState *ui, float width,

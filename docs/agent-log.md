@@ -850,3 +850,10 @@ Completed: default-off config gates, DB v7 completion/debounce state, one-shot a
 Verification: test-first scheduler mock, DB migration/epoch, config round-trip, real command-spawn smoke; full build and CTest 31/31 passed.
 Open questions: Windows/macOS action launches remain `TODO(platform)` in `docs/open-questions.md`.
 Next: 2.3.2 post-action queue editor UI.
+
+## 2026-09-25 — Codex, task 2.3.2
+Branch: `cdm`; commit: `feat(gui): post-action configuration in queue editor`.
+Completed: queue action dropdown, config-gated disabled choices, command-only input, inline explanation, and save validation.
+Verification: full build and CTest 31/31 passed; isolated offscreen GUI stayed alive three seconds (daemon listener blocked by sandbox; menu clicks unautomated).
+Open questions: none for this task.
+Next: 2.4.1 tray backend research and implementation.
