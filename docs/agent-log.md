@@ -733,3 +733,21 @@ Open questions:
 
 Next:
 - 1.5.3 GUI row menu. Phase 0 merge gate 0.6.3 remains deferred.
+
+## 2026-09-25 — Codex, task 1.5.3
+
+Branch: `cdm`
+Commit: `feat(gui): enable remove and delete-file from row menu` (this entry's commit)
+
+Tasks completed:
+- 1.5.3 Enabled `Remove from list` and `Delete file` in the existing row menu for non-ACTIVE downloads. Delete file opens a confirmation modal showing the destination. Controller and GUI client send the version 4 IPC command; successful removal and REMOVED events immediately clear the local row.
+
+Tests:
+- Test first: the GUI model removal test failed to compile before the API existed.
+- `cmake --build build -j` and full CTest passed 31/31. The offscreen GUI and isolated daemon stayed active for three seconds. Menu clicks and confirmation were not automated.
+
+Open questions:
+- None for this task.
+
+Next:
+- 1.6.1 Refresh project context and release notes for phase 1. Phase 0 merge gate 0.6.3 remains deferred.

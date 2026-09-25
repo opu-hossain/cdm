@@ -28,6 +28,18 @@ Test(gui_controller, preserves_event_order) {
   cr_assert_not(gui_controller_poll(&received));
 }
 
+Test(gui_controller, removed_row_disappears_from_model) {
+  gui_model_init();
+  GuiDownloadRecord rows[2] = {{.id = 71}, {.id = 72}};
+  strcpy(rows[0].status, "DONE");
+  strcpy(rows[1].status, "PAUSED");
+  gui_model_apply_snapshot(rows, 2);
+  gui_model_remove_local_row(71);
+  GuiRow visible[2] = {0};
+  cr_assert_eq(gui_model_snapshot_rows(visible, 2), 1);
+  cr_assert_eq(visible[0].id, 72);
+}
+
 Test(gui_controller, copies_payloads) {
   GuiControllerEvent event = {.type = GUI_CONTROLLER_EVENT_ERROR};
   strcpy(event.data.error.message, "connection failed");

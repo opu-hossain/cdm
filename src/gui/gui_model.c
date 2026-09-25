@@ -173,6 +173,20 @@ void gui_model_apply_optimistic(uint32_t id, const char *new_status) {
   LOG_DEBUG("id=%u status='%s'", id, new_status ? new_status : "");
 }
 
+void gui_model_remove_local_row(uint32_t id) {
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  for (int i = 0; i < g_row_count; i++) {
+    if (g_rows[i].id == id) {
+      memmove(&g_rows[i], &g_rows[i + 1],
+              (size_t)(g_row_count - i - 1) * sizeof(g_rows[0]));
+      g_row_count--;
+      break;
+    }
+  }
+  dm_mutex_unlock(&g_mutex);
+}
+
 void gui_model_for_each_row(void (*fn)(const GuiRow *row, void *ctx),
                             void *ctx) {
   if (!fn)

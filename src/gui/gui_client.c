@@ -316,6 +316,28 @@ bool gui_client_cancel(uint32_t id) {
   return send_with_retry(ipc_send_cancel, id);
 }
 
+bool gui_client_remove_download(uint32_t id, bool delete_file) {
+  if (g_cmd_fd < 0) {
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                              &g_cmd_version);
+    if (g_cmd_fd < 0) {
+      note_lost();
+      return false;
+    }
+    note_restored();
+  }
+  if (g_cmd_version < 4)
+    return false;
+  IpcResult result = IPC_RESULT_ERROR;
+  if (ipc_send_remove_download(g_cmd_fd, id, delete_file, &result) != 0) {
+    ipc_client_disconnect(g_cmd_fd);
+    g_cmd_fd = -1;
+    note_lost();
+    return false;
+  }
+  return result == IPC_RESULT_OK;
+}
+
 static int send_reload_config(int sock, uint32_t id) {
   (void)id;
   return ipc_send_reload_config(sock);

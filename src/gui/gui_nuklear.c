@@ -54,11 +54,12 @@ static const struct nk_user_font *fonts[6]; /* 11 through 16 px */
 
 typedef struct {
   bool connected, add_open, settings_open, details_open, details_found;
+  bool delete_confirm_open;
   bool advanced, toast_open, duplicate_toast_open, menu_just_opened;
   uint32_t duplicate_id;
   bool history_loading;
   uint32_t history_offset, history_total, pending_scroll_adjust;
-  uint32_t selected_id, menu_id;
+  uint32_t selected_id, menu_id, delete_confirm_id;
   GuiTab tab;
   GuiCategory category;
   char search[GUI_SEARCH_CAP];
@@ -69,6 +70,7 @@ typedef struct {
   GuiDownloadDetails details;
   GuiRow toast;
   char error[256], settings_message[256];
+  char delete_confirm_path[IPC_MAX_PATH_LEN];
   char url[GUI_URL_CAP], folder[GUI_FOLDER_CAP];
   char cookie[1024], referrer[2048], headers[GUI_OPTION_CAP], sha256[65];
   int speed_limit;
@@ -710,7 +712,8 @@ static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
       nk_fill_circle(nk_window_get_canvas(ctx),
                      nk_rect(mr.x + 13, mr.y + 13 + d * 5, 2, 2), MUTED);
     bool interactive = !ui->settings_open && !ui->add_open &&
-                       !ui->details_open && !ui->menu_id;
+                       !ui->details_open && !ui->delete_confirm_open &&
+                       !ui->menu_id;
     if (interactive &&
         (clicked || nk_input_mouse_clicked(&ctx->input, NK_BUTTON_RIGHT, r))) {
       ui->selected_id = row->id;
@@ -763,7 +766,7 @@ static void draw_menu(struct nk_context *ctx, UiState *ui, GuiRow *rows,
   }
   bool done = is_status(row, "DONE");
   bool paused = is_status(row, "PAUSED");
-  float mh = 176;
+  float mh = 236;
   float x = ui->menu_pos.x, y = ui->menu_pos.y;
   if (x + 180 > width)
     x = width - 180;
@@ -839,10 +842,20 @@ static void draw_menu(struct nk_context *ctx, UiState *ui, GuiRow *rows,
         report_enqueue(ui, gui_controller_enqueue_cancel(row->id));
         close = true;
       }
-    } else {
-      // TODO(ui-v2): Remove needs a history-delete controller/IPC operation;
-      // cancel does not delete records.
-      button(ctx, 5, by, 170, 30, "Remove (unavailable)", false, false);
+    }
+    by += 32;
+    bool removable = !is_status(row, "ACTIVE");
+    if (button(ctx, 5, by, 170, 30, "Remove from list", removable, false)) {
+      report_enqueue(ui, gui_controller_enqueue_remove(row->id, false));
+      close = true;
+    }
+    by += 30;
+    if (button(ctx, 5, by, 170, 30, "Delete file", removable, false)) {
+      ui->delete_confirm_id = row->id;
+      copy_text(ui->delete_confirm_path, sizeof(ui->delete_confirm_path),
+                row->dest_path);
+      ui->delete_confirm_open = true;
+      close = true;
     }
     nk_layout_space_end(ctx);
     if (close) {
@@ -1193,6 +1206,31 @@ static void draw_details(struct nk_context *ctx, UiState *ui, float width,
   modal_end(ctx);
 }
 
+static void draw_delete_confirmation(struct nk_context *ctx, UiState *ui,
+                                     float width, float height) {
+  float w = 520, h = 230;
+  if (!modal_start(ctx, "delete-file", "Delete download file",
+                   (width - w) / 2, (height - h) / 2, w, h,
+                   &ui->delete_confirm_open)) {
+    nk_end(ctx);
+    return;
+  }
+  text_at(ctx, 20, 76, w - 40, 22,
+          "Delete this download record and its file from disk?", 12, TEXT,
+          SURFACE);
+  text_at(ctx, 20, 111, w - 40, 22, ui->delete_confirm_path, 11, MUTED,
+          SURFACE);
+  fill(ctx, screen_rect(ctx, 0, h - 54, w, 1), 0, BORDER);
+  if (button(ctx, w - 232, h - 41, 80, 30, "Cancel", true, false))
+    ui->delete_confirm_open = false;
+  if (button(ctx, w - 144, h - 41, 124, 30, "Delete file", true, true)) {
+    report_enqueue(ui, gui_controller_enqueue_remove(ui->delete_confirm_id,
+                                                      true));
+    ui->delete_confirm_open = false;
+  }
+  modal_end(ctx);
+}
+
 static void draw_toast(struct nk_context *ctx, UiState *ui, float width,
                        float height) {
   if (ui->duplicate_toast_open) {
@@ -1250,6 +1288,12 @@ static void consume_events(UiState *ui) {
   while (gui_controller_poll(&event)) {
     switch (event.type) {
     case GUI_CONTROLLER_EVENT_STATUS: {
+      if (strcmp(event.data.status.status, "REMOVED") == 0) {
+        gui_model_remove_local_row(event.data.status.download_id);
+        if (ui->selected_id == event.data.status.download_id)
+          ui->selected_id = 0;
+        break;
+      }
       GuiRow previous[GUI_MODEL_MAX_ROWS];
       int n = gui_model_snapshot_rows(previous, GUI_MODEL_MAX_ROWS);
       maybe_complete(ui, find_row(previous, n, event.data.status.download_id),
@@ -1321,6 +1365,11 @@ static void consume_events(UiState *ui) {
           break;
         case GUI_CONTROLLER_OPERATION_CANCEL:
           gui_model_apply_optimistic(id, "CANCELED");
+          break;
+        case GUI_CONTROLLER_OPERATION_REMOVE:
+          gui_model_remove_local_row(id);
+          if (ui->selected_id == id)
+            ui->selected_id = 0;
           break;
         }
       }
@@ -1397,11 +1446,14 @@ int run_gui(void) {
     int window_width, window_height;
     SDL_GetWindowSize(SDL_GL_GetCurrentWindow(), &window_width, &window_height);
     float width = (float)window_width, height = (float)window_height;
-    bool modal = ui.settings_open || ui.add_open || ui.details_open;
+    bool modal = ui.settings_open || ui.add_open || ui.details_open ||
+                 ui.delete_confirm_open;
     if (modal) {
-      float mw = ui.settings_open ? 460 : ui.add_open ? 520 : 580;
+      float mw = ui.settings_open ? 460 : ui.add_open || ui.delete_confirm_open
+                                                ? 520 : 580;
       float mh =
           ui.settings_open ? (height * .8f > 650 ? 650 : height * .8f)
+          : ui.delete_confirm_open ? 230
           : ui.add_open
               ? (ui.advanced ? (height * .85f > 700 ? 700 : height * .85f)
                              : 350)
@@ -1411,7 +1463,8 @@ int run_gui(void) {
       if (SDL_GetKeyboardState(NULL)[SDL_SCANCODE_ESCAPE] ||
           (nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT) &&
            !nk_input_is_mouse_hovering_rect(&ctx->input, modal_bounds))) {
-        ui.settings_open = ui.add_open = ui.details_open = false;
+        ui.settings_open = ui.add_open = ui.details_open =
+            ui.delete_confirm_open = false;
         modal = false;
       }
     }
@@ -1435,12 +1488,15 @@ int run_gui(void) {
     nk_end(ctx);
     if (!modal)
       draw_toast(ctx, &ui, width, height);
-    if (ui.settings_open || ui.add_open || ui.details_open) {
+    if (ui.settings_open || ui.add_open || ui.details_open ||
+        ui.delete_confirm_open) {
       modal_backdrop(ctx, width, height);
       if (ui.settings_open)
         draw_settings(ctx, &ui, width, height);
       else if (ui.add_open)
         draw_add(ctx, &ui, width, height);
+      else if (ui.delete_confirm_open)
+        draw_delete_confirmation(ctx, &ui, width, height);
       else
         draw_details(ctx, &ui, width, height);
     }

@@ -40,6 +40,7 @@ void gui_client_disconnect(void);
 bool gui_client_pause(uint32_t id);
 bool gui_client_resume(uint32_t id);
 bool gui_client_cancel(uint32_t id);
+bool gui_client_remove_download(uint32_t id, bool delete_file);
 
 bool gui_client_add_download(const char *url, const char *dest,
                              const IpcDownloadOptions *opts, uint32_t *out_id);

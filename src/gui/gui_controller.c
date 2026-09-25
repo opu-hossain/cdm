@@ -18,6 +18,7 @@ typedef enum {
   GUI_CONTROLLER_COMMAND_PAUSE,
   GUI_CONTROLLER_COMMAND_RESUME,
   GUI_CONTROLLER_COMMAND_CANCEL,
+  GUI_CONTROLLER_COMMAND_REMOVE,
   GUI_CONTROLLER_COMMAND_DETAILS,
   GUI_CONTROLLER_COMMAND_PAGE,
 } GuiControllerCommandType;
@@ -26,6 +27,7 @@ typedef struct {
   GuiControllerCommandType type;
   uint32_t id;
   bool auto_filename;
+  bool delete_file;
   char url[IPC_MAX_URL_LEN];
   char dest_path[IPC_MAX_PATH_LEN];
   IpcDownloadOptions options;
@@ -215,6 +217,12 @@ bool gui_controller_enqueue_cancel(uint32_t id) {
   return enqueue_id_command(GUI_CONTROLLER_COMMAND_CANCEL, id);
 }
 
+bool gui_controller_enqueue_remove(uint32_t id, bool delete_file) {
+  GuiControllerCommand command = {.type = GUI_CONTROLLER_COMMAND_REMOVE,
+                                  .id = id, .delete_file = delete_file};
+  return enqueue_command(&command);
+}
+
 bool gui_controller_enqueue_details(uint32_t id) {
   return enqueue_id_command(GUI_CONTROLLER_COMMAND_DETAILS, id);
 }
@@ -342,6 +350,10 @@ static void process_command(const GuiControllerCommand *command) {
   case GUI_CONTROLLER_COMMAND_CANCEL:
     operation = GUI_CONTROLLER_OPERATION_CANCEL;
     succeeded = gui_client_cancel(command->id);
+    break;
+  case GUI_CONTROLLER_COMMAND_REMOVE:
+    operation = GUI_CONTROLLER_OPERATION_REMOVE;
+    succeeded = gui_client_remove_download(command->id, command->delete_file);
     break;
   case GUI_CONTROLLER_COMMAND_DETAILS: {
     GuiControllerEvent event = {.type = GUI_CONTROLLER_EVENT_DETAILS};

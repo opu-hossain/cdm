@@ -28,6 +28,7 @@ typedef enum {
   GUI_CONTROLLER_OPERATION_PAUSE,
   GUI_CONTROLLER_OPERATION_RESUME,
   GUI_CONTROLLER_OPERATION_CANCEL,
+  GUI_CONTROLLER_OPERATION_REMOVE,
 } GuiControllerOperation;
 
 typedef struct {
@@ -94,6 +95,7 @@ bool gui_controller_enqueue_add_auto(const char *url, const char *dest_path,
 bool gui_controller_enqueue_pause(uint32_t id);
 bool gui_controller_enqueue_resume(uint32_t id);
 bool gui_controller_enqueue_cancel(uint32_t id);
+bool gui_controller_enqueue_remove(uint32_t id, bool delete_file);
 bool gui_controller_enqueue_details(uint32_t id);
 bool gui_controller_request_more(void);
 /* Advances a bounded history window; used by the controller worker. */
