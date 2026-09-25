@@ -590,3 +590,21 @@ Open questions:
 
 Next:
 - 1.2.2 Apply credentials in curl. Phase 0 merge gate 0.6.3 remains deferred.
+
+## 2026-09-25 — Codex, task 1.2.2
+
+Branch: `cdm`
+Commit: `feat(curl): send basic auth on probe and workers` (this entry's commit)
+
+Tasks completed:
+- 1.2.2 Applied per-download HTTP Basic auth to probe and worker curl handles via a shared helper. Explicitly disabled forwarding credentials on redirects to a different origin.
+
+Tests:
+- Test first: local Basic auth integration case failed to compile before request context fields existed. After implementation it verifies an unauthenticated 401, authenticated HEAD, authenticated file bytes, and redirect to another `127.0.0.1` port without an Authorization header.
+- `cmake --build build -j` and full CTest passed 29/29.
+
+Open questions:
+- User-facing credential entry and plaintext storage policy remain recorded under task 1.2.1 in `docs/open-questions.md`.
+
+Next:
+- 1.3.1 Config keys for connections, User-Agent and timeouts. Phase 0 merge gate 0.6.3 remains deferred.

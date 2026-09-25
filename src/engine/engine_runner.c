@@ -195,6 +195,10 @@ int engine_run_download(struct Download *d) {
       .extra_headers = request && request->extra_headers[0]
                  ? request->extra_headers
                  : NULL,
+      .auth_user = request && request->auth_user[0] ? request->auth_user : NULL,
+      .auth_password = request && request->auth_password[0]
+                           ? request->auth_password
+                           : NULL,
   };
 
   FileInfo info;

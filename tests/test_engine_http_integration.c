@@ -206,6 +206,73 @@ static void start_validator_server(int mode) {
   cr_assert_fail("validator HTTP server did not become ready");
 }
 
+static void start_auth_server(int second_port) {
+  g_server_root[0] = '\0';
+  g_server_port = reserve_port();
+  while (g_server_port == second_port)
+    g_server_port = reserve_port();
+  g_server_pid = fork();
+  cr_assert_neq(g_server_pid, -1);
+  if (g_server_pid == 0) {
+    static const char script[] =
+        "import base64,http.server,sys,threading\n"
+        "FIRST=int(sys.argv[1]); SECOND=int(sys.argv[2])\n"
+        "AUTH='Basic '+base64.b64encode(b'auth-user:auth-pass').decode()\n"
+        "BODY=b'auth-payload'\n"
+        "class First(http.server.BaseHTTPRequestHandler):\n"
+        " def log_message(self,*args): pass\n"
+        " def reply(self,body):\n"
+        "  if self.headers.get('Authorization')!=AUTH:\n"
+        "   self.send_response(401)\n"
+        "   self.send_header('WWW-Authenticate','Basic realm=\"cdm-test\"')\n"
+        "   self.end_headers(); return\n"
+        "  if self.path=='/redirect':\n"
+        "   self.send_response(302)\n"
+        "   self.send_header('Location',f'http://127.0.0.1:{SECOND}/file')\n"
+        "   self.end_headers(); return\n"
+        "  if self.path!='/file': self.send_error(404); return\n"
+        "  self.send_response(200)\n"
+        "  self.send_header('Content-Length',str(len(BODY)))\n"
+        "  self.end_headers()\n"
+        "  if body: self.wfile.write(BODY)\n"
+        " def do_HEAD(self): self.reply(False)\n"
+        " def do_GET(self): self.reply(True)\n"
+        "class Second(http.server.BaseHTTPRequestHandler):\n"
+        " def log_message(self,*args): pass\n"
+        " def reply(self,body):\n"
+        "  if self.headers.get('Authorization'):\n"
+        "   self.send_error(403); return\n"
+        "  self.send_response(200)\n"
+        "  self.send_header('Content-Length','3')\n"
+        "  self.end_headers()\n"
+        "  if body: self.wfile.write(b'new')\n"
+        " def do_HEAD(self): self.reply(False)\n"
+        " def do_GET(self): self.reply(True)\n"
+        "threading.Thread(target=lambda: http.server.ThreadingHTTPServer("
+        "('127.0.0.1',SECOND),Second).serve_forever(),daemon=True).start()\n"
+        "http.server.ThreadingHTTPServer(('127.0.0.1',FIRST),First).serve_forever()\n";
+    char first[16], second[16];
+    snprintf(first, sizeof(first), "%d", g_server_port);
+    snprintf(second, sizeof(second), "%d", second_port);
+    execlp("python3", "python3", "-c", script, first, second,
+           (char *)NULL);
+    _exit(127);
+  }
+  for (int i = 0; i < 100; i++) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    cr_assert_neq(fd, -1);
+    struct sockaddr_in addr = {.sin_family = AF_INET,
+                               .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+                               .sin_port = htons((uint16_t)g_server_port)};
+    int ready = connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0;
+    close(fd);
+    if (ready)
+      return;
+    usleep(10000);
+  }
+  cr_assert_fail("auth HTTP server did not become ready");
+}
+
 static void check_validator_resume(int mode) {
   start_validator_server(mode);
   snprintf(g_download_path, sizeof(g_download_path),
@@ -271,6 +338,43 @@ static void teardown_engine_http(void) {
 
 TestSuite(engine_http_integration, .init = setup_engine_http,
           .fini = teardown_engine_http);
+
+Test(engine_http_integration, basic_auth_probe_worker_and_redirect_boundary) {
+  int second_port = reserve_port();
+  start_auth_server(second_port);
+  char url[160];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/file", g_server_port);
+  FileInfo info = {0};
+  cr_assert_eq(curl_client_head(url, NULL, &info), -1);
+  RequestContext context = {.auth_user = "auth-user",
+                            .auth_password = "auth-pass"};
+  cr_assert_eq(curl_client_head(url, &context, &info), 0);
+  cr_assert_eq(info.total_size, 12);
+
+  snprintf(g_download_path, sizeof(g_download_path),
+           "/tmp/cdm-auth-download-%ld.bin", (long)getpid());
+  Download d = {.id = 72};
+  snprintf(d.url, sizeof(d.url), "%s", url);
+  snprintf(d.dest_path, sizeof(d.dest_path), "%s", g_download_path);
+  RequestOptions options = {0};
+  snprintf(options.auth_user, sizeof(options.auth_user), "auth-user");
+  snprintf(options.auth_password, sizeof(options.auth_password), "auth-pass");
+  cr_assert_eq(db_insert_download(d.id, d.url, d.dest_path, &options), 0);
+  d.request = &options;
+  cr_assert_eq(engine_run_download(&d), 0);
+  cr_assert_eq(file_get_size(g_download_path), 12);
+  FILE *download = fopen(g_download_path, "rb");
+  cr_assert_not_null(download);
+  char actual[12];
+  cr_assert_eq(fread(actual, 1, sizeof(actual), download), sizeof(actual));
+  fclose(download);
+  cr_assert_eq(memcmp(actual, "auth-payload", sizeof(actual)), 0);
+
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/redirect", g_server_port);
+  cr_assert_eq(curl_client_head(url, &context, &info), 0);
+  cr_assert_eq(info.total_size, 3);
+  stop_server();
+}
 
 Test(engine_http_integration, configured_proxy_handles_probe_and_download) {
   const int proxy_port = reserve_port();

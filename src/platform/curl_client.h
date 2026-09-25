@@ -20,6 +20,8 @@ typedef struct {
   const char *referrer;
   const char *extra_headers; // "Key: Value\nKey: Value" lines
   const char *if_range; // Stored strong ETag or Last-Modified for resume GETs.
+  const char *auth_user;
+  const char *auth_password;
 } RequestContext;
 
 typedef struct {
@@ -58,6 +60,7 @@ struct curl_slist *curl_client_build_headers(const char *extra_headers);
 
 /* Apply a config snapshot to a new curl handle before performing a request. */
 CURLcode curl_apply_proxy(CURL *curl, const DownloadManagerConfig *config);
+CURLcode curl_apply_basic_auth(CURL *curl, const RequestContext *ctx);
 
 #ifdef __cplusplus
 }

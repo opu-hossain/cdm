@@ -313,6 +313,13 @@ static void run_one_segment(WorkerContext *ctx) {
     curl_easy_cleanup(curl);
     return;
   }
+  CURLcode auth_result = curl_apply_basic_auth(curl, ctx->request_ctx);
+  if (auth_result != CURLE_OK) {
+    LOG_WARN("Could not configure authentication for worker: %s",
+             curl_easy_strerror(auth_result));
+    curl_easy_cleanup(curl);
+    return;
+  }
 
   curl_easy_setopt(curl, CURLOPT_URL, ctx->url);
   if (!ctx->range.whole_file) {

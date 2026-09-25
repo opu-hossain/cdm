@@ -142,6 +142,24 @@ CURLcode curl_apply_proxy(CURL *curl, const DownloadManagerConfig *config) {
   return code;
 }
 
+CURLcode curl_apply_basic_auth(CURL *curl, const RequestContext *ctx) {
+  if (!curl)
+    return CURLE_BAD_FUNCTION_ARGUMENT;
+  CURLcode code = curl_easy_setopt(curl, CURLOPT_UNRESTRICTED_AUTH, 0L);
+  if (code != CURLE_OK || !ctx ||
+      ((!ctx->auth_user || !ctx->auth_user[0]) &&
+       (!ctx->auth_password || !ctx->auth_password[0])))
+    return code;
+  code = curl_easy_setopt(curl, CURLOPT_HTTPAUTH, (long)CURLAUTH_BASIC);
+  if (code == CURLE_OK)
+    code = curl_easy_setopt(curl, CURLOPT_USERNAME,
+                            ctx->auth_user ? ctx->auth_user : "");
+  if (code == CURLE_OK)
+    code = curl_easy_setopt(curl, CURLOPT_PASSWORD,
+                            ctx->auth_password ? ctx->auth_password : "");
+  return code;
+}
+
 int curl_client_head(const char *url, const RequestContext *ctx,
                      FileInfo *out) {
   memset(out, 0, sizeof(*out));
@@ -159,6 +177,13 @@ int curl_client_head(const char *url, const RequestContext *ctx,
   if (proxy_result != CURLE_OK) {
     LOG_WARN("Could not configure proxy for probe: %s",
              curl_easy_strerror(proxy_result));
+    curl_easy_cleanup(curl);
+    return -1;
+  }
+  CURLcode auth_result = curl_apply_basic_auth(curl, ctx);
+  if (auth_result != CURLE_OK) {
+    LOG_WARN("Could not configure authentication for probe: %s",
+             curl_easy_strerror(auth_result));
     curl_easy_cleanup(curl);
     return -1;
   }
