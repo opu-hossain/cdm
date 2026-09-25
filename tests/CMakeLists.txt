@@ -36,6 +36,10 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             ${CMAKE_SOURCE_DIR}/src/gui/gui_model.c
         )
     endif()
+    if(TEST_NAME STREQUAL test_db)
+        target_compile_definitions(${TEST_NAME} PRIVATE
+            CDM_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
     target_link_libraries(${TEST_NAME}
         PRIVATE
         downloadmgr_core

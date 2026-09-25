@@ -191,6 +191,93 @@ Test(db, foreign_keys_reject_orphan_chunks) {
   cr_assert_eq(db_insert_chunk(999, 0, 1), -1);
 }
 
+Test(db, version_four_fixture_migrates_to_named_queues) {
+  char path[] = "/tmp/cdm-v4-queues-XXXXXX";
+  int fd = mkstemp(path);
+  cr_assert_geq(fd, 0);
+  close(fd);
+  db_close();
+  sqlite3 *seed = NULL;
+  cr_assert_eq(sqlite3_open(path, &seed), SQLITE_OK);
+  char fixture_path[512];
+  snprintf(fixture_path, sizeof(fixture_path), "%s/fixtures/old_schema_v4.sql",
+           CDM_TEST_SOURCE_DIR);
+  FILE *fixture = fopen(fixture_path, "rb");
+  cr_assert_not_null(fixture);
+  cr_assert_eq(fseek(fixture, 0, SEEK_END), 0);
+  long size = ftell(fixture);
+  cr_assert_gt(size, 0);
+  cr_assert_eq(fseek(fixture, 0, SEEK_SET), 0);
+  char *sql = calloc((size_t)size + 1, 1);
+  cr_assert_not_null(sql);
+  cr_assert_eq(fread(sql, 1, (size_t)size, fixture), (size_t)size);
+  fclose(fixture);
+  cr_assert_eq(sqlite3_exec(seed, sql, NULL, NULL, NULL), SQLITE_OK);
+  free(sql);
+  sqlite3_close(seed);
+
+  cr_assert_eq(db_init(path), 0);
+  sqlite3 *reader = NULL;
+  cr_assert_eq(sqlite3_open(path, &reader), SQLITE_OK);
+  sqlite3_stmt *statement = NULL;
+  cr_assert_eq(sqlite3_prepare_v2(reader,
+      "SELECT queue_id FROM downloads WHERE id=77", -1, &statement, NULL),
+      SQLITE_OK);
+  cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 1);
+  sqlite3_finalize(statement);
+  cr_assert_eq(sqlite3_prepare_v2(reader,
+      "SELECT name FROM queues WHERE id=1", -1, &statement, NULL), SQLITE_OK);
+  cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
+  cr_assert_str_eq((const char *)sqlite3_column_text(statement, 0), "Default");
+  sqlite3_finalize(statement);
+  cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
+                                  &statement, NULL), SQLITE_OK);
+  cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 5);
+  sqlite3_finalize(statement);
+  cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA foreign_key_check", -1,
+                                  &statement, NULL), SQLITE_OK);
+  cr_assert_eq(sqlite3_step(statement), SQLITE_DONE);
+  sqlite3_finalize(statement);
+  DbChunkRow chunk[1];
+  cr_assert_eq(db_load_chunks(77, chunk, 1), 1);
+  cr_assert_eq(chunk[0].bytes_done, 40);
+  cr_assert_eq(db_insert_chunk(999, 0, 1), -1);
+  sqlite3_close(reader);
+  db_close();
+  unlink(path);
+}
+
+Test(db, queue_delete_keeps_download_row_with_null_queue_id) {
+  char path[] = "/tmp/cdm-queue-fk-XXXXXX";
+  int fd = mkstemp(path);
+  cr_assert_geq(fd, 0);
+  close(fd);
+  db_close();
+  cr_assert_eq(db_init(path), 0);
+  sqlite3 *writer = NULL;
+  cr_assert_eq(sqlite3_open(path, &writer), SQLITE_OK);
+  cr_assert_eq(sqlite3_exec(writer, "PRAGMA foreign_keys=ON;"
+      "INSERT INTO queues(id,name,priority,max_concurrent)"
+      "VALUES(2,'Secondary',1,0);", NULL, NULL, NULL), SQLITE_OK);
+  cr_assert_eq(db_insert_download(78, "http://127.0.0.1/new",
+                                  "/tmp/cdm-v5-new", NULL), 0);
+  cr_assert_eq(sqlite3_exec(writer,
+      "UPDATE downloads SET queue_id=2 WHERE id=78;"
+      "DELETE FROM queues WHERE id=2;", NULL, NULL, NULL), SQLITE_OK);
+  sqlite3_stmt *statement = NULL;
+  cr_assert_eq(sqlite3_prepare_v2(writer,
+      "SELECT queue_id FROM downloads WHERE id=78", -1, &statement, NULL),
+      SQLITE_OK);
+  cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
+  cr_assert_eq(sqlite3_column_type(statement, 0), SQLITE_NULL);
+  sqlite3_finalize(statement);
+  sqlite3_close(writer);
+  db_close();
+  unlink(path);
+}
+
 Test(db, legacy_schema_migrates_transactionally) {
   const char *path = "/tmp/cdm_legacy_migration.db";
   unlink(path);
@@ -219,7 +306,7 @@ Test(db, legacy_schema_migrates_transactionally) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 4);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 5);
   sqlite3_finalize(statement);
 
   cr_assert_eq(sqlite3_prepare_v2(

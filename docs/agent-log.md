@@ -768,3 +768,21 @@ Open questions:
 
 Next:
 - 1.6.2 formal phase 1 merge gate; user requested work on `cdm` and no push until the full plan. Continue independent phase 2 tasks without merging until branch/gate questions are resolved.
+
+## 2026-09-25 — Codex, task 2.1.1
+
+Branch: `cdm`
+Commit: `feat(db): add named queues and queue_id on downloads` (this entry's commit)
+
+Tasks completed:
+- 2.1.1 Added schema version 5 with a named `queues` table, default queue 1, and `downloads.queue_id` defaulting to 1 with `ON DELETE SET NULL`. A v4 fixture migration preserves downloads and chunk progress. SQLite requires foreign key enforcement to be disabled before adding a REFERENCES column with a non-NULL default; migration does this before BEGIN, validates the constraints, then re-enables enforcement after COMMIT.
+
+Tests:
+- Test first: the v4 fixture test failed because `queue_id` did not exist.
+- Focused tests cover v4 migration, default queue, version 5, preserved chunks, FK enforcement and deleting a nondefault queue while retaining its download row. `cmake --build build -j` and full CTest passed 31/31. The fixture migration is the schema smoke test.
+
+Open questions:
+- Phase merge gates remain deferred on user-selected branch `cdm`; no push was performed.
+
+Next:
+- 2.1.2 Queue manager API and priority scheduling.

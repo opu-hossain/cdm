@@ -74,6 +74,17 @@ int db_init(const char *db_path) {
   sqlite3_exec(g_db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
 
   const char *schema =
+      "CREATE TABLE IF NOT EXISTS queues ("
+      "  id INTEGER PRIMARY KEY,"
+      "  name TEXT NOT NULL UNIQUE,"
+      "  priority INTEGER NOT NULL DEFAULT 0,"
+      "  max_concurrent INTEGER NOT NULL DEFAULT 0,"
+      "  schedule_start TEXT NOT NULL DEFAULT '',"
+      "  schedule_stop TEXT NOT NULL DEFAULT '',"
+      "  post_action TEXT NOT NULL DEFAULT 'none',"
+      "  post_action_arg TEXT NOT NULL DEFAULT '',"
+      "  created_at INTEGER NOT NULL DEFAULT 0"
+      ");"
       "CREATE TABLE IF NOT EXISTS downloads ("
       "  id              INTEGER PRIMARY KEY,"
       "  url             TEXT NOT NULL,"
@@ -92,7 +103,8 @@ int db_init(const char *db_path) {
       "  last_modified   TEXT DEFAULT '',"
       "  auto_filename   INTEGER DEFAULT 0,"
       "  auth_user       TEXT DEFAULT '',"
-      "  auth_password   TEXT DEFAULT ''"
+      "  auth_password   TEXT DEFAULT '',"
+      "  queue_id INTEGER DEFAULT 1 REFERENCES queues(id) ON DELETE SET NULL"
       ");"
       ""
       "CREATE TABLE IF NOT EXISTS chunks ("
@@ -116,20 +128,46 @@ int db_init(const char *db_path) {
                                           "expected_sha256", "speed_limit_bps",
                                           "reserved_file", "etag",
                                           "last_modified", "auto_filename",
-                                          "auth_user", "auth_password"};
+                                          "auth_user", "auth_password",
+                                          "queue_id"};
   static const char *migration_types[] = {"TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "INTEGER DEFAULT 0", "INTEGER DEFAULT 0",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "INTEGER DEFAULT 0", "TEXT DEFAULT ''",
-                                          "TEXT DEFAULT ''"};
+                                          "TEXT DEFAULT ''",
+                                          "INTEGER DEFAULT 1 REFERENCES queues(id) ON DELETE SET NULL"};
 
   char *migration_error = NULL;
+  /* SQLite requires a NULL default when adding REFERENCES with FK checks
+   * enabled. Disable enforcement before BEGIN, then validate and restore it. */
+  bool adding_queue_fk = !db_column_exists("downloads", "queue_id");
+  if (adding_queue_fk &&
+      sqlite3_exec(g_db, "PRAGMA foreign_keys=OFF;", NULL, NULL, NULL) !=
+          SQLITE_OK) {
+    db_close();
+    return -1;
+  }
   rc = sqlite3_exec(g_db, "BEGIN;", NULL, NULL, &migration_error);
   if (rc != SQLITE_OK) {
     LOG_ERROR("could not begin database migration: %s",
               migration_error ? migration_error : "unknown error");
     sqlite3_free(migration_error);
+    db_close();
+    return -1;
+  }
+  sqlite3_free(migration_error);
+
+  rc = sqlite3_exec(g_db,
+      "INSERT OR IGNORE INTO queues(id,name,priority,max_concurrent,"
+      "schedule_start,schedule_stop,post_action,post_action_arg,created_at) "
+      "VALUES(1,'Default',0,0,'','','none','',strftime('%s','now'));",
+      NULL, NULL, &migration_error);
+  if (rc != SQLITE_OK) {
+    LOG_ERROR("could not seed default queue: %s",
+              migration_error ? migration_error : "unknown error");
+    sqlite3_free(migration_error);
+    sqlite3_exec(g_db, "ROLLBACK;", NULL, NULL, NULL);
     db_close();
     return -1;
   }
@@ -154,7 +192,19 @@ int db_init(const char *db_path) {
     sqlite3_free(migration_error);
   }
 
-  rc = sqlite3_exec(g_db, "PRAGMA user_version = 4; COMMIT;", NULL, NULL,
+  sqlite3_stmt *fk_check = NULL;
+  if (sqlite3_prepare_v2(g_db, "PRAGMA foreign_key_check", -1,
+                         &fk_check, NULL) != SQLITE_OK ||
+      sqlite3_step(fk_check) != SQLITE_DONE) {
+    LOG_ERROR("database migration failed foreign key check");
+    sqlite3_finalize(fk_check);
+    sqlite3_exec(g_db, "ROLLBACK;", NULL, NULL, NULL);
+    db_close();
+    return -1;
+  }
+  sqlite3_finalize(fk_check);
+
+  rc = sqlite3_exec(g_db, "PRAGMA user_version = 5; COMMIT;", NULL, NULL,
                     &migration_error);
   if (rc != SQLITE_OK) {
     LOG_ERROR("could not commit database migration: %s",
@@ -165,6 +215,12 @@ int db_init(const char *db_path) {
     return -1;
   }
   sqlite3_free(migration_error);
+  if (adding_queue_fk &&
+      sqlite3_exec(g_db, "PRAGMA foreign_keys=ON;", NULL, NULL, NULL) !=
+          SQLITE_OK) {
+    db_close();
+    return -1;
+  }
 
   LOG_INFO("opened %s", db_path);
   return 0;
