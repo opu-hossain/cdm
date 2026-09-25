@@ -415,7 +415,11 @@ bool gui_client_add_download_result(const char *url, const char *dest,
     return false;
 
   IpcAddResponse response = {0};
-  if (g_cmd_version >= 3) {
+  if (g_cmd_version >= 6) {
+    if (ipc_send_add_download_v3(g_cmd_fd, url, dest, opts, auto_filename,
+                                 &response) != 0)
+      response.result = IPC_RESULT_ERROR;
+  } else if (g_cmd_version >= 3) {
     if (ipc_send_add_download_v2(g_cmd_fd, url, dest, opts, auto_filename,
                                  &response) != 0)
       response.result = IPC_RESULT_ERROR;

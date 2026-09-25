@@ -9,6 +9,27 @@
 #include <strings.h>
 #include <sys/stat.h>
 
+bool path_extension_in_list(const char *filename, const char *extensions) {
+  if (!filename || !extensions || !filename[0])
+    return false;
+  const char *dot = strrchr(filename, '.');
+  if (!dot || !dot[1])
+    return false;
+  const char *extension = dot + 1;
+  size_t length = strlen(extension);
+  const char *cursor = extensions;
+  while (*cursor) {
+    const char *end = strchr(cursor, ',');
+    size_t token_length = end ? (size_t)(end - cursor) : strlen(cursor);
+    if (token_length == length && strncasecmp(cursor, extension, length) == 0)
+      return true;
+    if (!end)
+      break;
+    cursor = end + 1;
+  }
+  return false;
+}
+
 static int hex_digit(char c) {
   if (c >= '0' && c <= '9')
     return c - '0';

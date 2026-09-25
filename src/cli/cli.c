@@ -208,19 +208,29 @@ static int run_list(int sock, uint16_t daemon_version, int argc, char **argv) {
 
 static int submit_add(int sock, uint16_t daemon_version, const char *url,
                       const char *dest_dir, const IpcDownloadOptions *opts) {
+  IpcDownloadOptions selected_opts = opts ? *opts : (IpcDownloadOptions){0};
+  selected_opts.auto_directory = !dest_dir || !dest_dir[0];
   char filename[512];
   char full_path[IPC_MAX_PATH_LEN];
   char unique_path[IPC_MAX_PATH_LEN];
   if (!dest_dir || !dest_dir[0])
     dest_dir = config_get_default_download_dir();
   path_filename_from_url(url, filename, sizeof(filename));
-  if (!path_join(dest_dir, filename, full_path, sizeof(full_path)) ||
-      !path_make_unique(full_path, unique_path, sizeof(unique_path))) {
+  bool prepared = path_join(dest_dir, filename, full_path, sizeof(full_path));
+  if (prepared && selected_opts.auto_directory && daemon_version >= 6)
+    memcpy(unique_path, full_path, strlen(full_path) + 1);
+  else if (prepared)
+    prepared = path_make_unique(full_path, unique_path, sizeof(unique_path));
+  if (!prepared) {
     fprintf(stderr, "Could not create a destination path\n");
     return 1;
   }
   IpcAddResponse add = {0};
-  if (daemon_version >= 3) {
+  if (daemon_version >= 6) {
+    if (ipc_send_add_download_v3(sock, url, unique_path, &selected_opts,
+                                 true, &add) != 0)
+      add.result = IPC_RESULT_ERROR;
+  } else if (daemon_version >= 3) {
     if (ipc_send_add_download_v2(sock, url, unique_path, opts, true, &add) != 0)
       add.result = IPC_RESULT_ERROR;
   } else {

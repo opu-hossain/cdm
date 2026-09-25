@@ -46,9 +46,10 @@ typedef enum {
   MSG_QUEUE_UPDATE = 47,
   MSG_QUEUE_DELETE = 48,
   MSG_QUEUE_REORDER = 49,
+  MSG_ADD_DOWNLOAD_V3 = 50, // v2 JSON plus auto_directory; v2 response
 } MsgType;
 
-#define IPC_PROTOCOL_VERSION 5
+#define IPC_PROTOCOL_VERSION 6
 
 /* Keep the v1 frame header unchanged for legacy clients. Version negotiation
  * uses MSG_HELLO; future versioned payloads use distinct message types. */

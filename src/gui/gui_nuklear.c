@@ -87,6 +87,7 @@ typedef struct {
   char queue_priority[16], queue_cap[16];
   char batch_urls[8192];
   bool clipboard_monitor, clipboard_monitor_enabled, clipboard_offer_open;
+  bool folder_explicit; // GUI main thread owns the destination choice
   char clipboard_seen[GUI_URL_CAP], clipboard_offer[GUI_URL_CAP];
   uint32_t clipboard_checked_at, clipboard_changed_at;
 } UiState;
@@ -378,13 +379,18 @@ static void report_enqueue(UiState *ui, bool ok) {
 static bool add_download(const char *url, const char *folder,
                          const char *cookie, const char *referrer,
                          const char *headers, const char *sha256,
-                         uint64_t speed_limit, uint32_t queue_id) {
+                         uint64_t speed_limit, uint32_t queue_id,
+                         bool auto_directory) {
   char filename[512];
   char path[IPC_MAX_PATH_LEN];
   char unique_path[IPC_MAX_PATH_LEN];
   path_filename_from_url(url, filename, sizeof(filename));
-  if (!path_join(folder, filename, path, sizeof(path)) ||
-      !path_make_unique(path, unique_path, sizeof(unique_path))) {
+  bool prepared = path_join(folder, filename, path, sizeof(path));
+  if (prepared && auto_directory)
+    memcpy(unique_path, path, strlen(path) + 1);
+  else if (prepared)
+    prepared = path_make_unique(path, unique_path, sizeof(unique_path));
+  if (!prepared) {
     LOG_ERROR("nuklear_gui: could not create a destination path");
     return false;
   }
@@ -396,10 +402,12 @@ static bool add_download(const char *url, const char *folder,
       .expected_sha256 = sha256[0] ? sha256 : NULL,
       .speed_limit_bps = speed_limit,
       .queue_id = queue_id,
+      .auto_directory = auto_directory,
   };
   bool has_options = options.cookie || options.referrer ||
                      options.extra_headers || options.expected_sha256 ||
-                     options.speed_limit_bps > 0 || options.queue_id > 0;
+                     options.speed_limit_bps > 0 || options.queue_id > 0 ||
+                     options.auto_directory;
   return gui_controller_enqueue_add_auto(url, unique_path,
                                          has_options ? &options : NULL);
 }
@@ -1177,6 +1185,7 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
       ui->clipboard_offer_open = false;
       copy_text(ui->folder, sizeof(ui->folder), ui->directory);
       ui->disk_checked_at = UINT32_MAX;
+      ui->folder_explicit = false;
       ui->settings_open = false;
     } else
       copy_text(ui->settings_message, sizeof(ui->settings_message),
@@ -1214,8 +1223,9 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
     nk_label(ctx, "Save to", NK_TEXT_LEFT);
     nk_layout_row_begin(ctx, NK_STATIC, 34, 3);
     nk_layout_row_push(ctx, 342);
-    nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->folder,
-                                   sizeof(ui->folder), NULL);
+    if (nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->folder,
+                                       sizeof(ui->folder), NULL) & NK_EDIT_ACTIVE)
+      ui->folder_explicit = true;
     nk_layout_row_push(ctx, 8);
     nk_spacing(ctx, 1);
     nk_layout_row_push(ctx, 120);
@@ -1224,6 +1234,8 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
           tinyfd_selectFolderDialog("Choose download folder", ui->folder);
       if (chosen)
         copy_text(ui->folder, sizeof(ui->folder), chosen);
+      if (chosen)
+        ui->folder_explicit = true;
     }
     nk_layout_row_end(ctx);
     nk_layout_row_dynamic(ctx, 12, 1);
@@ -1280,10 +1292,13 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
                 "Speed limit must be between 0 and 1000000000.");
     else if (add_download(ui->url, ui->folder, ui->cookie, ui->referrer,
                           ui->headers, ui->sha256, (uint64_t)ui->speed_limit,
-                          ui->add_queue_id)) {
+                          ui->add_queue_id, !ui->folder_explicit)) {
       ui->add_open = false;
       ui->error[0] = '\0';
-      ui->url[0] = ui->folder[0] = ui->cookie[0] = ui->referrer[0] = '\0';
+      ui->url[0] = ui->cookie[0] = ui->referrer[0] = '\0';
+      copy_text(ui->folder, sizeof(ui->folder),
+                config_get_default_download_dir());
+      ui->folder_explicit = false;
       ui->headers[0] = ui->sha256[0] = '\0';
       ui->speed_limit = 0;
       ui->add_queue_id = 0;
@@ -1313,8 +1328,9 @@ static void draw_batch_add(struct nk_context *ctx, UiState *ui, float width,
                                  sizeof(ui->batch_urls), NULL);
   text_at(ctx, 20, 368, w - 40, 20, "Save to", 11, MUTED, SURFACE);
   nk_layout_space_push(ctx, nk_rect(20, 390, w - 40, 32));
-  nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->folder,
-                                 sizeof(ui->folder), NULL);
+  if (nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->folder,
+                                     sizeof(ui->folder), NULL) & NK_EDIT_ACTIVE)
+    ui->folder_explicit = true;
   text_at(ctx, 20, h - 90, w - 40, 22, ui->error, 11, RED, SURFACE);
   fill(ctx, screen_rect(ctx, 0, h - 54, w, 1), 0, BORDER);
   if (button(ctx, w - 232, h - 41, 80, 30, "Cancel", true, false))
@@ -1347,7 +1363,8 @@ static void draw_batch_add(struct nk_context *ctx, UiState *ui, float width,
         url[--url_length] = '\0';
       if (*url && *url != '#') {
         if (!clipboard_url_valid(url) || !ui->folder[0] ||
-            !add_download(url, ui->folder, "", "", "", "", 0, 0)) {
+            !add_download(url, ui->folder, "", "", "", "", 0, 0,
+                          !ui->folder_explicit)) {
           memmove(ui->batch_urls, ui->batch_urls + consumed,
                   length - consumed + 1);
           failed = true;

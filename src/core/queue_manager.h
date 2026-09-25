@@ -18,6 +18,10 @@ extern "C" {
 
 #define QM_MAX_CHUNKS 16 // keep in sync with segmenter.h's MAX_WORKERS
 
+typedef struct Category Category;
+/* Chooses a stored category by extension; unknown names use Default. */
+bool category_for_filename(const char *name, Category *out);
+
 /* Request options (supplied by the user) */
 typedef struct {
   char cookie[1024];

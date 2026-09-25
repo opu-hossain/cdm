@@ -27,7 +27,7 @@ typedef struct {
 /* Lightweight list row; request details are fetched on demand. */
 typedef DownloadListRecord DbDownloadRow;
 
-typedef struct {
+typedef struct Category {
   uint32_t id;
   char name[128];
   char extensions[512]; // comma-separated lowercase tokens without dots

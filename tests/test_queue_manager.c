@@ -29,6 +29,32 @@ Test(queue_manager, add_and_find) {
   queue_manager_remove(id);
 }
 
+Test(queue_manager, category_routes_known_extensions_and_defaults) {
+  cr_assert_eq(db_init(":memory:"), 0);
+  Category video = {.name = "Video"};
+  strcpy(video.extensions, "mp4,mkv");
+  strcpy(video.default_dir, "/tmp/Video");
+  Category archives = {.name = "Archives"};
+  strcpy(archives.extensions, "zip");
+  strcpy(archives.default_dir, "/tmp/Archives");
+  uint32_t id = 0;
+  cr_assert_eq(db_category_create(&video, &id), 0);
+  cr_assert_eq(db_category_create(&archives, &id), 0);
+  Category short_video = {.name = "Short video"};
+  strcpy(short_video.extensions, "mp4");
+  cr_assert_eq(db_category_create(&short_video, &id), 0);
+  Category selected = {0};
+  cr_assert(category_for_filename("movie.MP4", &selected));
+  cr_assert_str_eq(selected.name, "Video");
+  cr_assert(category_for_filename("archive.zip", &selected));
+  cr_assert_str_eq(selected.name, "Archives");
+  cr_assert(category_for_filename("mystery", &selected));
+  cr_assert_str_eq(selected.name, "Default");
+  cr_assert(category_for_filename("", &selected));
+  cr_assert_str_eq(selected.name, "Default");
+  db_close();
+}
+
 Test(queue_manager, named_queue_crud_and_priority_selection) {
   cr_assert_eq(db_init(":memory:"), 0);
   Queue fast = {.priority = 8, .max_concurrent = 1};

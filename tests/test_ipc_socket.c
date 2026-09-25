@@ -37,6 +37,76 @@ TestSuite(ipc, .init = setup_ipc, .fini = teardown_ipc);
 static atomic_bool browser_server_running;
 static int browser_server_thread(void *unused);
 
+Test(ipc, category_routing_reserves_final_path_but_respects_explicit_folder) {
+  char root[] = "/tmp/cdm-category-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(root));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", root, 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  Category category = {.name = "Video"};
+  strcpy(category.extensions, "mp4");
+  char video_dir[1024];
+  int written = snprintf(video_dir, sizeof(video_dir), "%s/video", root);
+  cr_assert_geq(written, 0);
+  cr_assert_lt((size_t)written, sizeof(video_dir));
+  strcpy(category.default_dir, video_dir);
+  uint32_t category_id = 0;
+  cr_assert_eq(db_category_create(&category, &category_id), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  char requested[1024], routed[1024], explicit_path[1024];
+  written = snprintf(requested, sizeof(requested), "%s/movie.mp4", root);
+  cr_assert_geq(written, 0);
+  cr_assert_lt((size_t)written, sizeof(requested));
+  written = snprintf(routed, sizeof(routed), "%s/movie.mp4", video_dir);
+  cr_assert_geq(written, 0);
+  cr_assert_lt((size_t)written, sizeof(routed));
+  written = snprintf(explicit_path, sizeof(explicit_path),
+                     "%s/explicit.mp4", root);
+  cr_assert_geq(written, 0);
+  cr_assert_lt((size_t)written, sizeof(explicit_path));
+  IpcDownloadOptions automatic = {.auto_directory = true};
+  IpcAddResponse response = {0};
+  cr_assert_eq(ipc_send_add_download_v3(client,
+      "http://127.0.0.1/movie.mp4", requested, &automatic, true,
+      &response), 0);
+  cr_assert_eq(response.result, IPC_RESULT_OK);
+  uint32_t auto_id = response.id;
+  cr_assert_str_eq(queue_manager_find_by_id(auto_id)->dest_path, routed);
+  cr_assert_eq(access(routed, F_OK), 0);
+  cr_assert_eq(access(requested, F_OK), -1);
+  DbDownloadRow persisted[4] = {0};
+  int stored = db_list_all_downloads(persisted, 4);
+  cr_assert_geq(stored, 1);
+  bool found_routed = false;
+  for (int i = 0; i < stored; i++)
+    if (persisted[i].id == auto_id)
+      found_routed = strcmp(persisted[i].dest_path, routed) == 0;
+  cr_assert(found_routed);
+  IpcDownloadOptions explicit = {0};
+  cr_assert_eq(ipc_send_add_download_v3(client,
+      "http://127.0.0.1/explicit.mp4", explicit_path, &explicit, true,
+      &response), 0);
+  cr_assert_eq(response.result, IPC_RESULT_OK);
+  uint32_t explicit_id = response.id;
+  cr_assert_str_eq(queue_manager_find_by_id(explicit_id)->dest_path,
+                   explicit_path);
+  cr_assert_eq(access(explicit_path, F_OK), 0);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  queue_manager_remove(auto_id);
+  queue_manager_remove(explicit_id);
+  db_close();
+  rmdir(video_dir);
+  rmdir(root);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
 Test(ipc, queue_commands_round_trip_and_assign_download) {
   char dir[] = "/tmp/cdm-queue-ipc-XXXXXX";
   cr_assert_not_null(mkdtemp(dir));

@@ -6,6 +6,7 @@
 #include "../persistence/db.h"
 #include "../platform/thread.h"
 #include "../utils/log.h"
+#include "../utils/path.h"
 
 #include <errno.h>
 #include <libgen.h>
@@ -21,6 +22,33 @@ static Download *g_head = NULL;
 static uint32_t g_next_id = 1;
 static dm_mutex_t g_mutex;
 static once_flag g_mutex_once = ONCE_FLAG_INIT;
+
+bool category_for_filename(const char *name, Category *out) {
+  if (!out)
+    return false;
+  Category *categories = NULL;
+  size_t count = 0;
+  if (db_category_list(&categories, &count) != 0)
+    return false;
+  bool found_default = false;
+  size_t best_length = 0;
+  for (size_t i = 0; i < count; ++i) {
+    if (categories[i].id == 1) {
+      *out = categories[i];
+      found_default = true;
+    }
+  }
+  for (size_t i = 0; i < count; ++i) {
+    size_t list_length = strlen(categories[i].extensions);
+    if (categories[i].id != 1 && list_length > best_length &&
+        path_extension_in_list(name, categories[i].extensions)) {
+      *out = categories[i];
+      best_length = list_length;
+    }
+  }
+  free(categories);
+  return found_default;
+}
 
 static bool request_options_present(const RequestOptions *opts) {
   return opts &&
@@ -77,8 +105,10 @@ static bool is_safe_dest_path(const char *path) {
                temp_dir, strerror(errno));
       return false;
     }
+    char previous[sizeof(temp_dir)];
+    strcpy(previous, temp_dir);
     char *parent = dirname(temp_dir);
-    if (!parent || strcmp(parent, temp_dir) == 0 || strcmp(parent, ".") == 0 ||
+    if (!parent || strcmp(parent, previous) == 0 || strcmp(parent, ".") == 0 ||
         strcmp(parent, "/") == 0) {
       LOG_WARN("is_safe_dest_path: rejected — no valid existing parent "
                "directory for '%s'",

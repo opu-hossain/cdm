@@ -36,7 +36,7 @@ with the user; skip to Phase 2 in the meantime.
 - [x] **2.5.1** Clipboard monitor — **S** — opt-in config flag, regex-shaped URL check, debounce
 - [x] **2.5.2** Batch add (CLI + GUI) — **S** — file parsing, reuses `MSG_ADD_DOWNLOAD_V2`
 - [x] **2.6.1** Categories schema — **S** — same migration pattern already used in 2.1.1
-- [ ] **2.6.2** Category routing — **S** — pure function, test cases given in the plan
+- [x] **2.6.2** Category routing — **S** — pure function, test cases given in the plan
 - [ ] **2.6.3** Editable categories UI — **S** — mirrors the queues tab; use `src/gui/AGENTS.md`
 - [ ] **2.7.1** Phase 2 wrap-up (docs + full CTest/ASan/TSan gate) — **S** to draft, but the ASan/TSan run itself is the verifier's job, not a coding task
 

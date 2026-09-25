@@ -71,6 +71,7 @@ typedef struct {
   const char *auth_user;
   const char *auth_password;
   uint32_t queue_id; // 0 = default queue; MSG_ADD_DOWNLOAD_V2 only
+  bool auto_directory; // v3 JSON only; no explicit destination folder
 } IpcDownloadOptions;
 
 /* Response to MSG_ADD_DOWNLOAD_V2 and MSG_BROWSER_CONFIRM_V2. */
@@ -105,6 +106,9 @@ uint32_t ipc_send_add_download_auto(int sock, const char *url,
                                     const char *dest_path,
                                     const IpcDownloadOptions *options);
 int ipc_send_add_download_v2(int sock, const char *url, const char *dest_path,
+                             const IpcDownloadOptions *options,
+                             bool auto_filename, IpcAddResponse *out);
+int ipc_send_add_download_v3(int sock, const char *url, const char *dest_path,
                              const IpcDownloadOptions *options,
                              bool auto_filename, IpcAddResponse *out);
 int ipc_send_pause(int sock, uint32_t id);

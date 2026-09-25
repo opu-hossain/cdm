@@ -407,6 +407,7 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_ADD_DOWNLOAD:
   case MSG_ADD_DOWNLOAD_AUTO:
   case MSG_ADD_DOWNLOAD_V2:
+  case MSG_ADD_DOWNLOAD_V3:
   case MSG_BROWSER_OFFER:
     return header->length <= IPC_MAX_FRAME_SIZE;
   case MSG_PAUSE:
@@ -563,7 +564,8 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
   }
   case MSG_ADD_DOWNLOAD:
   case MSG_ADD_DOWNLOAD_AUTO:
-  case MSG_ADD_DOWNLOAD_V2: {
+  case MSG_ADD_DOWNLOAD_V2:
+  case MSG_ADD_DOWNLOAD_V3: {
     char url[IPC_MAX_URL_LEN];
     char dest[IPC_MAX_PATH_LEN];
     char options_json[8192];
@@ -576,6 +578,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     RequestOptions opts = {0};
     bool invalid_queue_id = false;
     bool auto_filename = hdr->type == MSG_ADD_DOWNLOAD_AUTO;
+    bool auto_directory = false;
     if (options_json[0] != '\0') {
       cJSON *root = cJSON_Parse(options_json);
       if (root) {
@@ -605,9 +608,14 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         if (cJSON_IsString(v) && v->valuestring)
           strncpy(opts.auth_password, v->valuestring,
                   sizeof(opts.auth_password) - 1);
-        if (hdr->type == MSG_ADD_DOWNLOAD_V2) {
+        if (hdr->type == MSG_ADD_DOWNLOAD_V2 ||
+            hdr->type == MSG_ADD_DOWNLOAD_V3) {
           v = cJSON_GetObjectItemCaseSensitive(root, "auto_filename");
           auto_filename = cJSON_IsTrue(v);
+          if (hdr->type == MSG_ADD_DOWNLOAD_V3) {
+            v = cJSON_GetObjectItemCaseSensitive(root, "auto_directory");
+            auto_directory = cJSON_IsTrue(v);
+          }
           v = cJSON_GetObjectItemCaseSensitive(root, "queue_id");
           if (v) {
             if (!cJSON_IsNumber(v) || v->valuedouble < 1 ||
@@ -633,10 +641,29 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     }
     if (!invalid_queue_id && url_normalize(url, normalized, sizeof(normalized)))
       found = db_find_active_by_url(normalized, &id);
+    const char *requested = dest;
+    char routed[IPC_MAX_PATH_LEN];
+    if (auto_directory && !auto_filename)
+      invalid_queue_id = true;
+    if (!invalid_queue_id && found == 0 && auto_directory) {
+      const char *slash = strrchr(dest, '/');
+      const char *filename = slash ? slash + 1 : dest;
+      Category category = {0};
+      if (!category_for_filename(filename, &category))
+        invalid_queue_id = true;
+      else if (category.default_dir[0]) {
+        if (!path_join(category.default_dir, filename, routed,
+                       sizeof(routed)))
+          invalid_queue_id = true;
+        else
+          requested = routed;
+      }
+    }
     if (!invalid_queue_id && found == 0)
-      id = reserve_download(url, dest, &opts, auto_filename);
+      id = reserve_download(url, requested, &opts, auto_filename);
     LOG_INFO("MSG_ADD_DOWNLOAD: queue_manager_add returned id=%u", id);
-    if (hdr->type == MSG_ADD_DOWNLOAD_V2) {
+    if (hdr->type == MSG_ADD_DOWNLOAD_V2 ||
+        hdr->type == MSG_ADD_DOWNLOAD_V3) {
       IpcAddResponse response = {
           .result = invalid_queue_id || found == 1 ? IPC_RESULT_REJECTED
                                : id ? IPC_RESULT_OK : IPC_RESULT_ERROR,
@@ -1336,12 +1363,15 @@ static int send_add_download(int sock, MsgType type, const char *url,
     return -1;
 
   char *options_json = NULL;
-  if (options || type == MSG_ADD_DOWNLOAD_V2) {
+  if (options || type == MSG_ADD_DOWNLOAD_V2 || type == MSG_ADD_DOWNLOAD_V3) {
     cJSON *root = cJSON_CreateObject();
     if (!root)
       return -1;
-    if (type == MSG_ADD_DOWNLOAD_V2)
+    if (type == MSG_ADD_DOWNLOAD_V2 || type == MSG_ADD_DOWNLOAD_V3)
       cJSON_AddBoolToObject(root, "auto_filename", auto_filename);
+    if (type == MSG_ADD_DOWNLOAD_V3)
+      cJSON_AddBoolToObject(root, "auto_directory",
+                            options && options->auto_directory);
     if (options && options->cookie && options->cookie[0])
       cJSON_AddStringToObject(root, "cookie", options->cookie);
     if (options && options->referrer && options->referrer[0])
@@ -1358,7 +1388,8 @@ static int send_add_download(int sock, MsgType type, const char *url,
       cJSON_AddStringToObject(root, "auth_user", options->auth_user);
     if (options && options->auth_password && options->auth_password[0])
       cJSON_AddStringToObject(root, "auth_password", options->auth_password);
-    if (type == MSG_ADD_DOWNLOAD_V2 && options && options->queue_id)
+    if ((type == MSG_ADD_DOWNLOAD_V2 || type == MSG_ADD_DOWNLOAD_V3) &&
+        options && options->queue_id)
       cJSON_AddNumberToObject(root, "queue_id", options->queue_id);
     options_json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -1390,7 +1421,7 @@ static int send_add_download(int sock, MsgType type, const char *url,
     sent = ipc_write_exact(sock, json_str, strlen(json_str)) == 0;
 
   IpcAddResponse response = {0};
-  if (sent && type == MSG_ADD_DOWNLOAD_V2)
+  if (sent && (type == MSG_ADD_DOWNLOAD_V2 || type == MSG_ADD_DOWNLOAD_V3))
     sent = ipc_read_exact(sock, &response, sizeof(response)) == 0;
   else if (sent) {
     sent = ipc_read_exact(sock, &response.id, sizeof(response.id)) == 0;
@@ -1425,6 +1456,15 @@ int ipc_send_add_download_v2(int sock, const char *url, const char *dest_path,
   if (!out)
     return -1;
   return send_add_download(sock, MSG_ADD_DOWNLOAD_V2, url, dest_path, options,
+                           auto_filename, out);
+}
+
+int ipc_send_add_download_v3(int sock, const char *url, const char *dest_path,
+                             const IpcDownloadOptions *options,
+                             bool auto_filename, IpcAddResponse *out) {
+  if (!out)
+    return -1;
+  return send_add_download(sock, MSG_ADD_DOWNLOAD_V3, url, dest_path, options,
                            auto_filename, out);
 }
 

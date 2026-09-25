@@ -389,7 +389,8 @@ static void process_command(const GuiControllerCommand *command) {
                 command->options.extra_headers ||
                 command->options.expected_sha256 ||
         command->options.speed_limit_bps > 0
-                || command->options.queue_id > 0
+                || command->options.queue_id > 0 ||
+                command->options.auto_directory
             ? &command->options
             : NULL,
         command->auto_filename, &id, &duplicate);

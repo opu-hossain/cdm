@@ -893,6 +893,13 @@ Verification: test-first version-5 migration fixture and CRUD round trip; full b
 Open questions: category-to-download assignment for later editable-sidebar deletion is unspecified.
 Next: 2.6.2 category routing.
 
+## 2026-09-25 — Codex, task 2.6.2
+Branch: `cdm`; commit: `feat(queue): route downloads to category folders`.
+Completed: longest-list extension matching and IPC v3 auto-directory signal; routing occurs before file reservation, while explicit folders bypass it.
+Verification: test-first queue matching and IPC reservation/SQLite path cases; full build and CTest 33/33 passed.
+Open questions: 2.6.3 needs persisted download-category assignment and a GUI category IPC contract (tracked in `docs/open-questions.md`).
+Next: 3.1.2 extension context capture while 2.6.3 is unresolved.
+
 ## 2026-09-25 — Codex, task 3.1.1
 Branch: `cdm`; commit: `docs(browser): context forwarding design`.
 Completed: consent, field limits, versioned IPC, memory-only lifetime, redaction, and local-user threat model in `docs/browser-context.md`.

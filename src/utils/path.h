@@ -21,4 +21,7 @@ bool path_join(const char *dir, const char *filename, char *out,
 /** Choose an unused filesystem path, inserting "(n)" before the last extension. */
 bool path_make_unique(const char *path, char *out, size_t out_size);
 
+/* Exact case-insensitive match against comma-separated lowercase extensions. */
+bool path_extension_in_list(const char *filename, const char *extensions);
+
 #endif /* UTILS_PATH_H */
