@@ -920,3 +920,10 @@ Completed: phase 2 context/release notes and full tracked-file inventory refresh
 Verification: Debug 33/33 and ASan 33/33; TSan build succeeded but 20 Criterion targets failed before assertions (13/33 pass).
 Open questions: compatible Criterion/TSan runner and graphical category interaction smoke.
 Next: 3.1.2 browser extension context capture, independent of the TSan gate.
+
+## 2026-09-25 — Codex, task 3.1.2
+Branch: `cdm`; commit: `feat(browser): capture opt-in request context`.
+Completed: site-scoped action toggle, optional cookie/webRequest grants, bounded Cookie/UA/Referer capture, and revocation/incognito omission in both extensions.
+Verification: test-first Node mocks cover off/denied/matched/unsafe/oversize/revoked paths; full build and CTest 33/33 passed.
+Open questions: browser UI/permission prompt smoke UNKNOWN without installed extensions; Phase 2 TSan blocker remains.
+Next: 3.1.3 native host context forwarding.
