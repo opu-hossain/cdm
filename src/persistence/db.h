@@ -86,6 +86,8 @@ int db_get_download_details(uint32_t id, IpcDownloadDetails *out);
 int db_restore_queue(void);
 int db_set_schedule_paused(uint32_t id, bool paused);
 int db_resume_scheduled_download(uint32_t id);
+/* 1 once after a five-second all-DONE interval, 0 otherwise, -1 on error. */
+int db_queue_post_action_due(uint32_t queue_id, int64_t now_seconds);
 
 #ifdef __cplusplus
 }

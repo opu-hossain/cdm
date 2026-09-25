@@ -15,6 +15,14 @@ static _Atomic int active_workers;
 static _Atomic bool hold_workers;
 static _Atomic bool fail_workers;
 static _Atomic int engine_runs;
+static _Atomic int post_action_runs;
+
+int spawn_post_action(const char *action, const char *argument) {
+  cr_assert_str_eq(action, "command");
+  cr_assert_str_eq(argument, "/bin/true");
+  atomic_fetch_add(&post_action_runs, 1);
+  return 0;
+}
 
 int engine_run_download(struct Download *d) {
   atomic_fetch_add(&engine_runs, 1);
@@ -36,6 +44,7 @@ static void setup_scheduler(void) {
   atomic_store(&hold_workers, false);
   atomic_store(&fail_workers, false);
   atomic_store(&engine_runs, 0);
+  atomic_store(&post_action_runs, 0);
   db_init(":memory:");
 }
 
@@ -45,6 +54,42 @@ static void teardown_scheduler(void) {
 }
 
 TestSuite(scheduler, .init = setup_scheduler, .fini = teardown_scheduler);
+
+Test(scheduler, command_post_action_requires_all_done_and_five_seconds) {
+  char config_path[] = "/tmp/cdm-actions-XXXXXX";
+  int fd = mkstemp(config_path);
+  cr_assert_geq(fd, 0);
+  FILE *config_file = fdopen(fd, "w");
+  cr_assert_not_null(config_file);
+  cr_assert_gt(fputs("[post_actions]\nallow_command = true\n", config_file),
+               0);
+  cr_assert_eq(fclose(config_file), 0);
+  config_init(config_path);
+  unlink(config_path);
+
+  Queue queue = {0};
+  strcpy(queue.name, "Actions");
+  strcpy(queue.post_action, "command");
+  strcpy(queue.post_action_arg, "/bin/true");
+  uint32_t queue_id = 0;
+  cr_assert_eq(queue_create(&queue, &queue_id), 0);
+  RequestOptions options = {.queue_id = queue_id};
+  uint32_t id = queue_manager_add("http://127.0.0.1/action",
+                                  "/tmp/action-item", &options);
+  cr_assert_neq(id, 0);
+  cr_assert_eq(db_insert_download(id, "http://127.0.0.1/action",
+                                  "/tmp/action-item", &options), 0);
+  scheduler_post_actions_tick_at(100);
+  cr_assert_eq(atomic_load(&post_action_runs), 0);
+  cr_assert_eq(db_update_status(id, "DONE"), 0);
+  scheduler_post_actions_tick_at(101);
+  scheduler_post_actions_tick_at(105);
+  cr_assert_eq(atomic_load(&post_action_runs), 0);
+  scheduler_post_actions_tick_at(106);
+  scheduler_post_actions_tick_at(200);
+  cr_assert_eq(atomic_load(&post_action_runs), 1);
+  queue_manager_remove(id);
+}
 
 static time_t fixed_utc(int day, int hour, int minute) {
   setenv("TZ", "UTC", 1);

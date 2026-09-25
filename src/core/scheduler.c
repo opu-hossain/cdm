@@ -7,6 +7,7 @@
 #include "../engine/engine_runner.h"
 #include "../persistence/db.h"
 #include "../platform/ipc_socket.h"
+#include "../platform/spawn.h"
 #include "../platform/thread.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
@@ -235,8 +236,36 @@ void scheduler_schedule_tick_at(time_t now) {
   free(queues);
 }
 
+void scheduler_post_actions_tick_at(time_t now) {
+  if (now == (time_t)-1)
+    return;
+  Queue *queues = NULL;
+  size_t count = 0;
+  if (queue_list(&queues, &count) != 0) {
+    LOG_WARN("Could not evaluate queue post-actions");
+    return;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    Queue *queue = &queues[i];
+    if (!config_post_action_enabled(queue->post_action))
+      continue;
+    if (strcmp(queue->post_action, "command") == 0 &&
+        !queue->post_action_arg[0])
+      continue;
+    int due = db_queue_post_action_due(queue->id, (int64_t)now);
+    if (due < 0)
+      LOG_WARN("Could not evaluate post-action for queue %u", queue->id);
+    else if (due > 0 &&
+             spawn_post_action(queue->post_action,
+                               queue->post_action_arg) != 0)
+      LOG_WARN("Could not start post-action for queue %u", queue->id);
+  }
+  free(queues);
+}
+
 void scheduler_tick(void) {
   time_t now = time(NULL);
+  scheduler_post_actions_tick_at(now);
   time_t next = atomic_load(&g_next_schedule_check);
   if (now != (time_t)-1 && (next == 0 || now >= next || now < next - 60)) {
     scheduler_schedule_tick_at(now);

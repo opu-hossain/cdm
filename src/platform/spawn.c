@@ -59,6 +59,13 @@ int spawn_browser_popup_detached(const char *exe_path, unsigned int offer_id) {
   return 0;
 }
 
+int spawn_post_action(const char *action, const char *argument) {
+  (void)action;
+  (void)argument;
+  /* TODO(platform): use a safely quoted CreateProcess argv on Windows. */
+  return -1;
+}
+
 #else /* Linux / macOS */
 
 #include <fcntl.h>
@@ -84,6 +91,120 @@ void get_self_exe_path(char *buf, size_t buf_size) {
     buf[len] = '\0';
 }
 #endif
+
+static int split_command(char *text, char *argv[32]) {
+  char *read = text;
+  char *write = text;
+  int count = 0;
+  while (*read) {
+    while (*read == ' ' || *read == '\t')
+      read++;
+    if (!*read)
+      break;
+    if (count >= 31)
+      return -1;
+    argv[count++] = write;
+    char quote = 0;
+    while (*read) {
+      if (*read == '\\' && read[1]) {
+        read++;
+        *write++ = *read++;
+      } else if (quote && *read == quote) {
+        quote = 0;
+        read++;
+      } else if (!quote && (*read == '\'' || *read == '"')) {
+        quote = *read++;
+      } else if (!quote && (*read == ' ' || *read == '\t')) {
+        read++;
+        break;
+      } else {
+        *write++ = *read++;
+      }
+    }
+    if (quote)
+      return -1;
+    *write++ = '\0';
+  }
+  argv[count] = NULL;
+  return count;
+}
+
+int spawn_post_action(const char *action, const char *argument) {
+  if (!action)
+    return -1;
+#ifdef __APPLE__
+  /* TODO(platform): map power actions to the macOS power manager. */
+  if (strcmp(action, "shutdown") == 0 || strcmp(action, "sleep") == 0)
+    return -1;
+#endif
+  char command[512];
+  char *argv[32] = {0};
+  if (strcmp(action, "shutdown") == 0) {
+    argv[0] = "systemctl";
+    argv[1] = "poweroff";
+  } else if (strcmp(action, "sleep") == 0) {
+    argv[0] = "systemctl";
+    argv[1] = "suspend";
+  } else if (strcmp(action, "command") == 0 && argument &&
+             strlen(argument) < sizeof(command)) {
+    memcpy(command, argument, strlen(argument) + 1);
+    if (split_command(command, argv) <= 0)
+      return -1;
+  } else {
+    return -1;
+  }
+  int error_pipe[2];
+  if (pipe(error_pipe) != 0)
+    return -1;
+  if (fcntl(error_pipe[1], F_SETFD, FD_CLOEXEC) == -1) {
+    close(error_pipe[0]);
+    close(error_pipe[1]);
+    return -1;
+  }
+  pid_t pid = fork();
+  if (pid < 0) {
+    close(error_pipe[0]);
+    close(error_pipe[1]);
+    return -1;
+  }
+  if (pid == 0) {
+    close(error_pipe[0]);
+    if (setsid() < 0)
+      _exit(127);
+    pid_t child = fork();
+    if (child < 0)
+      _exit(127);
+    if (child == 0) {
+      int devnull = open("/dev/null", O_RDWR);
+      if (devnull >= 0) {
+        dup2(devnull, STDIN_FILENO);
+        dup2(devnull, STDOUT_FILENO);
+        dup2(devnull, STDERR_FILENO);
+        if (devnull > STDERR_FILENO)
+          close(devnull);
+      }
+      execvp(argv[0], argv);
+      char marker = 'E';
+      (void)write(error_pipe[1], &marker, 1);
+      _exit(127);
+    }
+    _exit(0);
+  }
+  close(error_pipe[1]);
+  int status = 0;
+  if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status) ||
+      WEXITSTATUS(status) != 0) {
+    close(error_pipe[0]);
+    return -1;
+  }
+  char marker = 0;
+  ssize_t result;
+  do {
+    result = read(error_pipe[0], &marker, 1);
+  } while (result < 0 && errno == EINTR);
+  close(error_pipe[0]);
+  return result == 0 ? 0 : -1;
+}
 
 int spawn_daemon_detached(const char *exe_path) {
   pid_t pid = fork();

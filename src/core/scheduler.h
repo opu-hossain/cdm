@@ -29,6 +29,8 @@ typedef enum {
 SchedulerQueueState scheduler_queue_state(const Queue *queue, time_t now);
 /* Evaluate transitions at an injected wall clock for deterministic tests. */
 void scheduler_schedule_tick_at(time_t now);
+/* Evaluate queue completion actions at an injected clock for tests. */
+void scheduler_post_actions_tick_at(time_t now);
 
 /** Cancel and join all scheduler workers before shared teardown. */
 void scheduler_shutdown(void);

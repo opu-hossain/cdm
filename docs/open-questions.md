@@ -89,3 +89,11 @@ like the existing cookie column. A future credential storage policy should
 cover database access permissions, export behavior, and whether encryption or
 OS keyring integration is required. The new details response exposes only
 `auth_user` and a boolean indicating whether a password exists.
+
+## Task 2.3.1 — Post-action platform support
+
+`src/platform/spawn.c` leaves `TODO(platform)` for a safely quoted Windows
+process launch and for macOS shutdown/sleep integration. Linux invokes
+`systemctl poweroff` or `systemctl suspend` only when the matching
+`[post_actions]` flag is explicitly enabled. Decide the native platform
+equivalents before enabling these actions on Windows or macOS.

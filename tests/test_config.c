@@ -57,6 +57,24 @@ Test(config, proxy_modes_round_trip_without_losing_credentials) {
   remove_home(home);
 }
 
+Test(config, post_actions_default_off_and_round_trip) {
+  char home[64];
+  isolated_home(home);
+  cr_assert_not(config_post_action_enabled("shutdown"));
+  cr_assert_not(config_post_action_enabled("sleep"));
+  cr_assert_not(config_post_action_enabled("command"));
+  cr_assert_not(config_post_action_enabled("unknown"));
+  DownloadManagerConfig config;
+  config_get(&config);
+  config.allow_command = true;
+  cr_assert(config_save(&config));
+  config_init(NULL);
+  cr_assert(config_post_action_enabled("command"));
+  cr_assert_not(config_post_action_enabled("shutdown"));
+  cr_assert_not(config_post_action_enabled("sleep"));
+  remove_home(home);
+}
+
 Test(config, invalid_mode_and_missing_proxy_host_fall_back_to_none) {
   char home[64];
   isolated_home(home);

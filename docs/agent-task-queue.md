@@ -29,7 +29,7 @@ with the user; skip to Phase 2 in the meantime.
 - [x] **2.1.4** GUI queues tab — **S** — table/inline-edit/drag-reorder over an existing modal pattern; use `src/gui/AGENTS.md`
 - [x] **2.2.1** Schedule model (daemon tick, ALWAYS/ACTIVE/IDLE states, pause/resume) — **L** — touches the scheduler tick and queue mutex together; wall-clock state machine needs a real design, not just wiring
 - [x] **2.2.2** UI schedule fields — **S** — two `HH:MM` fields, inline validation
-- [ ] **2.3.1** Post-actions on queue completion (shutdown/sleep/command, debounce, "queue complete" detection) — **L** — cross-cuts scheduler state, has a security-sensitive default-off command path
+- [x] **2.3.1** Post-actions on queue completion (shutdown/sleep/command, debounce, "queue complete" detection) — **L** — cross-cuts scheduler state, has a security-sensitive default-off command path
 - [ ] **2.3.2** Post-action UI — **S**
 - [ ] **2.4.1** Tray backend — **L** — plan explicitly requires researching the current recommended Linux tray API and choosing one; new platform abstraction
 - [ ] **2.4.2** Wire tray to daemon — **S** — once 2.4.1's API exists, this is wiring into the existing daemon loop

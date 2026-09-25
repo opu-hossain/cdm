@@ -83,6 +83,8 @@ int db_init(const char *db_path) {
       "  schedule_stop TEXT NOT NULL DEFAULT '',"
       "  post_action TEXT NOT NULL DEFAULT 'none',"
       "  post_action_arg TEXT NOT NULL DEFAULT '',"
+      "  post_action_pending_since INTEGER NOT NULL DEFAULT 0,"
+      "  post_action_fired INTEGER NOT NULL DEFAULT 0,"
       "  created_at INTEGER NOT NULL DEFAULT 0"
       ");"
       "CREATE TABLE IF NOT EXISTS downloads ("
@@ -194,6 +196,39 @@ int db_init(const char *db_path) {
     sqlite3_free(migration_error);
   }
 
+  if (!db_column_exists("queues", "post_action_pending_since") &&
+      sqlite3_exec(g_db,
+          "ALTER TABLE queues ADD COLUMN post_action_pending_since "
+          "INTEGER NOT NULL DEFAULT 0", NULL, NULL, &migration_error) !=
+          SQLITE_OK)
+    goto action_migration_failed;
+  if (!db_column_exists("queues", "post_action_fired") &&
+      sqlite3_exec(g_db,
+          "ALTER TABLE queues ADD COLUMN post_action_fired "
+          "INTEGER NOT NULL DEFAULT 0", NULL, NULL, &migration_error) !=
+          SQLITE_OK)
+    goto action_migration_failed;
+  if (sqlite3_exec(g_db,
+      "CREATE INDEX IF NOT EXISTS downloads_queue_status_idx "
+      "ON downloads(COALESCE(queue_id,1),status);"
+      "CREATE TRIGGER IF NOT EXISTS queue_action_insert "
+      "AFTER INSERT ON downloads BEGIN "
+      "UPDATE queues SET post_action_pending_since=0,post_action_fired=0 "
+      "WHERE id=COALESCE(NEW.queue_id,1); END;"
+      "CREATE TRIGGER IF NOT EXISTS queue_action_incomplete "
+      "AFTER UPDATE OF status,queue_id ON downloads "
+      "WHEN NEW.status<>'DONE' OR NEW.queue_id IS NOT OLD.queue_id BEGIN "
+      "UPDATE queues SET post_action_pending_since=0,post_action_fired=0 "
+      "WHERE id=COALESCE(NEW.queue_id,1); END;"
+      "CREATE TRIGGER IF NOT EXISTS queue_action_changed "
+      "AFTER UPDATE OF post_action,post_action_arg ON queues "
+      "WHEN NEW.post_action IS NOT OLD.post_action OR "
+      "NEW.post_action_arg IS NOT OLD.post_action_arg BEGIN "
+      "UPDATE queues SET post_action_pending_since=0,post_action_fired=0 "
+      "WHERE id=NEW.id; END;",
+      NULL, NULL, &migration_error) != SQLITE_OK)
+    goto action_migration_failed;
+
   sqlite3_stmt *fk_check = NULL;
   if (sqlite3_prepare_v2(g_db, "PRAGMA foreign_key_check", -1,
                          &fk_check, NULL) != SQLITE_OK ||
@@ -206,7 +241,7 @@ int db_init(const char *db_path) {
   }
   sqlite3_finalize(fk_check);
 
-  rc = sqlite3_exec(g_db, "PRAGMA user_version = 6; COMMIT;", NULL, NULL,
+  rc = sqlite3_exec(g_db, "PRAGMA user_version = 7; COMMIT;", NULL, NULL,
                     &migration_error);
   if (rc != SQLITE_OK) {
     LOG_ERROR("could not commit database migration: %s",
@@ -226,6 +261,56 @@ int db_init(const char *db_path) {
 
   LOG_INFO("opened %s", db_path);
   return 0;
+
+action_migration_failed:
+  LOG_ERROR("post-action migration failed: %s",
+            migration_error ? migration_error : "unknown error");
+  sqlite3_free(migration_error);
+  sqlite3_exec(g_db, "ROLLBACK;", NULL, NULL, NULL);
+  db_close();
+  return -1;
+}
+
+int db_queue_post_action_due(uint32_t queue_id, int64_t now_seconds) {
+  if (!db_ready() || !queue_id || now_seconds < 5)
+    return -1;
+  const char *eligible =
+      "EXISTS(SELECT 1 FROM downloads d WHERE "
+      "COALESCE(d.queue_id,1)=queues.id) AND "
+      "NOT EXISTS(SELECT 1 FROM downloads d WHERE "
+      "COALESCE(d.queue_id,1)=queues.id AND d.status<>'DONE')";
+  char sql[1024];
+  int written = snprintf(sql, sizeof(sql),
+      "UPDATE queues SET post_action_pending_since="
+      "CASE WHEN %s THEN CASE WHEN post_action_pending_since=0 "
+      "THEN ? ELSE post_action_pending_since END ELSE 0 END,"
+      "post_action_fired=CASE WHEN %s THEN post_action_fired ELSE 0 END "
+      "WHERE id=?", eligible, eligible);
+  if (written < 0 || (size_t)written >= sizeof(sql))
+    return -1;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_int64(stmt, 1, now_seconds);
+  sqlite3_bind_int64(stmt, 2, (sqlite3_int64)queue_id);
+  int step = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (step != SQLITE_DONE)
+    return -1;
+
+  written = snprintf(sql, sizeof(sql),
+      "UPDATE queues SET post_action_fired=1 WHERE id=? AND "
+      "post_action_fired=0 AND post_action_pending_since>0 AND "
+      "post_action_pending_since<=? AND %s", eligible);
+  if (written < 0 || (size_t)written >= sizeof(sql) ||
+      sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_int64(stmt, 1, (sqlite3_int64)queue_id);
+  sqlite3_bind_int64(stmt, 2, now_seconds - 5);
+  step = sqlite3_step(stmt);
+  int changed = sqlite3_changes(g_db);
+  sqlite3_finalize(stmt);
+  return step == SQLITE_DONE ? changed : -1;
 }
 
 void db_close(void) {
@@ -385,15 +470,24 @@ static int schedule_minutes(const char *value) {
 
 static bool queue_fields_valid(const Queue *q) {
   if (!q || !memchr(q->schedule_start, 0, sizeof(q->schedule_start)) ||
-      !memchr(q->schedule_stop, 0, sizeof(q->schedule_stop)))
+      !memchr(q->schedule_stop, 0, sizeof(q->schedule_stop)) ||
+      !memchr(q->post_action, 0, sizeof(q->post_action)) ||
+      !memchr(q->post_action_arg, 0, sizeof(q->post_action_arg)))
     return false;
   bool always = !q->schedule_start[0] && !q->schedule_stop[0];
   int start = always ? 0 : schedule_minutes(q->schedule_start);
   int stop = always ? 0 : schedule_minutes(q->schedule_stop);
+  const char *action = q->post_action[0] ? q->post_action : "none";
+  bool action_valid = strcmp(action, "none") == 0 ||
+                      strcmp(action, "shutdown") == 0 ||
+                      strcmp(action, "sleep") == 0 ||
+                      (strcmp(action, "command") == 0 &&
+                       q->post_action_arg[0]);
   return q && memchr(q->name, '\0', sizeof(q->name)) && q->name[0] &&
          (always || (start >= 0 && stop >= 0 && start != stop)) &&
          memchr(q->post_action, '\0', sizeof(q->post_action)) &&
          memchr(q->post_action_arg, '\0', sizeof(q->post_action_arg)) &&
+         action_valid &&
          q->max_concurrent >= 0 && q->max_concurrent <= 64;
 }
 

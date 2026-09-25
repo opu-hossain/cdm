@@ -28,6 +28,9 @@ int spawn_daemon_detached(const char *exe_path);
 /** Launch a separate cdm SDL/Nuklear popup for a browser offer. */
 int spawn_browser_popup_detached(const char *exe_path, unsigned int offer_id);
 
+/* Launch an explicitly enabled queue action without an implicit shell. */
+int spawn_post_action(const char *action, const char *argument);
+
 #ifdef __cplusplus
 }
 #endif

@@ -46,7 +46,12 @@ typedef struct {
   char user_agent[256]; // default cdm/0.1
   int connect_timeout_sec; // 1..600, default 10
   int transfer_timeout_sec; // 1..3600, default 30
+  bool allow_shutdown;
+  bool allow_sleep;
+  bool allow_command;
 } DownloadManagerConfig;
+
+bool config_post_action_enabled(const char *action);
 
 void config_get(DownloadManagerConfig *out);
 bool config_save(const DownloadManagerConfig *config);

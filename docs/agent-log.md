@@ -843,3 +843,10 @@ Completed: inline `HH:MM` validation, `Always` empty state, and save blocking fo
 Verification: test-first GUI model validation; focused test and full build/CTest 31/31 passed; isolated offscreen GUI stayed alive for three seconds (sandbox blocked detached daemon listener).
 Open questions: none for this task.
 Next: 2.3.1 post-actions on queue completion.
+
+## 2026-09-25 — Codex, task 2.3.1
+Branch: `cdm`; commit: `feat(queue): post-actions on queue completion`.
+Completed: default-off config gates, DB v7 completion/debounce state, one-shot all-DONE actions, and detached shell-free process launch for command/systemctl actions.
+Verification: test-first scheduler mock, DB migration/epoch, config round-trip, real command-spawn smoke; full build and CTest 31/31 passed.
+Open questions: Windows/macOS action launches remain `TODO(platform)` in `docs/open-questions.md`.
+Next: 2.3.2 post-action queue editor UI.

@@ -12,6 +12,41 @@ static void close_db(void) { db_close(); }
 
 TestSuite(db, .init = setup_db, .fini = close_db);
 
+Test(db, post_action_due_once_per_all_done_epoch) {
+  cr_assert_eq(db_queue_post_action_due(1, 100), 0);
+  cr_assert_eq(db_insert_download(801, "http://127.0.0.1/first",
+                                  "/tmp/cdm-action-first", NULL), 0);
+  cr_assert_eq(db_queue_post_action_due(1, 100), 0);
+  cr_assert_eq(db_update_status(801, "DONE"), 0);
+  cr_assert_eq(db_queue_post_action_due(1, 101), 0);
+  cr_assert_eq(db_queue_post_action_due(1, 105), 0);
+  cr_assert_eq(db_queue_post_action_due(1, 106), 1);
+  cr_assert_eq(db_queue_post_action_due(1, 107), 0);
+  cr_assert_eq(db_insert_download(802, "http://127.0.0.1/second",
+                                  "/tmp/cdm-action-second", NULL), 0);
+  cr_assert_eq(db_queue_post_action_due(1, 108), 0);
+  cr_assert_eq(db_update_status(802, "DONE"), 0);
+  cr_assert_eq(db_queue_post_action_due(1, 109), 0);
+  cr_assert_eq(db_queue_post_action_due(1, 114), 1);
+  cr_assert_eq(db_update_status(801, "ERROR"), 0);
+  cr_assert_eq(db_queue_post_action_due(1, 115), 0);
+  cr_assert_eq(db_update_status(801, "DONE"), 0);
+  cr_assert_eq(db_queue_post_action_due(1, 116), 0);
+  cr_assert_eq(db_queue_post_action_due(1, 121), 1);
+}
+
+Test(db, queue_post_action_type_and_command_are_validated) {
+  Queue queue = {0};
+  strcpy(queue.name, "Action validation");
+  uint32_t id = 0;
+  strcpy(queue.post_action, "unknown");
+  cr_assert_eq(queue_create(&queue, &id), -1);
+  strcpy(queue.post_action, "command");
+  cr_assert_eq(queue_create(&queue, &id), -1);
+  strcpy(queue.post_action_arg, "/bin/true");
+  cr_assert_eq(queue_create(&queue, &id), 0);
+}
+
 Test(db, credentials_round_trip_and_restore) {
   RequestOptions options = {0};
   snprintf(options.auth_user, sizeof(options.auth_user), "example-user");
@@ -234,7 +269,7 @@ Test(db, version_four_fixture_migrates_to_named_queues) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 6);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 7);
   sqlite3_finalize(statement);
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA foreign_key_check", -1,
                                   &statement, NULL), SQLITE_OK);
@@ -306,7 +341,7 @@ Test(db, legacy_schema_migrates_transactionally) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 6);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 7);
   sqlite3_finalize(statement);
 
   cr_assert_eq(sqlite3_prepare_v2(

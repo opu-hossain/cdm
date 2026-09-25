@@ -39,6 +39,10 @@ static int g_max_connections = DEFAULT_MAX_CONNECTIONS;
 static char g_user_agent[256] = DEFAULT_USER_AGENT;
 static int g_connect_timeout_sec = DEFAULT_CONNECT_TIMEOUT_SEC;
 static int g_transfer_timeout_sec = DEFAULT_TRANSFER_TIMEOUT_SEC;
+/* Daemon scheduler and GUI config writes each run on their process main thread. */
+static bool g_allow_shutdown;
+static bool g_allow_sleep;
+static bool g_allow_command;
 static dm_mutex_t g_network_mutex;
 static once_flag g_network_once = ONCE_FLAG_INIT;
 
@@ -53,6 +57,7 @@ static void reset_defaults(void) {
   g_retry_base_delay_sec = DEFAULT_RETRY_BASE_DELAY_SEC;
   g_retry_max_delay_sec = DEFAULT_RETRY_MAX_DELAY_SEC;
   g_max_speed_bps = DEFAULT_MAX_SPEED_BPS;
+  g_allow_shutdown = g_allow_sleep = g_allow_command = false;
   ensure_network_mutex();
   dm_mutex_lock(&g_network_mutex);
   g_proxy_mode = PROXY_NONE;
@@ -118,6 +123,14 @@ static void read_u64(toml_datum_t tab, const char *key, uint64_t *out) {
   toml_datum_t d = toml_get(tab, key);
   if (d.type == TOML_INT64)
     *out = (uint64_t)d.u.int64;
+}
+
+static void read_bool(toml_datum_t tab, const char *key, bool *out) {
+  if (tab.type != TOML_TABLE)
+    return;
+  toml_datum_t value = toml_get(tab, key);
+  if (value.type == TOML_BOOLEAN)
+    *out = value.u.boolean;
 }
 
 static void read_string(toml_datum_t tab, const char *key, char *out,
@@ -257,6 +270,11 @@ void config_init(const char *path) {
   toml_datum_t throttle = toml_get(root, "throttle");
   read_u64(throttle, "max_speed_bytes_per_sec", &g_max_speed_bps);
 
+  toml_datum_t actions = toml_get(root, "post_actions");
+  read_bool(actions, "allow_shutdown", &g_allow_shutdown);
+  read_bool(actions, "allow_sleep", &g_allow_sleep);
+  read_bool(actions, "allow_command", &g_allow_command);
+
   toml_datum_t timeouts = toml_get(root, "timeouts");
   int connect_timeout = read_clamped_int(
       timeouts, "connect_sec", DEFAULT_CONNECT_TIMEOUT_SEC, 1, 600);
@@ -318,6 +336,18 @@ int config_get_retry_base_delay_sec(void) { return g_retry_base_delay_sec; }
 int config_get_retry_max_delay_sec(void) { return g_retry_max_delay_sec; }
 uint64_t config_get_max_speed_bytes_per_sec(void) { return g_max_speed_bps; }
 
+bool config_post_action_enabled(const char *action) {
+  if (!action)
+    return false;
+  if (strcmp(action, "shutdown") == 0)
+    return g_allow_shutdown;
+  if (strcmp(action, "sleep") == 0)
+    return g_allow_sleep;
+  if (strcmp(action, "command") == 0)
+    return g_allow_command;
+  return false;
+}
+
 void config_get(DownloadManagerConfig *out) {
   if (!out)
     return;
@@ -327,6 +357,9 @@ void config_get(DownloadManagerConfig *out) {
   out->retry_base_delay_sec = g_retry_base_delay_sec;
   out->retry_max_delay_sec = g_retry_max_delay_sec;
   out->max_speed_bytes_per_sec = g_max_speed_bps;
+  out->allow_shutdown = g_allow_shutdown;
+  out->allow_sleep = g_allow_sleep;
+  out->allow_command = g_allow_command;
   ensure_network_mutex();
   dm_mutex_lock(&g_network_mutex);
   out->proxy_mode = g_proxy_mode;
@@ -391,6 +424,13 @@ bool config_save(const DownloadManagerConfig *config) {
                   (unsigned long long)config->max_speed_bytes_per_sec,
                   config->connect_timeout_sec,
                   config->transfer_timeout_sec) >= 0;
+  if (written)
+    written = fprintf(fp,
+                      "\n[post_actions]\nallow_shutdown = %s\n"
+                      "allow_sleep = %s\nallow_command = %s\n",
+                      config->allow_shutdown ? "true" : "false",
+                      config->allow_sleep ? "true" : "false",
+                      config->allow_command ? "true" : "false") >= 0;
   if (written)
     written = fputs("\n[proxy]\nmode = ", fp) != EOF &&
               fprintf(fp, "%d\nurl = ", (int)config->proxy_mode) >= 0 &&
