@@ -75,6 +75,20 @@ Test(config, post_actions_default_off_and_round_trip) {
   remove_home(home);
 }
 
+Test(config, clipboard_monitor_defaults_off_and_round_trips) {
+  char home[64];
+  isolated_home(home);
+  DownloadManagerConfig config;
+  config_get(&config);
+  cr_assert_not(config.clipboard_monitor);
+  config.clipboard_monitor = true;
+  cr_assert(config_save(&config));
+  config_init(NULL);
+  config_get(&config);
+  cr_assert(config.clipboard_monitor);
+  remove_home(home);
+}
+
 Test(config, invalid_mode_and_missing_proxy_host_fall_back_to_none) {
   char home[64];
   isolated_home(home);

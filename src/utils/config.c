@@ -43,6 +43,8 @@ static int g_transfer_timeout_sec = DEFAULT_TRANSFER_TIMEOUT_SEC;
 static bool g_allow_shutdown;
 static bool g_allow_sleep;
 static bool g_allow_command;
+/* GUI process reads and writes this only on its main thread. */
+static bool g_clipboard_monitor;
 static dm_mutex_t g_network_mutex;
 static once_flag g_network_once = ONCE_FLAG_INIT;
 
@@ -58,6 +60,7 @@ static void reset_defaults(void) {
   g_retry_max_delay_sec = DEFAULT_RETRY_MAX_DELAY_SEC;
   g_max_speed_bps = DEFAULT_MAX_SPEED_BPS;
   g_allow_shutdown = g_allow_sleep = g_allow_command = false;
+  g_clipboard_monitor = false;
   ensure_network_mutex();
   dm_mutex_lock(&g_network_mutex);
   g_proxy_mode = PROXY_NONE;
@@ -275,6 +278,9 @@ void config_init(const char *path) {
   read_bool(actions, "allow_sleep", &g_allow_sleep);
   read_bool(actions, "allow_command", &g_allow_command);
 
+  toml_datum_t ui = toml_get(root, "ui");
+  read_bool(ui, "clipboard_monitor", &g_clipboard_monitor);
+
   toml_datum_t timeouts = toml_get(root, "timeouts");
   int connect_timeout = read_clamped_int(
       timeouts, "connect_sec", DEFAULT_CONNECT_TIMEOUT_SEC, 1, 600);
@@ -360,6 +366,7 @@ void config_get(DownloadManagerConfig *out) {
   out->allow_shutdown = g_allow_shutdown;
   out->allow_sleep = g_allow_sleep;
   out->allow_command = g_allow_command;
+  out->clipboard_monitor = g_clipboard_monitor;
   ensure_network_mutex();
   dm_mutex_lock(&g_network_mutex);
   out->proxy_mode = g_proxy_mode;
@@ -431,6 +438,9 @@ bool config_save(const DownloadManagerConfig *config) {
                       config->allow_shutdown ? "true" : "false",
                       config->allow_sleep ? "true" : "false",
                       config->allow_command ? "true" : "false") >= 0;
+  if (written)
+    written = fprintf(fp, "\n[ui]\nclipboard_monitor = %s\n",
+                      config->clipboard_monitor ? "true" : "false") >= 0;
   if (written)
     written = fputs("\n[proxy]\nmode = ", fp) != EOF &&
               fprintf(fp, "%d\nurl = ", (int)config->proxy_mode) >= 0 &&

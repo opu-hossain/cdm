@@ -871,3 +871,10 @@ Completed: daemon-loop tray init/shutdown, atomic menu requests for Pause all/Re
 Verification: test-first scheduler progress case; focused tray/scheduler tests and full build/CTest 32/32 passed; daemon lifecycle test covered no-host fallback.
 Open questions: real desktop StatusNotifierHost smoke remains UNKNOWN in headless workspace.
 Next: 2.5.1 clipboard monitor.
+
+## 2026-09-25 — Codex, task 2.5.1
+Branch: `cdm`; commit: `feat(gui): opt-in clipboard url monitor`.
+Completed: default-off `[ui] clipboard_monitor`, settings checkbox, 500 ms stable URL detection, duplicate suppression, and review-only popup.
+Verification: test-first config round trip, focused config test, full build and CTest 32/32 passed; live clipboard popup smoke UNKNOWN without a graphical desktop.
+Open questions: none for implementation; graphical smoke remains pending.
+Next: 2.5.2 batch add.

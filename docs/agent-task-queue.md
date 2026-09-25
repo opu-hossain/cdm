@@ -33,7 +33,7 @@ with the user; skip to Phase 2 in the meantime.
 - [x] **2.3.2** Post-action UI — **S**
 - [x] **2.4.1** Tray backend — **L** — plan explicitly requires researching the current recommended Linux tray API and choosing one; new platform abstraction
 - [x] **2.4.2** Wire tray to daemon — **S** — once 2.4.1's API exists, this is wiring into the existing daemon loop
-- [ ] **2.5.1** Clipboard monitor — **S** — opt-in config flag, regex-shaped URL check, debounce
+- [x] **2.5.1** Clipboard monitor — **S** — opt-in config flag, regex-shaped URL check, debounce
 - [ ] **2.5.2** Batch add (CLI + GUI) — **S** — file parsing, reuses `MSG_ADD_DOWNLOAD_V2`
 - [ ] **2.6.1** Categories schema — **S** — same migration pattern already used in 2.1.1
 - [ ] **2.6.2** Category routing — **S** — pure function, test cases given in the plan

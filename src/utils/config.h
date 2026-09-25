@@ -49,6 +49,7 @@ typedef struct {
   bool allow_shutdown;
   bool allow_sleep;
   bool allow_command;
+  bool clipboard_monitor; // [ui], default false; GUI main thread owns it
 } DownloadManagerConfig;
 
 bool config_post_action_enabled(const char *action);

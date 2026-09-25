@@ -85,10 +85,67 @@ typedef struct {
   uint32_t queue_edit_id, queue_delete_id, queue_drag_id, add_queue_id;
   Queue queue_draft;
   char queue_priority[16], queue_cap[16];
+  bool clipboard_monitor, clipboard_monitor_enabled, clipboard_offer_open;
+  char clipboard_seen[GUI_URL_CAP], clipboard_offer[GUI_URL_CAP];
+  uint32_t clipboard_checked_at, clipboard_changed_at;
 } UiState;
 
 static void copy_text(char *out, size_t size, const char *text) {
   snprintf(out, size, "%s", text ? text : "");
+}
+
+static void clipboard_baseline(UiState *ui) {
+  char *text = SDL_GetClipboardText();
+  ui->clipboard_seen[0] = '\0';
+  if (text) {
+    size_t length = strlen(text);
+    if (length < sizeof(ui->clipboard_seen))
+      memcpy(ui->clipboard_seen, text, length + 1);
+    SDL_free(text);
+  }
+  ui->clipboard_changed_at = SDL_GetTicks();
+}
+
+static bool clipboard_url_valid(const char *text) {
+  const char *host = NULL;
+  if (strncmp(text, "https://", 8) == 0)
+    host = text + 8;
+  else if (strncmp(text, "http://", 7) == 0)
+    host = text + 7;
+  if (!host || !*host || *host == '/' || *host == '?' || *host == '#')
+    return false;
+  for (const unsigned char *p = (const unsigned char *)text; *p; ++p)
+    if (isspace(*p) || iscntrl(*p))
+      return false;
+  return true;
+}
+
+static void poll_clipboard(UiState *ui, uint32_t now) {
+  if (!ui->clipboard_monitor_enabled ||
+      now - ui->clipboard_checked_at < 250)
+    return;
+  ui->clipboard_checked_at = now;
+  char *text = SDL_GetClipboardText();
+  if (!text)
+    return;
+  size_t length = strlen(text);
+  if (length >= sizeof(ui->clipboard_seen)) {
+    ui->clipboard_seen[0] = '\0';
+    ui->clipboard_offer_open = false;
+    SDL_free(text);
+    return;
+  }
+  if (strcmp(ui->clipboard_seen, text) != 0) {
+    memcpy(ui->clipboard_seen, text, length + 1);
+    ui->clipboard_changed_at = now;
+    ui->clipboard_offer_open = false;
+  } else if (now - ui->clipboard_changed_at >= 500 &&
+             clipboard_url_valid(text) &&
+             strcmp(ui->clipboard_offer, text) != 0) {
+    memcpy(ui->clipboard_offer, text, length + 1);
+    ui->clipboard_offer_open = true;
+  }
+  SDL_free(text);
 }
 
 static const char *last_separator(const char *path) {
@@ -417,6 +474,7 @@ static void open_settings(UiState *ui) {
   ui->transfer_timeout = config.transfer_timeout_sec;
   copy_text(ui->user_agent, sizeof(ui->user_agent), config.user_agent);
   ui->proxy_mode = config.proxy_mode;
+  ui->clipboard_monitor = config.clipboard_monitor;
   copy_text(ui->proxy_url, sizeof(ui->proxy_url), config.proxy_url);
   copy_text(ui->proxy_username, sizeof(ui->proxy_username),
             config.proxy_username);
@@ -979,6 +1037,13 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
                            nk_style_item_color(SURFACE));
   if (nk_group_begin(ctx, "settings-fields", 0)) {
     section(ctx, "GENERAL");
+    nk_bool monitor = ui->clipboard_monitor;
+    nk_layout_row_dynamic(ctx, 28, 1);
+    nk_checkbox_label(ctx, "Monitor clipboard for URLs", &monitor);
+    ui->clipboard_monitor = monitor;
+    nk_layout_row_dynamic(ctx, 20, 1);
+    nk_label_colored(ctx, "Ask before adding a copied URL.", NK_TEXT_LEFT,
+                     MUTED);
     nk_layout_row_dynamic(ctx, 22, 1);
     nk_label(ctx, "Default download directory", NK_TEXT_LEFT);
     nk_layout_row_begin(ctx, NK_STATIC, 34, 3);
@@ -1090,6 +1155,7 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     config.max_connections_per_download = ui->max_connections;
     config.connect_timeout_sec = ui->connect_timeout;
     config.transfer_timeout_sec = ui->transfer_timeout;
+    config.clipboard_monitor = ui->clipboard_monitor;
     if (ui->user_agent[0])
       copy_text(config.user_agent, sizeof(config.user_agent), ui->user_agent);
     config.proxy_mode = ui->proxy_mode;
@@ -1105,6 +1171,9 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
       copy_text(ui->settings_message, sizeof(ui->settings_message),
                 "Proxy URL needs a scheme and host.");
     else if (config_save(&config) && gui_client_reload_config()) {
+      ui->clipboard_monitor_enabled = config.clipboard_monitor;
+      clipboard_baseline(ui);
+      ui->clipboard_offer_open = false;
       copy_text(ui->folder, sizeof(ui->folder), ui->directory);
       ui->disk_checked_at = UINT32_MAX;
       ui->settings_open = false;
@@ -1552,6 +1621,28 @@ static void draw_delete_confirmation(struct nk_context *ctx, UiState *ui,
 
 static void draw_toast(struct nk_context *ctx, UiState *ui, float width,
                        float height) {
+  if (ui->clipboard_offer_open) {
+    if (nk_begin(ctx, "clipboard-offer",
+                 nk_rect(width - 360, height - 300, 340, 116),
+                 NK_WINDOW_NO_SCROLLBAR)) {
+      nk_layout_space_begin(ctx, NK_STATIC, 116, 4);
+      fill(ctx, screen_rect(ctx, 0, 0, 340, 116), 10, SURFACE2);
+      outline(ctx, screen_rect(ctx, .5f, .5f, 339, 115), 10);
+      bold_at(ctx, 16, 12, 308, 20, "URL copied to clipboard", 13,
+              ACCENT, SURFACE2);
+      text_at(ctx, 16, 38, 308, 20, ui->clipboard_offer, 11, TEXT,
+              SURFACE2);
+      if (button(ctx, 16, 74, 148, 30, "Review download", true, true)) {
+        copy_text(ui->url, sizeof(ui->url), ui->clipboard_offer);
+        ui->add_open = true;
+        ui->clipboard_offer_open = false;
+      }
+      if (button(ctx, 176, 74, 148, 30, "Dismiss", true, false))
+        ui->clipboard_offer_open = false;
+      nk_layout_space_end(ctx);
+    }
+    nk_end(ctx);
+  }
   if (ui->duplicate_toast_open) {
     if (nk_begin(ctx, "duplicate-toast",
                  nk_rect(width - 300, height - 100, 280, 80),
@@ -1739,6 +1830,11 @@ int run_gui(void) {
   }
   UiState ui = {.connected = true, .history_loading = true,
                 .disk_checked_at = UINT32_MAX};
+  DownloadManagerConfig saved_config;
+  config_get(&saved_config);
+  ui.clipboard_monitor_enabled = saved_config.clipboard_monitor;
+  ui.clipboard_monitor = saved_config.clipboard_monitor;
+  clipboard_baseline(&ui);
   copy_text(ui.numbers[5], sizeof(ui.numbers[5]), "0");
   copy_text(ui.folder, sizeof(ui.folder), config_get_default_download_dir());
   while (gui_sdl_backend_poll(backend)) {
@@ -1759,6 +1855,7 @@ int run_gui(void) {
     if (ui.selected_id && !find_row(visible, visible_count, ui.selected_id))
       ui.selected_id = 0;
     uint32_t now = SDL_GetTicks();
+    poll_clipboard(&ui, now);
     if (ui.disk_checked_at == UINT32_MAX ||
         now - ui.disk_checked_at >= 10000) {
       /* Verified: this checks the configured directory's filesystem, not '/'. */
