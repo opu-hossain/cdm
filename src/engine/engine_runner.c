@@ -318,7 +318,10 @@ int engine_run_download(struct Download *d) {
       return 0;
     }
   } else {
-    int n_workers = choose_worker_count(info.total_size);
+    DownloadManagerConfig config;
+    config_get(&config);
+    int n_workers = choose_worker_count(info.total_size,
+                                        config.max_connections_per_download);
     if (!info.supports_ranges)
       n_workers = 1;
 

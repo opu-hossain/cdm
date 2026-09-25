@@ -625,3 +625,21 @@ Open questions:
 
 Next:
 - 1.3.2 Use connection cap, User-Agent and timeouts in segmenter and curl. Phase 0 merge gate 0.6.3 remains deferred.
+
+## 2026-09-25 — Codex, task 1.3.2
+
+Branch: `cdm`
+Commit: `feat(engine): honor configured connection count, ua, timeouts` (this entry's commit)
+
+Tasks completed:
+- 1.3.2 Capped segment selection by the configured connection limit, expanded worker/chunk capacity to 16, and applied configured User-Agent and connect timeout to probe and worker curl handles. The transfer timeout controls the probe's total request timeout and the worker's low-speed interval, avoiding a fixed duration limit on large downloads.
+
+Tests:
+- Test first: updated worker-count tests failed to compile with the old function signature; a local HTTP route then asserted the configured User-Agent on both probe and worker paths.
+- Focused worker-count, 16-range boundary, and User-Agent integration tests passed. Full build and CTest passed 29/29.
+
+Open questions:
+- None for this task.
+
+Next:
+- 1.3.3 GUI fields for connection cap, User-Agent and timeouts. Phase 0 merge gate 0.6.3 remains deferred.

@@ -230,7 +230,9 @@ static void start_auth_server(int second_port) {
         "   self.send_response(302)\n"
         "   self.send_header('Location',f'http://127.0.0.1:{SECOND}/file')\n"
         "   self.end_headers(); return\n"
-        "  if self.path!='/file': self.send_error(404); return\n"
+        "  if self.path not in ('/file','/ua'): self.send_error(404); return\n"
+        "  if self.path=='/ua' and self.headers.get('User-Agent')!='cdm-test-agent/2':\n"
+        "   self.send_error(400); return\n"
         "  self.send_response(200)\n"
         "  self.send_header('Content-Length',str(len(BODY)))\n"
         "  self.end_headers()\n"
@@ -374,6 +376,34 @@ Test(engine_http_integration, basic_auth_probe_worker_and_redirect_boundary) {
   cr_assert_eq(curl_client_head(url, &context, &info), 0);
   cr_assert_eq(info.total_size, 3);
   stop_server();
+}
+
+Test(engine_http_integration, configured_user_agent_reaches_probe_and_worker) {
+  char path[160];
+  snprintf(path, sizeof(path), "/tmp/cdm-agent-%ld.toml", (long)getpid());
+  FILE *config = fopen(path, "w");
+  cr_assert_not_null(config);
+  fputs("[downloads]\nuser_agent = \"cdm-test-agent/2\"\n", config);
+  cr_assert_eq(fclose(config), 0);
+  config_init(path);
+  unlink(path);
+
+  int second_port = reserve_port();
+  start_auth_server(second_port);
+  snprintf(g_download_path, sizeof(g_download_path),
+           "/tmp/cdm-agent-download-%ld.bin", (long)getpid());
+  Download d = {.id = 73};
+  snprintf(d.url, sizeof(d.url), "http://127.0.0.1:%d/ua", g_server_port);
+  snprintf(d.dest_path, sizeof(d.dest_path), "%s", g_download_path);
+  RequestOptions options = {0};
+  snprintf(options.auth_user, sizeof(options.auth_user), "auth-user");
+  snprintf(options.auth_password, sizeof(options.auth_password), "auth-pass");
+  d.request = &options;
+  cr_assert_eq(db_insert_download(d.id, d.url, d.dest_path, &options), 0);
+  cr_assert_eq(engine_run_download(&d), 0);
+  cr_assert_eq(file_get_size(g_download_path), 12);
+  stop_server();
+  config_init("/tmp/cdm-engine-no-config.toml");
 }
 
 Test(engine_http_integration, configured_proxy_handles_probe_and_download) {

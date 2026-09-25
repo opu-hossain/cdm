@@ -335,7 +335,7 @@ static void run_one_segment(WorkerContext *ctx) {
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, ctx);
   curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, worker_header_callback);
   curl_easy_setopt(curl, CURLOPT_HEADERDATA, ctx);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "cdm/0.1");
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, config.user_agent);
 
   struct curl_slist *headers = NULL;
   if (ctx->request_ctx) {
@@ -363,8 +363,10 @@ static void run_one_segment(WorkerContext *ctx) {
 
   curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-  curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
-  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+  curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
+                   (long)config.transfer_timeout_sec);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
+                   (long)config.connect_timeout_sec);
 
   if (ctx->speed_limit_bps > 0) {
     curl_easy_setopt(curl, CURLOPT_MAX_RECV_SPEED_LARGE,

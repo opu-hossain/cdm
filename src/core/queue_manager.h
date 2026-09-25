@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define QM_MAX_CHUNKS 8 // keep in sync with segmenter.h's MAX_WORKERS
+#define QM_MAX_CHUNKS 16 // keep in sync with segmenter.h's MAX_WORKERS
 
 /* Request options (supplied by the user) */
 typedef struct {

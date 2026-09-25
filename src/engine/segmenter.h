@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define MAX_WORKERS 8
+#define MAX_WORKERS 16
 
 typedef struct {
   uint64_t start;
@@ -40,13 +40,13 @@ int segmenter_plan(uint64_t total_size, int n_workers, Range *out);
  *
  * - Unknown size → 1 (cannot plan ranges).
  * - < 1 MB        → 1 (connection overhead dominates).
- * - 1 MB – 20 MB  → 4.
- * - ≥ 20 MB       → 8.
+ * - 1 MB – 20 MB  → up to 4.
+ * - ≥ 20 MB       → the configured cap.
  *
  * @param total_size  File size in bytes; 0 means unknown.
  * @return            Worker count (always ≥ 1).
  */
-int choose_worker_count(uint64_t total_size);
+int choose_worker_count(uint64_t total_size, int max_connections);
 
 #ifdef __cplusplus
 }
