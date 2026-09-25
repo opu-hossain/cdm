@@ -57,6 +57,10 @@ bool gui_client_queue_create(const Queue *queue);
 bool gui_client_queue_update(const Queue *queue);
 bool gui_client_queue_delete(uint32_t id);
 bool gui_client_queue_reorder(uint32_t id, int priority);
+int gui_client_category_list(IpcCategoryV1 *out, int max);
+bool gui_client_category_create(const IpcCategoryV1 *category);
+bool gui_client_category_update(const IpcCategoryV1 *category);
+bool gui_client_category_delete(uint32_t id);
 
 /* Fetch a full snapshot. The caller owns *out_records on success. */
 bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count);

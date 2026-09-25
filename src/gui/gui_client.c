@@ -394,6 +394,34 @@ bool gui_client_queue_reorder(uint32_t id, int priority) {
          ipc_send_queue_reorder(g_cmd_fd, id, priority) == IPC_RESULT_OK;
 }
 
+int gui_client_category_list(IpcCategoryV1 *out, int max) {
+  if (!queue_connection() || g_cmd_version < 7)
+    return -1;
+  int count = ipc_send_category_list_v1(g_cmd_fd, out, max);
+  if (count < 0) {
+    ipc_client_disconnect(g_cmd_fd);
+    g_cmd_fd = -1;
+    note_lost();
+  }
+  return count;
+}
+
+bool gui_client_category_create(const IpcCategoryV1 *category) {
+  uint32_t id = 0;
+  return queue_connection() && g_cmd_version >= 7 &&
+         ipc_send_category_create_v1(g_cmd_fd, category, &id) == IPC_RESULT_OK;
+}
+
+bool gui_client_category_update(const IpcCategoryV1 *category) {
+  return queue_connection() && g_cmd_version >= 7 &&
+         ipc_send_category_update_v1(g_cmd_fd, category) == IPC_RESULT_OK;
+}
+
+bool gui_client_category_delete(uint32_t id) {
+  return queue_connection() && g_cmd_version >= 7 &&
+         ipc_send_category_delete_v1(g_cmd_fd, id) == IPC_RESULT_OK;
+}
+
 bool gui_client_add_download_result(const char *url, const char *dest,
                                     const IpcDownloadOptions *opts,
                                     bool auto_filename, uint32_t *out_id,
@@ -557,8 +585,11 @@ bool gui_client_list_page(uint32_t offset, uint32_t limit,
   if (!rows)
     return false;
   if (g_cmd_page_supported) {
-    int count = ipc_send_list_page(g_cmd_fd, offset, limit, rows, (int)limit,
-                                   out_total);
+    int count = g_cmd_version >= 7
+                    ? ipc_send_list_page_with_category_v1(
+                          g_cmd_fd, offset, limit, rows, (int)limit, out_total)
+                    : ipc_send_list_page(g_cmd_fd, offset, limit, rows,
+                                         (int)limit, out_total);
     if (count >= 0) {
       *out_records = rows;
       *out_count = count;

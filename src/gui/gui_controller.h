@@ -8,6 +8,7 @@
 #define GUI_CONTROLLER_MAX_ROWS 256
 #define GUI_HISTORY_PAGE_ROWS 64
 #define GUI_CONTROLLER_MAX_QUEUES 64
+#define GUI_CONTROLLER_MAX_CATEGORIES IPC_CATEGORY_MAX
 
 typedef struct {
   uint32_t offset;
@@ -23,6 +24,7 @@ typedef enum {
   GUI_CONTROLLER_EVENT_CONNECTION,
   GUI_CONTROLLER_EVENT_ERROR,
   GUI_CONTROLLER_EVENT_QUEUES,
+  GUI_CONTROLLER_EVENT_CATEGORIES,
 } GuiControllerEventType;
 
 typedef enum {
@@ -77,6 +79,11 @@ typedef struct {
 } GuiControllerQueuesEvent;
 
 typedef struct {
+  IpcCategoryV1 categories[GUI_CONTROLLER_MAX_CATEGORIES];
+  int count;
+} GuiControllerCategoriesEvent;
+
+typedef struct {
   GuiControllerEventType type;
   union {
     GuiControllerOperationEvent operation;
@@ -86,6 +93,7 @@ typedef struct {
     GuiControllerConnectionEvent connection;
     GuiControllerErrorEvent error;
     GuiControllerQueuesEvent queues;
+    GuiControllerCategoriesEvent categories;
   } data;
 } GuiControllerEvent;
 
@@ -111,6 +119,10 @@ bool gui_controller_enqueue_queue_create(const Queue *queue);
 bool gui_controller_enqueue_queue_update(const Queue *queue);
 bool gui_controller_enqueue_queue_delete(uint32_t id);
 bool gui_controller_enqueue_queue_order(const uint32_t *ids, int count);
+bool gui_controller_request_categories(void);
+bool gui_controller_enqueue_category_create(const IpcCategoryV1 *category);
+bool gui_controller_enqueue_category_update(const IpcCategoryV1 *category);
+bool gui_controller_enqueue_category_delete(uint32_t id);
 /* Advances a bounded history window; used by the controller worker. */
 bool gui_controller_history_next(GuiHistoryWindow *window);
 

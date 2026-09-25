@@ -17,6 +17,7 @@ typedef struct {
   char status[16];
   float progress;
   uint64_t total_size; // internal row field; only type 36 serializes it
+  uint32_t category_id; // internal DB row; only the versioned page serializes it
 } DownloadListRecord;
 
 /* Daemon-owned transfer sample; queue mutex protects every read/write. */

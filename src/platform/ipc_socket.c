@@ -428,12 +428,18 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_QUEUE_CREATE:
   case MSG_QUEUE_UPDATE:
     return header->length == sizeof(Queue);
+  case MSG_CATEGORY_CREATE_V1:
+  case MSG_CATEGORY_UPDATE_V1:
+    return header->length == sizeof(IpcCategoryV1);
+  case MSG_CATEGORY_DELETE_V1:
+    return header->length == sizeof(uint32_t);
   case MSG_QUEUE_DELETE:
     return header->length == sizeof(uint32_t);
   case MSG_QUEUE_REORDER:
     return header->length == sizeof(uint32_t) + sizeof(int32_t);
   case MSG_LIST_PAGE:
   case MSG_LIST_PAGE_WITH_SIZE:
+  case MSG_LIST_PAGE_WITH_CATEGORY_V1:
     return header->length == sizeof(uint32_t) * 2;
   case MSG_LIST:
   case MSG_LIST_ALL:
@@ -442,6 +448,7 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_RELOAD_CONFIG:
   case MSG_HELLO:
   case MSG_QUEUE_LIST:
+  case MSG_CATEGORY_LIST_V1:
     return header->length == 0;
   default:
     return false;
@@ -916,6 +923,78 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       ipc_broadcast_status(id, "REMOVED", 0.0f);
     break;
   }
+  case MSG_CATEGORY_LIST_V1: {
+    Category *rows = NULL;
+    size_t count = 0;
+    uint32_t wire_count = UINT32_MAX;
+    dm_mutex_t *mutex = queue_manager_get_mutex();
+    dm_mutex_lock(mutex);
+    if (db_category_list(&rows, &count) == 0 && count <= IPC_CATEGORY_MAX)
+      wire_count = (uint32_t)count;
+    if (ipc_write_exact(client_fd, &wire_count, sizeof(wire_count)) == 0 &&
+        wire_count != UINT32_MAX) {
+      for (size_t i = 0; i < count; ++i) {
+        IpcCategoryV1 wire = {0};
+        wire.id = rows[i].id;
+        memcpy(wire.name, rows[i].name, sizeof(wire.name));
+        memcpy(wire.extensions, rows[i].extensions, sizeof(wire.extensions));
+        memcpy(wire.default_dir, rows[i].default_dir,
+               sizeof(wire.default_dir));
+        wire.created_at = rows[i].created_at;
+        if (ipc_write_exact(client_fd, &wire, sizeof(wire)) != 0)
+          break;
+      }
+    }
+    free(rows);
+    dm_mutex_unlock(mutex);
+    break;
+  }
+  case MSG_CATEGORY_CREATE_V1:
+  case MSG_CATEGORY_UPDATE_V1: {
+    IpcCategoryV1 wire = {0};
+    if (ipc_read_exact(client_fd, &wire, sizeof(wire)) != 0)
+      return;
+    Category category = {.id = wire.id, .created_at = wire.created_at};
+    memcpy(category.name, wire.name, sizeof(category.name));
+    memcpy(category.extensions, wire.extensions, sizeof(category.extensions));
+    memcpy(category.default_dir, wire.default_dir,
+           sizeof(category.default_dir));
+    IpcResult result = IPC_RESULT_REJECTED;
+    uint32_t id = 0;
+    if ((hdr->type == MSG_CATEGORY_CREATE_V1 && wire.id == 0) ||
+        (hdr->type == MSG_CATEGORY_UPDATE_V1 && wire.id > 1)) {
+      dm_mutex_t *mutex = queue_manager_get_mutex();
+      dm_mutex_lock(mutex);
+      int rc = hdr->type == MSG_CATEGORY_CREATE_V1
+                   ? db_category_create(&category, &id)
+                   : db_category_update(&category);
+      dm_mutex_unlock(mutex);
+      result = rc == 0 ? IPC_RESULT_OK : IPC_RESULT_ERROR;
+    }
+    send_command_result(client_fd, result);
+    if (hdr->type == MSG_CATEGORY_CREATE_V1)
+      ipc_write_exact(client_fd, &id, sizeof(id));
+    if (result == IPC_RESULT_OK)
+      ipc_broadcast_status(0, "CATS_CHANGED", 0.0f);
+    break;
+  }
+  case MSG_CATEGORY_DELETE_V1: {
+    uint32_t id = 0;
+    if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0)
+      return;
+    IpcResult result = IPC_RESULT_REJECTED;
+    if (id > 1) {
+      dm_mutex_t *mutex = queue_manager_get_mutex();
+      dm_mutex_lock(mutex);
+      result = db_category_delete(id) == 0 ? IPC_RESULT_OK
+                                            : IPC_RESULT_ERROR;
+      dm_mutex_unlock(mutex);
+    }
+    send_command_result(client_fd, result);
+    if (result == IPC_RESULT_OK)
+      ipc_broadcast_status(0, "CATS_CHANGED", 0.0f);
+    break;
+  }
   case MSG_QUEUE_LIST: {
     Queue *rows = NULL;
     size_t count = 0;
@@ -1006,7 +1085,8 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     break;
   }
   case MSG_LIST_PAGE:
-  case MSG_LIST_PAGE_WITH_SIZE: {
+  case MSG_LIST_PAGE_WITH_SIZE:
+  case MSG_LIST_PAGE_WITH_CATEGORY_V1: {
     uint32_t request[2];
     if (ipc_read_exact(client_fd, request, sizeof(request)) != 0)
       return;
@@ -1033,9 +1113,14 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     for (int i = 0; i < page.count; i++) {
       if (send_download_row(&page.rows[i], &response) != 0)
         break;
-      if (hdr->type == MSG_LIST_PAGE_WITH_SIZE &&
+      if ((hdr->type == MSG_LIST_PAGE_WITH_SIZE ||
+           hdr->type == MSG_LIST_PAGE_WITH_CATEGORY_V1) &&
           ipc_write_exact(client_fd, &page.rows[i].total_size,
                           sizeof(page.rows[i].total_size)) != 0)
+        break;
+      if (hdr->type == MSG_LIST_PAGE_WITH_CATEGORY_V1 &&
+          ipc_write_exact(client_fd, &page.rows[i].category_id,
+                          sizeof(page.rows[i].category_id)) != 0)
         break;
     }
     free(page.rows);
@@ -1636,9 +1721,49 @@ int ipc_send_queue_reorder(int sock, uint32_t id, int priority) {
   return queue_command(sock, MSG_QUEUE_REORDER, payload, sizeof(payload));
 }
 
+int ipc_send_category_list_v1(int sock, IpcCategoryV1 *out, int max) {
+  if (sock < 0 || !out || max < 0)
+    return -1;
+  MsgHeader hdr = {.length = 0, .type = MSG_CATEGORY_LIST_V1};
+  uint32_t count = 0;
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0 ||
+      ipc_read_exact(sock, &count, sizeof(count)) != 0 ||
+      count > IPC_CATEGORY_MAX)
+    return -1;
+  for (uint32_t i = 0; i < count; ++i) {
+    IpcCategoryV1 row;
+    if (ipc_read_exact(sock, &row, sizeof(row)) != 0)
+      return -1;
+    if (i < (uint32_t)max)
+      out[i] = row;
+  }
+  return count > (uint32_t)max ? -1 : (int)count;
+}
+
+int ipc_send_category_create_v1(int sock, const IpcCategoryV1 *category,
+                                uint32_t *out_id) {
+  if (!category || !out_id)
+    return -1;
+  *out_id = 0;
+  int result = queue_command(sock, MSG_CATEGORY_CREATE_V1, category,
+                             sizeof(*category));
+  if (result < 0 || ipc_read_exact(sock, out_id, sizeof(*out_id)) != 0)
+    return -1;
+  return result;
+}
+
+int ipc_send_category_update_v1(int sock, const IpcCategoryV1 *category) {
+  return category ? queue_command(sock, MSG_CATEGORY_UPDATE_V1, category,
+                                  sizeof(*category)) : -1;
+}
+
+int ipc_send_category_delete_v1(int sock, uint32_t id) {
+  return queue_command(sock, MSG_CATEGORY_DELETE_V1, &id, sizeof(id));
+}
+
 static int read_download_rows(int sock, uint32_t count,
                               IpcDownloadRecord *out, int max,
-                              bool with_size) {
+                              bool with_size, bool with_category) {
   int n = 0;
   for (uint32_t i = 0; i < count; i++) {
     uint32_t id;
@@ -1647,6 +1772,7 @@ static int read_download_rows(int sock, uint32_t count,
     char status[16];
     float progress;
     uint64_t total_size = 0;
+    uint32_t category_id = 0;
 
     if (ipc_read_exact(sock, &id, sizeof(id)) != 0 ||
         read_string(sock, url, sizeof(url)) != 0 ||
@@ -1654,7 +1780,9 @@ static int read_download_rows(int sock, uint32_t count,
         read_string(sock, status, sizeof(status)) != 0 ||
         ipc_read_exact(sock, &progress, sizeof(progress)) != 0 ||
         (with_size &&
-         ipc_read_exact(sock, &total_size, sizeof(total_size)) != 0))
+         ipc_read_exact(sock, &total_size, sizeof(total_size)) != 0) ||
+        (with_category &&
+         ipc_read_exact(sock, &category_id, sizeof(category_id)) != 0))
       return -1;
 
     if (n < max) {
@@ -1667,6 +1795,7 @@ static int read_download_rows(int sock, uint32_t count,
       out[n].status[sizeof(out[n].status) - 1] = '\0';
       out[n].progress = progress;
       out[n].total_size = total_size;
+      out[n].category_id = category_id;
       n++;
     }
   }
@@ -1682,7 +1811,7 @@ int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max) {
   uint32_t count = 0;
   if (ipc_read_exact(sock, &count, sizeof(count)) != 0)
     return -1;
-  return read_download_rows(sock, count, out, max, false);
+  return read_download_rows(sock, count, out, max, false, false);
 }
 
 static int send_list_page_type(int sock, MsgType type, uint32_t offset,
@@ -1701,7 +1830,8 @@ static int send_list_page_type(int sock, MsgType type, uint32_t offset,
       returned > IPC_LIST_PAGE_MAX)
     return -1;
   int count = read_download_rows(sock, returned, out, max,
-                                 type == MSG_LIST_PAGE_WITH_SIZE);
+                                 type != MSG_LIST_PAGE,
+                                 type == MSG_LIST_PAGE_WITH_CATEGORY_V1);
   if (count >= 0)
     *total_out = total;
   return count;
@@ -1718,6 +1848,13 @@ int ipc_send_list_page_with_size(int sock, uint32_t offset, uint32_t limit,
                                   uint32_t *total_out) {
   return send_list_page_type(sock, MSG_LIST_PAGE_WITH_SIZE, offset, limit,
                              out, max, total_out);
+}
+
+int ipc_send_list_page_with_category_v1(int sock, uint32_t offset,
+                                         uint32_t limit, IpcDownloadRecord *out,
+                                         int max, uint32_t *total_out) {
+  return send_list_page_type(sock, MSG_LIST_PAGE_WITH_CATEGORY_V1, offset,
+                             limit, out, max, total_out);
 }
 
 static int send_get_details_type(int sock, MsgType type, uint32_t id,

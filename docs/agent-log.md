@@ -906,3 +906,10 @@ Completed: consent, field limits, versioned IPC, memory-only lifetime, redaction
 Verification: cross-checked current offer/native code and official Chrome APIs; documentation-only full build and CTest passed.
 Open questions: 2.6.2 routing ownership resolved by user; return there next.
 Next: 2.6.2 category routing.
+
+## 2026-09-25 — Codex, task 2.6.3
+Branch: `cdm`; commit: `feat(gui): editable categories in sidebar`.
+Completed: persisted download category IDs, versioned category CRUD and paged history IPC, and an editable database-backed GUI sidebar.
+Verification: test-first DB, IPC, and GUI model cases; full build and CTest 33/33 passed; IPC round-trip smoke passed.
+Open questions: GUI interaction smoke UNKNOWN without a graphical desktop.
+Next: 2.7.1 phase 2 wrap-up.

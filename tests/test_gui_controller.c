@@ -6,6 +6,22 @@
 TestSuite(gui_controller, .init = gui_controller_init,
           .fini = gui_controller_shutdown);
 
+Test(gui_controller, category_snapshot_and_download_assignment) {
+  gui_model_init();
+  IpcCategoryV1 categories[2] = {{.id = 1}, {.id = 9}};
+  strcpy(categories[0].name, "Default");
+  strcpy(categories[1].name, "Video");
+  gui_model_apply_categories(categories, 2);
+  IpcCategoryV1 visible_categories[2] = {0};
+  cr_assert_eq(gui_model_snapshot_categories(visible_categories, 2), 2);
+  cr_assert_str_eq(visible_categories[1].name, "Video");
+  GuiDownloadRecord record = {.id = 71, .category_id = 9};
+  gui_model_apply_snapshot(&record, 1);
+  GuiRow row = {0};
+  cr_assert_eq(gui_model_snapshot_rows(&row, 1), 1);
+  cr_assert_eq(row.category_id, 9);
+}
+
 Test(gui_controller, queue_snapshot_replaces_model_in_priority_order) {
   gui_model_init();
   Queue queues[2] = {{.id = 2, .priority = 20, .max_concurrent = 2},

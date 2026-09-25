@@ -9,6 +9,8 @@ static GuiRow g_rows[GUI_MODEL_MAX_ROWS];
 static int g_row_count = 0;
 static Queue g_queues[GUI_MODEL_MAX_QUEUES];
 static int g_queue_count = 0;
+static IpcCategoryV1 g_categories[GUI_MODEL_MAX_CATEGORIES];
+static int g_category_count = 0;
 static dm_mutex_t g_mutex;
 static once_flag g_mutex_once = ONCE_FLAG_INIT;
 
@@ -43,6 +45,7 @@ void gui_model_init(void) {
   dm_mutex_lock(&g_mutex);
   g_row_count = 0;
   g_queue_count = 0;
+  g_category_count = 0;
   dm_mutex_unlock(&g_mutex);
   LOG_DEBUG("cleared snapshot state");
 }
@@ -74,6 +77,7 @@ void gui_model_apply_snapshot(const GuiDownloadRecord *records, int count) {
     GuiRow *row = &g_rows[g_row_count];
     memset(row, 0, sizeof(*row));
     row->id = records[i].id;
+    row->category_id = records[i].category_id;
     strncpy(row->url, records[i].url, sizeof(row->url) - 1);
     row->url[sizeof(row->url) - 1] = '\0';
     strncpy(row->dest_path, records[i].dest_path, sizeof(row->dest_path) - 1);
@@ -253,6 +257,30 @@ int gui_model_snapshot_queues(Queue *out, int max) {
   int count = g_queue_count < max ? g_queue_count : max;
   if (count)
     memcpy(out, g_queues, (size_t)count * sizeof(Queue));
+  dm_mutex_unlock(&g_mutex);
+  return count;
+}
+
+void gui_model_apply_categories(const IpcCategoryV1 *categories, int count) {
+  if (count < 0 || count > GUI_MODEL_MAX_CATEGORIES ||
+      (count && !categories))
+    return;
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  if (count)
+    memcpy(g_categories, categories, (size_t)count * sizeof(*categories));
+  g_category_count = count;
+  dm_mutex_unlock(&g_mutex);
+}
+
+int gui_model_snapshot_categories(IpcCategoryV1 *out, int max) {
+  if (!out || max < 0)
+    return -1;
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  int count = g_category_count < max ? g_category_count : max;
+  if (count)
+    memcpy(out, g_categories, (size_t)count * sizeof(*out));
   dm_mutex_unlock(&g_mutex);
   return count;
 }

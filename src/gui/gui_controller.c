@@ -26,6 +26,10 @@ typedef enum {
   GUI_CONTROLLER_COMMAND_QUEUE_UPDATE,
   GUI_CONTROLLER_COMMAND_QUEUE_DELETE,
   GUI_CONTROLLER_COMMAND_QUEUE_ORDER,
+  GUI_CONTROLLER_COMMAND_CATEGORY_LIST,
+  GUI_CONTROLLER_COMMAND_CATEGORY_CREATE,
+  GUI_CONTROLLER_COMMAND_CATEGORY_UPDATE,
+  GUI_CONTROLLER_COMMAND_CATEGORY_DELETE,
 } GuiControllerCommandType;
 
 typedef struct {
@@ -41,6 +45,7 @@ typedef struct {
   char extra_headers[4096];
   char expected_sha256[65];
   Queue queue;
+  IpcCategoryV1 category;
   uint32_t queue_order[GUI_CONTROLLER_MAX_QUEUES];
   int queue_order_count;
 } GuiControllerCommand;
@@ -243,6 +248,30 @@ bool gui_controller_request_queues(void) {
   return enqueue_id_command(GUI_CONTROLLER_COMMAND_QUEUE_LIST, 0);
 }
 
+bool gui_controller_request_categories(void) {
+  return enqueue_id_command(GUI_CONTROLLER_COMMAND_CATEGORY_LIST, 0);
+}
+
+bool gui_controller_enqueue_category_create(const IpcCategoryV1 *category) {
+  if (!category)
+    return false;
+  GuiControllerCommand command = {.type = GUI_CONTROLLER_COMMAND_CATEGORY_CREATE,
+                                  .category = *category};
+  return enqueue_command(&command);
+}
+
+bool gui_controller_enqueue_category_update(const IpcCategoryV1 *category) {
+  if (!category)
+    return false;
+  GuiControllerCommand command = {.type = GUI_CONTROLLER_COMMAND_CATEGORY_UPDATE,
+                                  .category = *category};
+  return enqueue_command(&command);
+}
+
+bool gui_controller_enqueue_category_delete(uint32_t id) {
+  return enqueue_id_command(GUI_CONTROLLER_COMMAND_CATEGORY_DELETE, id);
+}
+
 bool gui_controller_enqueue_queue_create(const Queue *queue) {
   if (!queue)
     return false;
@@ -318,6 +347,18 @@ static void publish_queues(void) {
   gui_controller_publish(&event);
 }
 
+static void publish_categories(void) {
+  GuiControllerEvent event = {.type = GUI_CONTROLLER_EVENT_CATEGORIES};
+  int count = gui_client_category_list(event.data.categories.categories,
+                                       GUI_CONTROLLER_MAX_CATEGORIES);
+  if (count < 0 || count > GUI_CONTROLLER_MAX_CATEGORIES) {
+    publish_error("Categories could not be loaded");
+    return;
+  }
+  event.data.categories.count = count;
+  gui_controller_publish(&event);
+}
+
 static void publish_snapshot(GuiHistoryWindow *window) {
   GuiDownloadRecord *records = NULL;
   int count = 0;
@@ -356,6 +397,10 @@ static void publish_client_events(void) {
         publish_queues();
         continue;
       }
+      if (strcmp(client_event.status, "CATS_CHANGED") == 0) {
+        publish_categories();
+        continue;
+      }
       GuiControllerEvent event = {.type = GUI_CONTROLLER_EVENT_STATUS};
       event.data.status.download_id = client_event.download_id;
       event.data.status.progress = client_event.progress;
@@ -372,6 +417,8 @@ static void publish_client_events(void) {
       gui_controller_publish(&event);
       if (client_event.type == GUI_EVT_CONNECTION_RESTORED)
         publish_queues();
+      if (client_event.type == GUI_EVT_CONNECTION_RESTORED)
+        publish_categories();
     }
   }
 }
@@ -449,6 +496,24 @@ static void process_command(const GuiControllerCommand *command) {
       }
     }
     break;
+  case GUI_CONTROLLER_COMMAND_CATEGORY_LIST:
+    publish_categories();
+    return;
+  case GUI_CONTROLLER_COMMAND_CATEGORY_CREATE:
+    succeeded = gui_client_category_create(&command->category);
+    break;
+  case GUI_CONTROLLER_COMMAND_CATEGORY_UPDATE:
+    succeeded = gui_client_category_update(&command->category);
+    break;
+  case GUI_CONTROLLER_COMMAND_CATEGORY_DELETE:
+    succeeded = gui_client_category_delete(command->id);
+    break;
+  }
+  if (command->type >= GUI_CONTROLLER_COMMAND_CATEGORY_LIST) {
+    if (!succeeded)
+      publish_error("Category operation failed");
+    publish_categories();
+    return;
   }
   if (command->type >= GUI_CONTROLLER_COMMAND_QUEUE_LIST) {
     if (!succeeded)
@@ -465,6 +530,7 @@ static int controller_thread_fn(void *arg) {
   (void)arg;
   GuiHistoryWindow window = {.count = GUI_HISTORY_PAGE_ROWS};
   publish_queues();
+  publish_categories();
   int refresh_elapsed = GUI_CONTROLLER_REFRESH_MS;
   while (atomic_load(&g_running)) {
     publish_client_events();

@@ -124,6 +124,11 @@ int ipc_send_queue_create(int sock, const Queue *queue, uint32_t *out_id);
 int ipc_send_queue_update(int sock, const Queue *queue);
 int ipc_send_queue_delete(int sock, uint32_t id);
 int ipc_send_queue_reorder(int sock, uint32_t id, int priority);
+int ipc_send_category_list_v1(int sock, IpcCategoryV1 *out, int max);
+int ipc_send_category_create_v1(int sock, const IpcCategoryV1 *category,
+                                uint32_t *out_id);
+int ipc_send_category_update_v1(int sock, const IpcCategoryV1 *category);
+int ipc_send_category_delete_v1(int sock, uint32_t id);
 int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max);
 /* Returns rows copied to out, -1 on I/O error. The daemon caps limit at 500.
  * total_out is the full database count, before offset/limit. */
@@ -133,6 +138,10 @@ int ipc_send_list_page(int sock, uint32_t offset, uint32_t limit,
 int ipc_send_list_page_with_size(int sock, uint32_t offset, uint32_t limit,
                                   IpcDownloadRecord *out, int max,
                                   uint32_t *total_out);
+/* Type 55 adds uint64_t total_size and uint32_t category_id per row. */
+int ipc_send_list_page_with_category_v1(int sock, uint32_t offset,
+                                         uint32_t limit, IpcDownloadRecord *out,
+                                         int max, uint32_t *total_out);
 int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out);
 /* v2 adds auth_user and has_password after the legacy details payload. */
 int ipc_send_get_details_v2(int sock, uint32_t id, IpcDownloadDetails *out);

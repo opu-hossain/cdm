@@ -47,9 +47,23 @@ typedef enum {
   MSG_QUEUE_DELETE = 48,
   MSG_QUEUE_REORDER = 49,
   MSG_ADD_DOWNLOAD_V3 = 50, // v2 JSON plus auto_directory; v2 response
+  MSG_CATEGORY_LIST_V1 = 51,
+  MSG_CATEGORY_CREATE_V1 = 52,
+  MSG_CATEGORY_UPDATE_V1 = 53,
+  MSG_CATEGORY_DELETE_V1 = 54,
+  MSG_LIST_PAGE_WITH_CATEGORY_V1 = 55,
 } MsgType;
 
-#define IPC_PROTOCOL_VERSION 6
+#define IPC_PROTOCOL_VERSION 7
+
+/* Versioned category record; fixed native ABI, with bounded NUL strings. */
+typedef struct {
+  uint32_t id;
+  char name[128];
+  char extensions[512];
+  char default_dir[1024];
+  int64_t created_at; // Unix seconds
+} IpcCategoryV1;
 
 /* Keep the v1 frame header unchanged for legacy clients. Version negotiation
  * uses MSG_HELLO; future versioned payloads use distinct message types. */
@@ -81,6 +95,7 @@ typedef enum {
 #define IPC_MAX_URL_LEN 2048
 #define IPC_MAX_PATH_LEN 1024
 #define IPC_MAX_FRAME_SIZE 16384
+#define IPC_CATEGORY_MAX 256
 
 #ifdef __cplusplus
 }

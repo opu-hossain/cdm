@@ -37,6 +37,50 @@ TestSuite(ipc, .init = setup_ipc, .fini = teardown_ipc);
 static atomic_bool browser_server_running;
 static int browser_server_thread(void *unused);
 
+Test(ipc, category_crud_and_paged_assignment_v1) {
+  cr_assert_eq(db_init(":memory:"), 0);
+  Category video = {0};
+  strcpy(video.name, "Video");
+  strcpy(video.extensions, "mp4");
+  uint32_t video_id = 0;
+  cr_assert_eq(db_category_create(&video, &video_id), 0);
+  cr_assert_eq(db_insert_download(711, "http://127.0.0.1/clip.mp4",
+                                  "/tmp/cdm-category-clip.mp4", NULL), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  IpcCategoryV1 categories[4] = {0};
+  cr_assert_eq(ipc_send_category_list_v1(client, categories, 4), 2);
+  cr_assert_eq(categories[1].id, video_id);
+  IpcDownloadRecord row = {0};
+  uint32_t total = 0;
+  cr_assert_eq(ipc_send_list_page_with_category_v1(
+      client, 0, 1, &row, 1, &total), 1);
+  cr_assert_eq(row.category_id, video_id);
+  IpcCategoryV1 documents = {0};
+  strcpy(documents.name, "Documents");
+  strcpy(documents.extensions, "pdf");
+  uint32_t documents_id = 0;
+  cr_assert_eq(ipc_send_category_create_v1(client, &documents,
+                                            &documents_id), IPC_RESULT_OK);
+  cr_assert_neq(documents_id, 0);
+  documents.id = documents_id;
+  strcpy(documents.name, "Books");
+  cr_assert_eq(ipc_send_category_update_v1(client, &documents), IPC_RESULT_OK);
+  cr_assert_eq(ipc_send_category_delete_v1(client, documents_id), IPC_RESULT_OK);
+  cr_assert_eq(ipc_send_category_delete_v1(client, video_id), IPC_RESULT_OK);
+  cr_assert_eq(ipc_send_list_page_with_category_v1(
+      client, 0, 1, &row, 1, &total), 1);
+  cr_assert_eq(row.category_id, 1);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  db_close();
+}
+
 Test(ipc, category_routing_reserves_final_path_but_respects_explicit_folder) {
   char root[] = "/tmp/cdm-category-ipc-XXXXXX";
   cr_assert_not_null(mkdtemp(root));
@@ -84,7 +128,8 @@ Test(ipc, category_routing_reserves_final_path_but_respects_explicit_folder) {
   bool found_routed = false;
   for (int i = 0; i < stored; i++)
     if (persisted[i].id == auto_id)
-      found_routed = strcmp(persisted[i].dest_path, routed) == 0;
+      found_routed = strcmp(persisted[i].dest_path, routed) == 0 &&
+                     persisted[i].category_id == category_id;
   cr_assert(found_routed);
   IpcDownloadOptions explicit = {0};
   cr_assert_eq(ipc_send_add_download_v3(client,

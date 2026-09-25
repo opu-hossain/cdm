@@ -12,6 +12,28 @@ static void close_db(void) { db_close(); }
 
 TestSuite(db, .init = setup_db, .fini = close_db);
 
+static int find_category_row(const DbDownloadRow *row, void *ctx) {
+  if (row->id == 901)
+    *(uint32_t *)ctx = row->category_id;
+  return 0;
+}
+
+Test(db, category_assignment_survives_delete_as_default) {
+  Category video = {0};
+  strcpy(video.name, "Video");
+  strcpy(video.extensions, "mp4");
+  uint32_t category_id = 0, observed = 0;
+  cr_assert_eq(db_category_create(&video, &category_id), 0);
+  cr_assert_eq(db_insert_download(901, "http://127.0.0.1/video.mp4",
+                                  "/tmp/cdm-category-video.mp4", NULL), 0);
+  cr_assert_eq(db_visit_downloads_page(find_category_row, &observed, 0, 5), 1);
+  cr_assert_eq(observed, category_id);
+  cr_assert_eq(db_category_delete(category_id), 0);
+  observed = 0;
+  cr_assert_eq(db_visit_downloads_page(find_category_row, &observed, 0, 5), 1);
+  cr_assert_eq(observed, 1);
+}
+
 Test(db, post_action_due_once_per_all_done_epoch) {
   cr_assert_eq(db_queue_post_action_due(1, 100), 0);
   cr_assert_eq(db_insert_download(801, "http://127.0.0.1/first",
@@ -269,7 +291,7 @@ Test(db, version_four_fixture_migrates_to_named_queues) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 8);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 9);
   sqlite3_finalize(statement);
   cr_assert_eq(sqlite3_prepare_v2(reader,
       "SELECT name,extensions,default_dir FROM categories WHERE id=1",
@@ -369,7 +391,7 @@ Test(db, version_five_migrates_and_categories_round_trip) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 8);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 9);
   sqlite3_finalize(statement);
   sqlite3_close(reader);
   db_close();
@@ -404,7 +426,7 @@ Test(db, legacy_schema_migrates_transactionally) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 8);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 9);
   sqlite3_finalize(statement);
 
   cr_assert_eq(sqlite3_prepare_v2(

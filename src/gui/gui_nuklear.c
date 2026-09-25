@@ -30,10 +30,6 @@
 #define GUI_SEARCH_CAP 256
 
 typedef enum { TAB_ALL, TAB_DOWNLOADING, TAB_COMPLETED, TAB_QUEUES } GuiTab;
-typedef enum {
-  CATEGORY_ALL, CATEGORY_DOCUMENTS, CATEGORY_COMPRESSED,
-  CATEGORY_MUSIC, CATEGORY_VIDEO, CATEGORY_PROGRAMS, CATEGORY_COUNT
-} GuiCategory;
 
 /* Exact tokens from docs/ui/mockup.html. */
 static const struct nk_color BG = {11, 15, 20, 255};
@@ -61,7 +57,13 @@ typedef struct {
   uint32_t history_offset, history_total, pending_scroll_adjust;
   uint32_t selected_id, menu_id, delete_confirm_id;
   GuiTab tab;
-  GuiCategory category;
+  uint32_t category; // 0 = all categories
+  uint32_t category_menu_id, category_delete_id;
+  int category_scroll;
+  bool category_menu_open, category_menu_just_opened;
+  bool category_edit_open, category_delete_open;
+  struct nk_vec2 category_menu_pos;
+  IpcCategoryV1 category_draft;
   char search[GUI_SEARCH_CAP];
   DiskSpace disk;
   bool disk_available;
@@ -184,14 +186,6 @@ static bool can_pause(const GuiRow *row) {
   return is_status(row, "ACTIVE") || is_status(row, "QUEUED");
 }
 
-static bool ascii_equal(const char *a, const char *b) {
-  while (*a && *b) {
-    if (tolower((unsigned char)*a++) != tolower((unsigned char)*b++))
-      return false;
-  }
-  return !*a && !*b;
-}
-
 static bool contains_case_insensitive(const char *text, const char *needle) {
   if (!*needle)
     return true;
@@ -208,44 +202,13 @@ static bool contains_case_insensitive(const char *text, const char *needle) {
   return false;
 }
 
-static GuiCategory category_for_row(const GuiRow *row) {
-  const char *filename = filename_for_row(row);
-  const char *dot = strrchr(filename, '.');
-  if (!dot || dot == filename || !dot[1])
-    return CATEGORY_ALL;
-  const char *ext = dot + 1;
-  static const char *extensions[CATEGORY_COUNT] = {
-      "", "pdf doc docx txt xls xlsx ppt pptx odt csv",
-      "zip rar 7z tar gz tgz bz2 xz", "mp3 wav flac ogg m4a aac",
-      "mp4 mkv avi mov webm flv", "exe msi dmg apk deb rpm appimage sh"};
-  for (int category = CATEGORY_DOCUMENTS; category < CATEGORY_COUNT;
-       ++category) {
-    const char *p = extensions[category];
-    while (*p) {
-      const char *end = strchr(p, ' ');
-      size_t len = end ? (size_t)(end - p) : strlen(p);
-      if (strlen(ext) == len) {
-        char candidate[16];
-        memcpy(candidate, p, len);
-        candidate[len] = '\0';
-        if (ascii_equal(ext, candidate))
-          return (GuiCategory)category;
-      }
-      if (!end)
-        break;
-      p = end + 1;
-    }
-  }
-  return CATEGORY_ALL;
-}
-
 static bool row_matches(const UiState *ui, const GuiRow *row) {
   if (ui->tab == TAB_DOWNLOADING && !can_pause(row) &&
       !is_status(row, "PAUSED"))
     return false;
   if (ui->tab == TAB_COMPLETED && !is_status(row, "DONE"))
     return false;
-  if (ui->category != CATEGORY_ALL && category_for_row(row) != ui->category)
+  if (ui->category != 0 && row->category_id != ui->category)
     return false;
   return contains_case_insensitive(filename_for_row(row), ui->search) ||
          contains_case_insensitive(row->dest_path, ui->search);
@@ -557,7 +520,8 @@ static bool nav_button(struct nk_context *ctx, float x, float y, float w,
 }
 
 static void draw_chrome(struct nk_context *ctx, UiState *ui,
-                        const int category_counts[CATEGORY_COUNT],
+                        const IpcCategoryV1 *categories, int category_count,
+                        const int *category_counts,
                         int visible_count, float width, float height) {
   fill(ctx, screen_rect(ctx, 0, 0, width, 52), 0, SURFACE);
   fill(ctx, screen_rect(ctx, 0, 52, 220, height - 52), 0, SURFACE);
@@ -606,20 +570,50 @@ static void draw_chrome(struct nk_context *ctx, UiState *ui,
     } else
       ui->add_open = true;
   }
-  const char *categories[] = {"All categories", "Documents", "Compressed",
-                              "Music",          "Video",     "Programs"};
-  const char *icons[] = {"=", "D", "Z", "M", "V", "P"};
-  for (int i = 0; i < 6 && ui->tab != TAB_QUEUES; ++i) {
-    float y = 122 + i * 36;
-    if (nav_button(ctx, 14, y, 192, 33, "", ui->category == (GuiCategory)i))
-      ui->category = (GuiCategory)i;
-    struct nk_color bg = ui->category == (GuiCategory)i ? ACCENT_DIM : SURFACE;
-    text_at(ctx, 24, y, 16, 33, icons[i], 12, MUTED, bg);
-    text_at(ctx, 50, y, 122, 33, categories[i], 13,
-            ui->category == (GuiCategory)i ? TEXT : MUTED, bg);
-    char total[16];
-    snprintf(total, sizeof(total), "%d", category_counts[i]);
-    text_at(ctx, 181, y, 23, 33, total, 11, nk_rgb(207, 232, 247), bg);
+  if (ui->tab != TAB_QUEUES) {
+    text_at(ctx, 16, 115, 140, 28, "CATEGORIES", 11, MUTED, SURFACE);
+    if (button(ctx, 174, 115, 30, 28, "+", true, false)) {
+      memset(&ui->category_draft, 0, sizeof(ui->category_draft));
+      ui->category_edit_open = true;
+    }
+    if (nav_button(ctx, 14, 148, 192, 33, "All categories",
+                   ui->category == 0))
+      ui->category = 0;
+    int slots = (int)((height - 342) / 36);
+    if (slots < 1)
+      slots = 1;
+    if (ui->category_scroll > category_count - slots)
+      ui->category_scroll = category_count > slots ? category_count - slots : 0;
+    for (int slot = 0; slot < slots && slot + ui->category_scroll < category_count;
+         ++slot) {
+      int i = slot + ui->category_scroll;
+      float y = 184 + slot * 36;
+      if (nav_button(ctx, 14, y, 192, 33, "", ui->category == categories[i].id))
+        ui->category = categories[i].id;
+      struct nk_color bg = ui->category == categories[i].id ? ACCENT_DIM : SURFACE;
+      label(ctx, screen_rect(ctx, 24, y, 140, 33), categories[i].name,
+            13, ui->category == categories[i].id ? TEXT : MUTED, bg);
+      char total[16];
+      int written = snprintf(total, sizeof(total), "%d", category_counts[i]);
+      if (written < 0 || (size_t)written >= sizeof(total))
+        total[0] = '\0';
+      text_at(ctx, 176, y, 28, 33, total, 11, TEXT, bg);
+      if (nk_input_mouse_clicked(&ctx->input, NK_BUTTON_RIGHT,
+                                 screen_rect(ctx, 14, y, 192, 33))) {
+        ui->category_menu_id = categories[i].id;
+        ui->category_menu_open = true;
+        ui->category_menu_just_opened = true;
+        ui->category_menu_pos = ctx->input.mouse.pos;
+      }
+    }
+    if (category_count > slots) {
+      if (button(ctx, 14, height - 145, 92, 27, "Previous",
+                 ui->category_scroll > 0, false))
+        ui->category_scroll--;
+      if (button(ctx, 114, height - 145, 92, 27, "Next",
+                 ui->category_scroll + slots < category_count, false))
+        ui->category_scroll++;
+    }
   }
   fill(ctx, screen_rect(ctx, 14, height - 83, 192, 1), 0, BORDER);
   text_at(ctx, 14, height - 69, 192, 14, "LOCAL STORAGE", 11, DISABLED,
@@ -647,7 +641,7 @@ static void draw_chrome(struct nk_context *ctx, UiState *ui,
     int written = snprintf(total, sizeof(total), "%d queues", count);
     if (written < 0 || (size_t)written >= sizeof(total))
       total[0] = '\0';
-  } else if (ui->category == CATEGORY_ALL && ui->tab == TAB_ALL &&
+  } else if (ui->category == 0 && ui->tab == TAB_ALL &&
              !ui->search[0])
     snprintf(total, sizeof(total), "%d of %u downloads", visible_count,
              ui->history_total);
@@ -819,7 +813,7 @@ static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
     }
     nk_layout_space_end(ctx);
   }
-  bool all_history = ui->category == CATEGORY_ALL && ui->tab == TAB_ALL &&
+  bool all_history = ui->category == 0 && ui->tab == TAB_ALL &&
                      ui->search[0] == '\0';
   if (all_history && ui->history_loading) {
     nk_layout_row_dynamic(ctx, 28, 1);
@@ -1662,6 +1656,123 @@ static void draw_queue_delete(struct nk_context *ctx, UiState *ui,
   modal_end(ctx);
 }
 
+static void draw_category_menu(struct nk_context *ctx, UiState *ui,
+                               float width, float height) {
+  if (!ui->category_menu_open)
+    return;
+  IpcCategoryV1 categories[GUI_MODEL_MAX_CATEGORIES];
+  int count = gui_model_snapshot_categories(categories,
+                                             GUI_MODEL_MAX_CATEGORIES);
+  IpcCategoryV1 *selected = NULL;
+  for (int i = 0; i < count; ++i)
+    if (categories[i].id == ui->category_menu_id)
+      selected = &categories[i];
+  if (!selected || selected->id == 1) {
+    ui->category_menu_open = false;
+    return;
+  }
+  float x = ui->category_menu_pos.x, y = ui->category_menu_pos.y;
+  if (x + 174 > width)
+    x = width - 174;
+  if (y + 76 > height)
+    y = height - 76;
+  struct nk_rect bounds = nk_rect(x, y, 174, 76);
+  bool just_opened = ui->category_menu_just_opened;
+  ui->category_menu_just_opened = false;
+  if (!just_opened && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT) &&
+      !nk_input_is_mouse_hovering_rect(&ctx->input, bounds)) {
+    ui->category_menu_open = false;
+    return;
+  }
+  if (nk_popup_begin(ctx, NK_POPUP_STATIC, "category-menu",
+                     NK_WINDOW_NO_SCROLLBAR, bounds)) {
+    nk_layout_space_begin(ctx, NK_STATIC, 76, 2);
+    fill(ctx, screen_rect(ctx, 0, 0, 174, 76), 8, SURFACE2);
+    if (button(ctx, 5, 5, 164, 30, "Edit", true, false)) {
+      ui->category_draft = *selected;
+      ui->category_edit_open = true;
+      ui->category_menu_open = false;
+    }
+    if (button(ctx, 5, 39, 164, 30, "Delete", true, false)) {
+      ui->category_delete_id = selected->id;
+      ui->category_delete_open = true;
+      ui->category_menu_open = false;
+    }
+    nk_layout_space_end(ctx);
+    if (!ui->category_menu_open)
+      nk_popup_close(ctx);
+    nk_popup_end(ctx);
+  } else {
+    ui->category_menu_open = false;
+  }
+}
+
+static void draw_category_edit(struct nk_context *ctx, UiState *ui,
+                               float width, float height) {
+  float w = 520, h = 360;
+  if (!modal_start(ctx, "category-edit",
+                   ui->category_draft.id ? "Edit category" : "Add category",
+                   (width - w) / 2, (height - h) / 2, w, h,
+                   &ui->category_edit_open)) {
+    nk_end(ctx);
+    return;
+  }
+  nk_layout_space_push(ctx, nk_rect(20, 65, w - 40, 220));
+  if (nk_group_begin(ctx, "category-fields", 0)) {
+    input_field(ctx, "Name", ui->category_draft.name,
+                sizeof(ui->category_draft.name));
+    input_field(ctx, "Extensions (comma separated)",
+                ui->category_draft.extensions,
+                sizeof(ui->category_draft.extensions));
+    input_field(ctx, "Default directory (optional)",
+                ui->category_draft.default_dir,
+                sizeof(ui->category_draft.default_dir));
+    nk_group_end(ctx);
+  }
+  text_at(ctx, 20, 283, w - 40, 24, ui->error, 11, RED, SURFACE);
+  if (button(ctx, w - 230, h - 42, 80, 30, "Cancel", true, false))
+    ui->category_edit_open = false;
+  if (button(ctx, w - 142, h - 42, 122, 30, "Save", true, true)) {
+    if (!ui->category_draft.name[0])
+      copy_text(ui->error, sizeof(ui->error), "Category name is required");
+    else {
+      bool queued = ui->category_draft.id
+          ? gui_controller_enqueue_category_update(&ui->category_draft)
+          : gui_controller_enqueue_category_create(&ui->category_draft);
+      report_enqueue(ui, queued);
+      if (queued)
+        ui->category_edit_open = false;
+    }
+  }
+  modal_end(ctx);
+}
+
+static void draw_category_delete(struct nk_context *ctx, UiState *ui,
+                                 float width, float height) {
+  float w = 480, h = 220;
+  if (!modal_start(ctx, "category-delete", "Delete category",
+                   (width - w) / 2, (height - h) / 2, w, h,
+                   &ui->category_delete_open)) {
+    nk_end(ctx);
+    return;
+  }
+  text_at(ctx, 20, 78, w - 40, 48,
+          "Downloads in this category will move to Default.",
+          13, TEXT, SURFACE);
+  if (button(ctx, w - 222, h - 43, 84, 30, "Cancel", true, false))
+    ui->category_delete_open = false;
+  if (button(ctx, w - 132, h - 43, 112, 30, "Delete", true, true)) {
+    bool queued = gui_controller_enqueue_category_delete(ui->category_delete_id);
+    report_enqueue(ui, queued);
+    if (queued) {
+      if (ui->category == ui->category_delete_id)
+        ui->category = 0;
+      ui->category_delete_open = false;
+    }
+  }
+  modal_end(ctx);
+}
+
 static void draw_details(struct nk_context *ctx, UiState *ui, float width,
                          float height) {
   float w = 580, h = 390;
@@ -1897,6 +2008,10 @@ static void consume_events(UiState *ui) {
       gui_model_apply_queues(event.data.queues.queues,
                              event.data.queues.count);
       break;
+    case GUI_CONTROLLER_EVENT_CATEGORIES:
+      gui_model_apply_categories(event.data.categories.categories,
+                                  event.data.categories.count);
+      break;
     }
   }
 }
@@ -1942,12 +2057,16 @@ int run_gui(void) {
     int n = gui_model_snapshot_rows(rows, GUI_MODEL_MAX_ROWS);
     GuiRow visible[GUI_MODEL_MAX_ROWS];
     int visible_count = 0;
-    int category_counts[CATEGORY_COUNT] = {0};
-    category_counts[CATEGORY_ALL] = n;
+    IpcCategoryV1 categories[GUI_MODEL_MAX_CATEGORIES];
+    int category_count = gui_model_snapshot_categories(
+        categories, GUI_MODEL_MAX_CATEGORIES);
+    int category_counts[GUI_MODEL_MAX_CATEGORIES] = {0};
     for (int i = 0; i < n; ++i) {
-      GuiCategory category = category_for_row(&rows[i]);
-      if (category != CATEGORY_ALL)
-        ++category_counts[category];
+      for (int j = 0; j < category_count; ++j)
+        if (rows[i].category_id == categories[j].id) {
+          ++category_counts[j];
+          break;
+        }
       if (row_matches(&ui, &rows[i]))
         visible[visible_count++] = rows[i];
     }
@@ -1968,15 +2087,20 @@ int run_gui(void) {
     bool modal = ui.settings_open || ui.add_open || ui.batch_add_open ||
                  ui.details_open ||
                  ui.delete_confirm_open || ui.queue_add_open ||
-                 ui.queue_delete_open;
+                 ui.queue_delete_open || ui.category_edit_open ||
+                 ui.category_delete_open;
     if (modal) {
-      float mw = ui.settings_open ? 460
+        float mw = ui.settings_open ? 460
+                 : ui.category_delete_open ? 480
+                 : ui.category_edit_open ? 520
                  : ui.queue_delete_open ? 480
                  : ui.add_open || ui.batch_add_open || ui.delete_confirm_open || ui.queue_add_open
                      ? 520 : 580;
       float mh =
           ui.settings_open ? (height * .8f > 650 ? 650 : height * .8f)
           : ui.delete_confirm_open ? 230
+          : ui.category_delete_open ? 220
+          : ui.category_edit_open ? 360
           : ui.queue_delete_open ? 220
           : ui.queue_add_open ? (height * .82f > 660 ? 660 : height * .82f)
           : ui.batch_add_open ? 550
@@ -1992,6 +2116,7 @@ int run_gui(void) {
         ui.settings_open = ui.add_open = ui.batch_add_open = ui.details_open =
             ui.delete_confirm_open = false;
         ui.queue_add_open = ui.queue_delete_open = false;
+        ui.category_edit_open = ui.category_delete_open = false;
         modal = false;
       }
     }
@@ -1999,7 +2124,8 @@ int run_gui(void) {
     if (nk_begin(ctx, "Download Manager", nk_rect(0, 0, width, height),
                  NK_WINDOW_NO_SCROLLBAR | (modal ? NK_WINDOW_NO_INPUT : 0))) {
       nk_layout_space_begin(ctx, NK_STATIC, height, 32);
-      draw_chrome(ctx, &ui, category_counts, visible_count, width, height);
+      draw_chrome(ctx, &ui, categories, category_count, category_counts,
+                  visible_count, width, height);
       if (ui.tab == TAB_QUEUES)
         draw_queues(ctx, &ui, width, height);
       else {
@@ -2015,12 +2141,15 @@ int run_gui(void) {
       nk_layout_space_end(ctx);
       if (!modal)
         draw_menu(ctx, &ui, visible, visible_count, width, height);
+      if (!modal)
+        draw_category_menu(ctx, &ui, width, height);
     }
     nk_end(ctx);
     if (!modal)
       draw_toast(ctx, &ui, width, height);
     if (ui.settings_open || ui.add_open || ui.batch_add_open || ui.details_open ||
-        ui.delete_confirm_open || ui.queue_add_open || ui.queue_delete_open) {
+        ui.delete_confirm_open || ui.queue_add_open || ui.queue_delete_open ||
+        ui.category_edit_open || ui.category_delete_open) {
       modal_backdrop(ctx, width, height);
       if (ui.settings_open)
         draw_settings(ctx, &ui, width, height);
@@ -2034,6 +2163,10 @@ int run_gui(void) {
         draw_queue_add(ctx, &ui, width, height);
       else if (ui.queue_delete_open)
         draw_queue_delete(ctx, &ui, width, height);
+      else if (ui.category_edit_open)
+        draw_category_edit(ctx, &ui, width, height);
+      else if (ui.category_delete_open)
+        draw_category_delete(ctx, &ui, width, height);
       else
         draw_details(ctx, &ui, width, height);
     }

@@ -115,7 +115,8 @@ int db_init(const char *db_path) {
       "  auth_user       TEXT DEFAULT '',"
       "  auth_password   TEXT DEFAULT '',"
       "  schedule_paused INTEGER NOT NULL DEFAULT 0,"
-      "  queue_id INTEGER DEFAULT 1 REFERENCES queues(id) ON DELETE SET NULL"
+      "  queue_id INTEGER DEFAULT 1 REFERENCES queues(id) ON DELETE SET NULL,"
+      "  category_id INTEGER NOT NULL DEFAULT 1 REFERENCES categories(id)"
       ");"
       ""
       "CREATE TABLE IF NOT EXISTS chunks ("
@@ -140,7 +141,8 @@ int db_init(const char *db_path) {
                                           "reserved_file", "etag",
                                           "last_modified", "auto_filename",
                                           "auth_user", "auth_password",
-                                          "queue_id", "schedule_paused"};
+                                          "queue_id", "schedule_paused",
+                                          "category_id"};
   static const char *migration_types[] = {"TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "INTEGER DEFAULT 0", "INTEGER DEFAULT 0",
@@ -148,13 +150,15 @@ int db_init(const char *db_path) {
                                           "INTEGER DEFAULT 0", "TEXT DEFAULT ''",
                                           "TEXT DEFAULT ''",
                                           "INTEGER DEFAULT 1 REFERENCES queues(id) ON DELETE SET NULL",
-                                          "INTEGER NOT NULL DEFAULT 0"};
+                                          "INTEGER NOT NULL DEFAULT 0",
+                                          "INTEGER NOT NULL DEFAULT 1 REFERENCES categories(id)"};
 
   char *migration_error = NULL;
   /* SQLite requires a NULL default when adding REFERENCES with FK checks
    * enabled. Disable enforcement before BEGIN, then validate and restore it. */
-  bool adding_queue_fk = !db_column_exists("downloads", "queue_id");
-  if (adding_queue_fk &&
+  bool adding_reference = !db_column_exists("downloads", "queue_id") ||
+                          !db_column_exists("downloads", "category_id");
+  if (adding_reference &&
       sqlite3_exec(g_db, "PRAGMA foreign_keys=OFF;", NULL, NULL, NULL) !=
           SQLITE_OK) {
     db_close();
@@ -257,7 +261,7 @@ int db_init(const char *db_path) {
   }
   sqlite3_finalize(fk_check);
 
-  rc = sqlite3_exec(g_db, "PRAGMA user_version = 8; COMMIT;", NULL, NULL,
+  rc = sqlite3_exec(g_db, "PRAGMA user_version = 9; COMMIT;", NULL, NULL,
                     &migration_error);
   if (rc != SQLITE_OK) {
     LOG_ERROR("could not commit database migration: %s",
@@ -268,7 +272,7 @@ int db_init(const char *db_path) {
     return -1;
   }
   sqlite3_free(migration_error);
-  if (adding_queue_fk &&
+  if (adding_reference &&
       sqlite3_exec(g_db, "PRAGMA foreign_keys=ON;", NULL, NULL, NULL) !=
           SQLITE_OK) {
     db_close();
@@ -369,6 +373,16 @@ int db_category_create(const Category *category, uint32_t *out_id) {
   if (!db_ready() || !category_valid(category) || !out_id)
     return -1;
   *out_id = 0;
+  sqlite3_stmt *limit_stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, "SELECT COUNT(*) FROM categories", -1,
+                         &limit_stmt, NULL) != SQLITE_OK)
+    return -1;
+  int limit_step = sqlite3_step(limit_stmt);
+  int64_t count = limit_step == SQLITE_ROW
+                      ? sqlite3_column_int64(limit_stmt, 0) : INT64_MAX;
+  sqlite3_finalize(limit_stmt);
+  if (count >= IPC_CATEGORY_MAX)
+    return -1;
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db,
       "INSERT INTO categories(name,extensions,default_dir,created_at) "
@@ -407,15 +421,33 @@ int db_category_update(const Category *category) {
 int db_category_delete(uint32_t id) {
   if (!db_ready() || id <= 1)
     return -1;
-  sqlite3_stmt *stmt = NULL;
-  if (sqlite3_prepare_v2(g_db, "DELETE FROM categories WHERE id=?", -1,
-                         &stmt, NULL) != SQLITE_OK)
+  if (sqlite3_exec(g_db, "BEGIN IMMEDIATE", NULL, NULL, NULL) != SQLITE_OK)
     return -1;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db,
+      "UPDATE downloads SET category_id=1 WHERE category_id=?", -1,
+      &stmt, NULL) != SQLITE_OK)
+    goto category_delete_failed;
   sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id);
   int step = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  stmt = NULL;
+  if (step != SQLITE_DONE ||
+      sqlite3_prepare_v2(g_db, "DELETE FROM categories WHERE id=?", -1,
+                         &stmt, NULL) != SQLITE_OK)
+    goto category_delete_failed;
+  sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id);
+  step = sqlite3_step(stmt);
   int changed = sqlite3_changes(g_db);
   sqlite3_finalize(stmt);
-  return step == SQLITE_DONE && changed == 1 ? 0 : -1;
+  stmt = NULL;
+  if (step == SQLITE_DONE && changed == 1 &&
+      sqlite3_exec(g_db, "COMMIT", NULL, NULL, NULL) == SQLITE_OK)
+    return 0;
+category_delete_failed:
+  sqlite3_finalize(stmt);
+  sqlite3_exec(g_db, "ROLLBACK", NULL, NULL, NULL);
+  return -1;
 }
 
 int db_queue_post_action_due(uint32_t queue_id, int64_t now_seconds) {
@@ -755,12 +787,17 @@ static int insert_download(uint32_t id, const char *url,
   if (!db_ready() || !url || !dest_path)
     return -1;
 
+  Category category = {0};
+  const char *filename = strrchr(dest_path, '/');
+  if (!category_for_filename(filename ? filename + 1 : dest_path, &category))
+    return -1;
+
   const char *sql =
       "INSERT OR REPLACE INTO downloads "
       "(id, url, dest_path, status, created_at, cookie, referrer, "
       "extra_headers, expected_sha256, speed_limit_bps, reserved_file, "
-      "auto_filename, auth_user, auth_password, queue_id) "
-      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+      "auto_filename, auth_user, auth_password, queue_id, category_id) "
+      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
     LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
@@ -785,6 +822,7 @@ static int insert_download(uint32_t id, const char *url,
                     SQLITE_STATIC);
   sqlite3_bind_int64(stmt, 14,
                      opts && opts->queue_id ? (sqlite3_int64)opts->queue_id : 1);
+  sqlite3_bind_int64(stmt, 15, (sqlite3_int64)category.id);
 
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
@@ -1013,7 +1051,7 @@ int db_load_chunks(uint32_t download_id, DbChunkRow *out, int max) {
 int db_list_all_downloads(DbDownloadRow *out, int max) {
   if (!db_ready() || !out || max <= 0)
     return 0;
-  const char *sql = "SELECT id, url, dest_path, status, total_size FROM downloads "
+  const char *sql = "SELECT id, url, dest_path, status, total_size, category_id FROM downloads "
                     "ORDER BY id DESC LIMIT ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
@@ -1036,6 +1074,7 @@ int db_list_all_downloads(DbDownloadRow *out, int max) {
     strncpy(out[n].status, stat ? stat : "", sizeof(out[n].status) - 1);
     out[n].status[sizeof(out[n].status) - 1] = '\0';
     out[n].total_size = (uint64_t)sqlite3_column_int64(stmt, 4);
+    out[n].category_id = (uint32_t)sqlite3_column_int64(stmt, 5);
     n++;
   }
   sqlite3_finalize(stmt);
@@ -1077,7 +1116,7 @@ int db_visit_downloads_page(DbDownloadVisitor visitor, void *ctx,
   if (!db_ready() || !visitor || limit == 0)
     return -1;
 
-  const char *sql = "SELECT id, url, dest_path, status, total_size FROM downloads "
+  const char *sql = "SELECT id, url, dest_path, status, total_size, category_id FROM downloads "
                     "ORDER BY id DESC LIMIT ? OFFSET ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
@@ -1097,6 +1136,7 @@ int db_visit_downloads_page(DbDownloadVisitor visitor, void *ctx,
     strncpy(row.dest_path, path ? path : "", sizeof(row.dest_path) - 1);
     strncpy(row.status, status ? status : "", sizeof(row.status) - 1);
     row.total_size = (uint64_t)sqlite3_column_int64(stmt, 4);
+    row.category_id = (uint32_t)sqlite3_column_int64(stmt, 5);
 
     if (visitor(&row, ctx) != 0)
       break;
