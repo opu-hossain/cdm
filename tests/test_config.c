@@ -97,3 +97,53 @@ Test(config, invalid_mode_and_missing_proxy_host_fall_back_to_none) {
   unlink(path);
   remove_home(home);
 }
+
+Test(config, network_controls_round_trip_and_clamp_on_load) {
+  char home[64];
+  isolated_home(home);
+  DownloadManagerConfig config;
+  config_get(&config);
+  cr_assert_eq(config.max_connections_per_download, 8);
+  cr_assert_str_eq(config.user_agent, "cdm/0.1");
+  cr_assert_eq(config.connect_timeout_sec, 10);
+  cr_assert_eq(config.transfer_timeout_sec, 30);
+  config.max_connections_per_download = 12;
+  snprintf(config.user_agent, sizeof(config.user_agent), "cdm-test/1.0");
+  config.connect_timeout_sec = 45;
+  config.transfer_timeout_sec = 240;
+  cr_assert(config_save(&config));
+  config_init(NULL);
+  config_get(&config);
+  cr_assert_eq(config.max_connections_per_download, 12);
+  cr_assert_str_eq(config.user_agent, "cdm-test/1.0");
+  cr_assert_eq(config.connect_timeout_sec, 45);
+  cr_assert_eq(config.transfer_timeout_sec, 240);
+
+  char path[256];
+  snprintf(path, sizeof(path), "%s/network.toml", home);
+  FILE *fp = fopen(path, "w");
+  cr_assert_not_null(fp);
+  fputs("[downloads]\nmax_connections_per_download = -3\n"
+        "user_agent = \"\"\n[timeouts]\nconnect_sec = 0\n"
+        "transfer_sec = 99999\n", fp);
+  cr_assert_eq(fclose(fp), 0);
+  config_init(path);
+  config_get(&config);
+  cr_assert_eq(config.max_connections_per_download, 1);
+  cr_assert_str_eq(config.user_agent, "cdm/0.1");
+  cr_assert_eq(config.connect_timeout_sec, 1);
+  cr_assert_eq(config.transfer_timeout_sec, 3600);
+
+  fp = fopen(path, "w");
+  cr_assert_not_null(fp);
+  fputs("[downloads]\nmax_connections_per_download = 99\n"
+        "[timeouts]\nconnect_sec = 999\ntransfer_sec = -2\n", fp);
+  cr_assert_eq(fclose(fp), 0);
+  config_init(path);
+  config_get(&config);
+  cr_assert_eq(config.max_connections_per_download, 16);
+  cr_assert_eq(config.connect_timeout_sec, 600);
+  cr_assert_eq(config.transfer_timeout_sec, 1);
+  unlink(path);
+  remove_home(home);
+}

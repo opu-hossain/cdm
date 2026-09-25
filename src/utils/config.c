@@ -19,6 +19,10 @@
 #define DEFAULT_RETRY_BASE_DELAY_SEC 2
 #define DEFAULT_RETRY_MAX_DELAY_SEC 60
 #define DEFAULT_MAX_SPEED_BPS 0
+#define DEFAULT_MAX_CONNECTIONS 8
+#define DEFAULT_CONNECT_TIMEOUT_SEC 10
+#define DEFAULT_TRANSFER_TIMEOUT_SEC 30
+#define DEFAULT_USER_AGENT "cdm/0.1"
 
 /* Global state (initialised once) */
 static int g_max_concurrent = DEFAULT_MAX_CONCURRENT;
@@ -31,12 +35,16 @@ static ProxyMode g_proxy_mode = PROXY_NONE;
 static char g_proxy_url[512];
 static char g_proxy_username[128];
 static char g_proxy_password[256];
-static dm_mutex_t g_proxy_mutex;
-static once_flag g_proxy_once = ONCE_FLAG_INIT;
+static int g_max_connections = DEFAULT_MAX_CONNECTIONS;
+static char g_user_agent[256] = DEFAULT_USER_AGENT;
+static int g_connect_timeout_sec = DEFAULT_CONNECT_TIMEOUT_SEC;
+static int g_transfer_timeout_sec = DEFAULT_TRANSFER_TIMEOUT_SEC;
+static dm_mutex_t g_network_mutex;
+static once_flag g_network_once = ONCE_FLAG_INIT;
 
-static void init_proxy_mutex(void) { dm_mutex_init(&g_proxy_mutex); }
-static void ensure_proxy_mutex(void) {
-  call_once(&g_proxy_once, init_proxy_mutex);
+static void init_network_mutex(void) { dm_mutex_init(&g_network_mutex); }
+static void ensure_network_mutex(void) {
+  call_once(&g_network_once, init_network_mutex);
 }
 
 static void reset_defaults(void) {
@@ -45,11 +53,16 @@ static void reset_defaults(void) {
   g_retry_base_delay_sec = DEFAULT_RETRY_BASE_DELAY_SEC;
   g_retry_max_delay_sec = DEFAULT_RETRY_MAX_DELAY_SEC;
   g_max_speed_bps = DEFAULT_MAX_SPEED_BPS;
-  ensure_proxy_mutex();
-  dm_mutex_lock(&g_proxy_mutex);
+  ensure_network_mutex();
+  dm_mutex_lock(&g_network_mutex);
   g_proxy_mode = PROXY_NONE;
   g_proxy_url[0] = g_proxy_username[0] = g_proxy_password[0] = '\0';
-  dm_mutex_unlock(&g_proxy_mutex);
+  g_max_connections = DEFAULT_MAX_CONNECTIONS;
+  memset(g_user_agent, 0, sizeof(g_user_agent));
+  memcpy(g_user_agent, DEFAULT_USER_AGENT, sizeof(DEFAULT_USER_AGENT));
+  g_connect_timeout_sec = DEFAULT_CONNECT_TIMEOUT_SEC;
+  g_transfer_timeout_sec = DEFAULT_TRANSFER_TIMEOUT_SEC;
+  dm_mutex_unlock(&g_network_mutex);
 }
 
 static void get_config_path(char *out, size_t out_size) {
@@ -83,6 +96,20 @@ static void read_int(toml_datum_t tab, const char *key, int *out) {
   toml_datum_t d = toml_get(tab, key);
   if (d.type == TOML_INT64)
     *out = (int)d.u.int64;
+}
+
+static int read_clamped_int(toml_datum_t tab, const char *key, int fallback,
+                            int min, int max) {
+  if (tab.type != TOML_TABLE)
+    return fallback;
+  toml_datum_t value = toml_get(tab, key);
+  if (value.type != TOML_INT64)
+    return fallback;
+  if (value.u.int64 < min)
+    return min;
+  if (value.u.int64 > max)
+    return max;
+  return (int)value.u.int64;
 }
 
 static void read_u64(toml_datum_t tab, const char *key, uint64_t *out) {
@@ -203,6 +230,13 @@ void config_init(const char *path) {
 
   toml_datum_t downloads = toml_get(root, "downloads");
   read_int(downloads, "max_concurrent", &g_max_concurrent);
+  int max_connections = read_clamped_int(
+      downloads, "max_connections_per_download", DEFAULT_MAX_CONNECTIONS, 1,
+      16);
+  char user_agent[sizeof(g_user_agent)] = DEFAULT_USER_AGENT;
+  read_string(downloads, "user_agent", user_agent, sizeof(user_agent));
+  if (!user_agent[0])
+    memcpy(user_agent, DEFAULT_USER_AGENT, sizeof(DEFAULT_USER_AGENT));
   char configured_default_dir[sizeof(g_default_dir)] = {0};
   read_string(downloads, "default_directory", configured_default_dir,
               sizeof(configured_default_dir));
@@ -222,6 +256,12 @@ void config_init(const char *path) {
 
   toml_datum_t throttle = toml_get(root, "throttle");
   read_u64(throttle, "max_speed_bytes_per_sec", &g_max_speed_bps);
+
+  toml_datum_t timeouts = toml_get(root, "timeouts");
+  int connect_timeout = read_clamped_int(
+      timeouts, "connect_sec", DEFAULT_CONNECT_TIMEOUT_SEC, 1, 600);
+  int transfer_timeout = read_clamped_int(
+      timeouts, "transfer_sec", DEFAULT_TRANSFER_TIMEOUT_SEC, 1, 3600);
 
   toml_datum_t proxy = toml_get(root, "proxy");
   ProxyMode proxy_mode = PROXY_NONE;
@@ -244,13 +284,17 @@ void config_init(const char *path) {
       proxy_mode = PROXY_NONE;
     }
   }
-  ensure_proxy_mutex();
-  dm_mutex_lock(&g_proxy_mutex);
+  ensure_network_mutex();
+  dm_mutex_lock(&g_network_mutex);
   g_proxy_mode = proxy_mode;
   memcpy(g_proxy_url, proxy_url, sizeof(g_proxy_url));
   memcpy(g_proxy_username, proxy_username, sizeof(g_proxy_username));
   memcpy(g_proxy_password, proxy_password, sizeof(g_proxy_password));
-  dm_mutex_unlock(&g_proxy_mutex);
+  g_max_connections = max_connections;
+  memcpy(g_user_agent, user_agent, sizeof(g_user_agent));
+  g_connect_timeout_sec = connect_timeout;
+  g_transfer_timeout_sec = transfer_timeout;
+  dm_mutex_unlock(&g_network_mutex);
 
   toml_free(result);
 
@@ -283,13 +327,17 @@ void config_get(DownloadManagerConfig *out) {
   out->retry_base_delay_sec = g_retry_base_delay_sec;
   out->retry_max_delay_sec = g_retry_max_delay_sec;
   out->max_speed_bytes_per_sec = g_max_speed_bps;
-  ensure_proxy_mutex();
-  dm_mutex_lock(&g_proxy_mutex);
+  ensure_network_mutex();
+  dm_mutex_lock(&g_network_mutex);
   out->proxy_mode = g_proxy_mode;
   memcpy(out->proxy_url, g_proxy_url, sizeof(out->proxy_url));
   memcpy(out->proxy_username, g_proxy_username, sizeof(out->proxy_username));
   memcpy(out->proxy_password, g_proxy_password, sizeof(out->proxy_password));
-  dm_mutex_unlock(&g_proxy_mutex);
+  out->max_connections_per_download = g_max_connections;
+  memcpy(out->user_agent, g_user_agent, sizeof(out->user_agent));
+  out->connect_timeout_sec = g_connect_timeout_sec;
+  out->transfer_timeout_sec = g_transfer_timeout_sec;
+  dm_mutex_unlock(&g_network_mutex);
 }
 
 bool config_save(const DownloadManagerConfig *config) {
@@ -304,7 +352,14 @@ bool config_save(const DownloadManagerConfig *config) {
       !memchr(config->proxy_username, '\0', sizeof(config->proxy_username)) ||
       !memchr(config->proxy_password, '\0', sizeof(config->proxy_password)) ||
       (config->proxy_mode != PROXY_NONE &&
-       !proxy_url_valid(config->proxy_url)))
+       !proxy_url_valid(config->proxy_url)) ||
+      config->max_connections_per_download < 1 ||
+      config->max_connections_per_download > 16 ||
+      !memchr(config->user_agent, '\0', sizeof(config->user_agent)) ||
+      !config->user_agent[0] || config->connect_timeout_sec < 1 ||
+      config->connect_timeout_sec > 600 ||
+      config->transfer_timeout_sec < 1 ||
+      config->transfer_timeout_sec > 3600)
     return false;
 
   char path[1024];
@@ -320,14 +375,22 @@ bool config_save(const DownloadManagerConfig *config) {
     return false;
   int rc = fprintf(
       fp,
-      "[downloads]\nmax_concurrent = %d\ndefault_directory = \"%s\"\n\n"
-      "[retry]\nmax_attempts = %d\nbase_delay_sec = %d\n"
-      "max_delay_sec = %d\n\n[throttle]\nmax_speed_bytes_per_sec = %llu\n",
+      "[downloads]\nmax_concurrent = %d\ndefault_directory = \"%s\"\n"
+      "max_connections_per_download = %d\nuser_agent = ",
       config->max_concurrent_downloads, config->default_download_dir,
-      config->retry_max_attempts, config->retry_base_delay_sec,
-      config->retry_max_delay_sec,
-      (unsigned long long)config->max_speed_bytes_per_sec);
-  bool written = rc >= 0;
+      config->max_connections_per_download);
+  bool written = rc >= 0 && write_toml_string(fp, config->user_agent);
+  if (written)
+    written = fprintf(
+                  fp,
+                  "\n\n[retry]\nmax_attempts = %d\nbase_delay_sec = %d\n"
+                  "max_delay_sec = %d\n\n[throttle]\nmax_speed_bytes_per_sec = %llu\n"
+                  "\n[timeouts]\nconnect_sec = %d\ntransfer_sec = %d\n",
+                  config->retry_max_attempts, config->retry_base_delay_sec,
+                  config->retry_max_delay_sec,
+                  (unsigned long long)config->max_speed_bytes_per_sec,
+                  config->connect_timeout_sec,
+                  config->transfer_timeout_sec) >= 0;
   if (written)
     written = fputs("\n[proxy]\nmode = ", fp) != EOF &&
               fprintf(fp, "%d\nurl = ", (int)config->proxy_mode) >= 0 &&

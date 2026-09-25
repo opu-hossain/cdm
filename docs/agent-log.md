@@ -608,3 +608,20 @@ Open questions:
 
 Next:
 - 1.3.1 Config keys for connections, User-Agent and timeouts. Phase 0 merge gate 0.6.3 remains deferred.
+
+## 2026-09-25 — Codex, task 1.3.1
+
+Branch: `cdm`
+Commit: `feat(config): add connection, user-agent and timeout knobs` (this entry's commit)
+
+Tasks completed:
+- 1.3.1 Added download connection cap, User-Agent, connect timeout and transfer timeout settings with defaults 8, `cdm/0.1`, 10 seconds and 30 seconds. TOML loader clamps numeric values to 1..16, 1..600 and 1..3600 respectively; empty User-Agent falls back to default. New shared values use the existing network settings mutex.
+
+Tests:
+- Test first: new config tests failed to compile before fields existed. Round-trip and boundary clamp test passed after implementation. Full build and CTest passed 29/29.
+
+Open questions:
+- None for this task. These config values are wired into segmenter and curl in task 1.3.2.
+
+Next:
+- 1.3.2 Use connection cap, User-Agent and timeouts in segmenter and curl. Phase 0 merge gate 0.6.3 remains deferred.

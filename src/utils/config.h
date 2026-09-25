@@ -42,6 +42,10 @@ typedef struct {
   char proxy_url[512];
   char proxy_username[128];
   char proxy_password[256];
+  int max_connections_per_download; // 1..16, default 8
+  char user_agent[256]; // default cdm/0.1
+  int connect_timeout_sec; // 1..600, default 10
+  int transfer_timeout_sec; // 1..3600, default 30
 } DownloadManagerConfig;
 
 void config_get(DownloadManagerConfig *out);
