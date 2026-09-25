@@ -913,3 +913,10 @@ Completed: persisted download category IDs, versioned category CRUD and paged hi
 Verification: test-first DB, IPC, and GUI model cases; full build and CTest 33/33 passed; IPC round-trip smoke passed.
 Open questions: GUI interaction smoke UNKNOWN without a graphical desktop.
 Next: 2.7.1 phase 2 wrap-up.
+
+## 2026-09-25 — Codex, task 2.7.1 verification pass
+Branch: `cdm`; commit: `docs(phase2): refresh context and record gate results`.
+Completed: phase 2 context/release notes and full tracked-file inventory refreshed; TSan blocker recorded without checking the gate.
+Verification: Debug 33/33 and ASan 33/33; TSan build succeeded but 20 Criterion targets failed before assertions (13/33 pass).
+Open questions: compatible Criterion/TSan runner and graphical category interaction smoke.
+Next: 3.1.2 browser extension context capture, independent of the TSan gate.

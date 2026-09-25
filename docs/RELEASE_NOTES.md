@@ -2,6 +2,15 @@
 
 These notes describe the current source and packaging configuration. This draft does not state that a tag or downloadable package has been published.
 
+## Unreleased — phase 2 queues and automation
+
+- Named queues persist priority (0–1000), concurrency caps, local-time schedules, and post-actions. Deleting a queue moves its downloads to Default. Schedule pauses are tracked separately from user pauses. Post-actions fire only after every download in a nonempty queue is DONE for five seconds; shutdown, sleep, and command execution require explicit config opt-in.
+- An optional Linux StatusNotifier tray exposes Pause all, Resume all, Quit, and aggregate progress. GUI clipboard monitoring is opt-in and requires review before adding a detected URL.
+- `cdm cli add --file PATH` and a GUI multiline dialog support batch entry. CLI results are reported per line with 0/1/2 exit status for success, partial failure, or input failure.
+- Categories persist names, extension lists, and default folders. Automatic destinations route by extension; explicit folders bypass routing. The GUI sidebar lists and edits stored categories. Downloads retain a category ID, and deleting a category moves its downloads to Default.
+- IPC HELLO now reports version 7. Queue commands use types 45–49; automatic-directory add uses type 50; category CRUD and assigned-category history use types 51–55. Previous message layouts remain unchanged. SQLite schema is version 9.
+- Local debug build and full CTest passed 33/33 on 2026-09-25. A separate ASan build passed 33/33. The TSan build compiled, but its full suite passed 13/33: 20 Criterion targets failed before assertions with arena initialization errors or crashes inside `libcriterion.so.3`. This does not establish a cdm data race; a compatible Criterion/TSan test environment is needed to complete that gate. Graphical category editing was not visually exercised in this environment.
+
 ## Unreleased — phase 1 transfer parity
 
 - Added HTTP and SOCKS5 proxy settings (URL and optional credentials), applied to metadata probes and download workers. Proxy configuration is editable in the GUI.

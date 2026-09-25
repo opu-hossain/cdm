@@ -97,3 +97,11 @@ process launch and for macOS shutdown/sleep integration. Linux invokes
 `systemctl poweroff` or `systemctl suspend` only when the matching
 `[post_actions]` flag is explicitly enabled. Decide the native platform
 equivalents before enabling these actions on Windows or macOS.
+
+## Task 2.7.1 — TSan verification environment
+
+The phase-2 TSan build succeeds, but 20 Criterion test targets abort before
+assertions because Criterion cannot initialize its inheritable arena or crashes
+inside `libcriterion.so.3`. Debug and ASan suites both pass 33/33. Which
+Criterion/TSan-compatible runner should be used for the release gate? Repeat
+the full TSan suite there before treating it as race-clean.
