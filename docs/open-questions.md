@@ -97,3 +97,12 @@ process launch and for macOS shutdown/sleep integration. Linux invokes
 `systemctl poweroff` or `systemctl suspend` only when the matching
 `[post_actions]` flag is explicitly enabled. Decide the native platform
 equivalents before enabling these actions on Windows or macOS.
+
+## Task 2.6.3 — Category assignment on downloads
+
+The schema brief for 2.6.1 defines only a `categories` table, while 2.6.3
+requires deleting a category and moving its downloads to `Default`. No
+download-to-category field or wire operation is specified. Should the next
+category task add a persisted `downloads.category_id` with a versioned IPC
+category API, or should categories be recomputed from filenames and never
+stored on downloads? The latter cannot preserve a manual category assignment.

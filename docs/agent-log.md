@@ -885,3 +885,10 @@ Completed: `add --file` with line results and 0/1/2 exit status, plus a themed m
 Verification: test-first loopback CLI fixture covers two URLs, comments/blanks, malformed input, and missing file; full build and CTest 33/33 passed.
 Open questions: GUI dialog interaction smoke UNKNOWN without a graphical desktop.
 Next: 2.6.1 categories schema.
+
+## 2026-09-25 — Codex, task 2.6.1
+Branch: `cdm`; commit: `feat(db): persist categories and default folders`.
+Completed: SQLite schema v8 categories table, seeded Default row, validated extension lists, and category list/create/update/delete APIs.
+Verification: test-first version-5 migration fixture and CRUD round trip; full build and CTest 33/33 passed.
+Open questions: category-to-download assignment for later editable-sidebar deletion is unspecified.
+Next: 2.6.2 category routing.

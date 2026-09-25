@@ -9,6 +9,7 @@
 #include "../platform/ipc_socket.h" // for IpcDownloadDetails
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -25,6 +26,20 @@ typedef struct {
 
 /* Lightweight list row; request details are fetched on demand. */
 typedef DownloadListRecord DbDownloadRow;
+
+typedef struct {
+  uint32_t id;
+  char name[128];
+  char extensions[512]; // comma-separated lowercase tokens without dots
+  char default_dir[1024]; // empty = use configured download directory
+  int64_t created_at; // Unix seconds
+} Category;
+
+/* Category storage. Caller frees *out from db_category_list. */
+int db_category_list(Category **out, size_t *count);
+int db_category_create(const Category *category, uint32_t *out_id);
+int db_category_update(const Category *category);
+int db_category_delete(uint32_t id); // Default (id 1) cannot be deleted
 
 typedef int (*DbDownloadVisitor)(const DbDownloadRow *row, void *ctx);
 

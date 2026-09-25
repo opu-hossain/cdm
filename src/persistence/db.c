@@ -9,6 +9,7 @@
 #include "sqlite3.h"
 
 #include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -74,6 +75,13 @@ int db_init(const char *db_path) {
   sqlite3_exec(g_db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
 
   const char *schema =
+      "CREATE TABLE IF NOT EXISTS categories ("
+      "  id INTEGER PRIMARY KEY,"
+      "  name TEXT NOT NULL UNIQUE,"
+      "  extensions TEXT NOT NULL DEFAULT '',"
+      "  default_dir TEXT NOT NULL DEFAULT '',"
+      "  created_at INTEGER NOT NULL DEFAULT 0"
+      ");"
       "CREATE TABLE IF NOT EXISTS queues ("
       "  id INTEGER PRIMARY KEY,"
       "  name TEXT NOT NULL UNIQUE,"
@@ -163,6 +171,14 @@ int db_init(const char *db_path) {
   sqlite3_free(migration_error);
 
   rc = sqlite3_exec(g_db,
+      "INSERT OR IGNORE INTO categories(id,name,extensions,default_dir,created_at) "
+      "VALUES(1,'Default','','',strftime('%s','now'));",
+      NULL, NULL, &migration_error);
+  if (rc != SQLITE_OK)
+    goto action_migration_failed;
+  sqlite3_free(migration_error);
+
+  rc = sqlite3_exec(g_db,
       "INSERT OR IGNORE INTO queues(id,name,priority,max_concurrent,"
       "schedule_start,schedule_stop,post_action,post_action_arg,created_at) "
       "VALUES(1,'Default',0,0,'','','none','',strftime('%s','now'));",
@@ -241,7 +257,7 @@ int db_init(const char *db_path) {
   }
   sqlite3_finalize(fk_check);
 
-  rc = sqlite3_exec(g_db, "PRAGMA user_version = 7; COMMIT;", NULL, NULL,
+  rc = sqlite3_exec(g_db, "PRAGMA user_version = 8; COMMIT;", NULL, NULL,
                     &migration_error);
   if (rc != SQLITE_OK) {
     LOG_ERROR("could not commit database migration: %s",
@@ -269,6 +285,137 @@ action_migration_failed:
   sqlite3_exec(g_db, "ROLLBACK;", NULL, NULL, NULL);
   db_close();
   return -1;
+}
+
+static bool category_valid(const Category *category) {
+  if (!category || !memchr(category->name, 0, sizeof(category->name)) ||
+      !category->name[0] ||
+      !memchr(category->extensions, 0, sizeof(category->extensions)) ||
+      !memchr(category->default_dir, 0, sizeof(category->default_dir)))
+    return false;
+  const char *extensions = category->extensions;
+  size_t length = strlen(extensions);
+  if (length && (extensions[0] == ',' || extensions[length - 1] == ','))
+    return false;
+  for (size_t i = 0; i < length; ++i) {
+    unsigned char c = (unsigned char)extensions[i];
+    if (c == ',') {
+      if (i && extensions[i - 1] == ',')
+        return false;
+    } else if (!islower(c) && !isdigit(c))
+      return false;
+  }
+  return true;
+}
+
+static bool read_category_row(sqlite3_stmt *stmt, Category *out) {
+  memset(out, 0, sizeof(*out));
+  out->id = (uint32_t)sqlite3_column_int64(stmt, 0);
+  char *fields[] = {out->name, out->extensions, out->default_dir};
+  size_t sizes[] = {sizeof(out->name), sizeof(out->extensions),
+                    sizeof(out->default_dir)};
+  for (int i = 0; i < 3; ++i) {
+    const char *value = (const char *)sqlite3_column_text(stmt, i + 1);
+    int bytes = sqlite3_column_bytes(stmt, i + 1);
+    if (!value || bytes < 0 || (size_t)bytes >= sizes[i])
+      return false;
+    memcpy(fields[i], value, (size_t)bytes);
+  }
+  out->created_at = sqlite3_column_int64(stmt, 4);
+  return true;
+}
+
+int db_category_list(Category **out, size_t *count) {
+  if (!db_ready() || !out || !count)
+    return -1;
+  *out = NULL;
+  *count = 0;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, "SELECT COUNT(*) FROM categories", -1,
+                         &stmt, NULL) != SQLITE_OK)
+    return -1;
+  int step = sqlite3_step(stmt);
+  int64_t total = step == SQLITE_ROW ? sqlite3_column_int64(stmt, 0) : -1;
+  sqlite3_finalize(stmt);
+  if (total < 0 || (uint64_t)total > SIZE_MAX / sizeof(Category))
+    return -1;
+  Category *rows = calloc((size_t)total ? (size_t)total : 1,
+                          sizeof(Category));
+  if (!rows)
+    return -1;
+  if (sqlite3_prepare_v2(g_db,
+      "SELECT id,name,extensions,default_dir,created_at FROM categories "
+      "ORDER BY id", -1, &stmt, NULL) != SQLITE_OK) {
+    free(rows);
+    return -1;
+  }
+  size_t n = 0;
+  while ((step = sqlite3_step(stmt)) == SQLITE_ROW && n < (size_t)total) {
+    if (!read_category_row(stmt, &rows[n]))
+      break;
+    n++;
+  }
+  sqlite3_finalize(stmt);
+  if (step != SQLITE_DONE) {
+    free(rows);
+    return -1;
+  }
+  *out = rows;
+  *count = n;
+  return 0;
+}
+
+int db_category_create(const Category *category, uint32_t *out_id) {
+  if (!db_ready() || !category_valid(category) || !out_id)
+    return -1;
+  *out_id = 0;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db,
+      "INSERT INTO categories(name,extensions,default_dir,created_at) "
+      "VALUES(?,?,?,?)", -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_text(stmt, 1, category->name, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, category->extensions, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 3, category->default_dir, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 4, (sqlite3_int64)time(NULL));
+  int step = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (step != SQLITE_DONE)
+    return -1;
+  *out_id = (uint32_t)sqlite3_last_insert_rowid(g_db);
+  return *out_id ? 0 : -1;
+}
+
+int db_category_update(const Category *category) {
+  if (!db_ready() || !category_valid(category) || category->id <= 1)
+    return -1;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db,
+      "UPDATE categories SET name=?,extensions=?,default_dir=? WHERE id=?",
+      -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_text(stmt, 1, category->name, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, category->extensions, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 3, category->default_dir, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 4, (sqlite3_int64)category->id);
+  int step = sqlite3_step(stmt);
+  int changed = sqlite3_changes(g_db);
+  sqlite3_finalize(stmt);
+  return step == SQLITE_DONE && changed == 1 ? 0 : -1;
+}
+
+int db_category_delete(uint32_t id) {
+  if (!db_ready() || id <= 1)
+    return -1;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, "DELETE FROM categories WHERE id=?", -1,
+                         &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id);
+  int step = sqlite3_step(stmt);
+  int changed = sqlite3_changes(g_db);
+  sqlite3_finalize(stmt);
+  return step == SQLITE_DONE && changed == 1 ? 0 : -1;
 }
 
 int db_queue_post_action_due(uint32_t queue_id, int64_t now_seconds) {

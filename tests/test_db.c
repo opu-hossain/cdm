@@ -269,7 +269,15 @@ Test(db, version_four_fixture_migrates_to_named_queues) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 7);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 8);
+  sqlite3_finalize(statement);
+  cr_assert_eq(sqlite3_prepare_v2(reader,
+      "SELECT name,extensions,default_dir FROM categories WHERE id=1",
+      -1, &statement, NULL), SQLITE_OK);
+  cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
+  cr_assert_str_eq((const char *)sqlite3_column_text(statement, 0), "Default");
+  cr_assert_str_eq((const char *)sqlite3_column_text(statement, 1), "");
+  cr_assert_str_eq((const char *)sqlite3_column_text(statement, 2), "");
   sqlite3_finalize(statement);
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA foreign_key_check", -1,
                                   &statement, NULL), SQLITE_OK);
@@ -313,6 +321,61 @@ Test(db, queue_delete_keeps_download_row_with_null_queue_id) {
   unlink(path);
 }
 
+Test(db, version_five_migrates_and_categories_round_trip) {
+  char path[] = "/tmp/cdm-v5-categories-XXXXXX";
+  int fd = mkstemp(path);
+  cr_assert_geq(fd, 0);
+  close(fd);
+  db_close();
+  sqlite3 *seed = NULL;
+  cr_assert_eq(sqlite3_open(path, &seed), SQLITE_OK);
+  cr_assert_eq(sqlite3_exec(seed,
+      "CREATE TABLE downloads(id INTEGER PRIMARY KEY,url TEXT NOT NULL,"
+      "dest_path TEXT NOT NULL,status TEXT DEFAULT 'QUEUED');"
+      "CREATE TABLE chunks(download_id INTEGER,range_start INTEGER,"
+      "range_end INTEGER,bytes_done INTEGER);"
+      "PRAGMA user_version=5;", NULL, NULL, NULL), SQLITE_OK);
+  sqlite3_close(seed);
+  cr_assert_eq(db_init(path), 0);
+  Category *categories = NULL;
+  size_t count = 0;
+  cr_assert_eq(db_category_list(&categories, &count), 0);
+  cr_assert_eq(count, 1);
+  cr_assert_str_eq(categories[0].name, "Default");
+  free(categories);
+  Category video = {.name = "Video"};
+  strcpy(video.extensions, "mp4,mkv");
+  strcpy(video.default_dir, "/tmp/Video");
+  uint32_t id = 0;
+  cr_assert_eq(db_category_create(&video, &id), 0);
+  cr_assert_gt(id, 1);
+  uint32_t created_id = id;
+  strcpy(video.extensions, "MP4");
+  cr_assert_eq(db_category_create(&video, &id), -1);
+  strcpy(video.extensions, "mp4,mkv");
+  video.id = created_id;
+  strcpy(video.name, "Movies");
+  cr_assert_eq(db_category_update(&video), 0);
+  cr_assert_eq(db_category_list(&categories, &count), 0);
+  cr_assert_eq(count, 2);
+  cr_assert_str_eq(categories[1].name, "Movies");
+  cr_assert_str_eq(categories[1].extensions, "mp4,mkv");
+  free(categories);
+  cr_assert_eq(db_category_delete(1), -1);
+  cr_assert_eq(db_category_delete(created_id), 0);
+  sqlite3 *reader = NULL;
+  cr_assert_eq(sqlite3_open(path, &reader), SQLITE_OK);
+  sqlite3_stmt *statement = NULL;
+  cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
+                                  &statement, NULL), SQLITE_OK);
+  cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 8);
+  sqlite3_finalize(statement);
+  sqlite3_close(reader);
+  db_close();
+  unlink(path);
+}
+
 Test(db, legacy_schema_migrates_transactionally) {
   const char *path = "/tmp/cdm_legacy_migration.db";
   unlink(path);
@@ -341,7 +404,7 @@ Test(db, legacy_schema_migrates_transactionally) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 7);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 8);
   sqlite3_finalize(statement);
 
   cr_assert_eq(sqlite3_prepare_v2(
