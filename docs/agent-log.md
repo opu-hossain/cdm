@@ -864,3 +864,10 @@ Completed: optional Linux SNI/DBusMenu backend on GIO without GTK, daemon-loop A
 Verification: private D-Bus fake host checked registration, properties, menu layout/click; missing-bus and tray-disabled builds passed; full build and CTest 32/32 passed.
 Open questions: real desktop host smoke remains UNKNOWN in headless workspace.
 Next: 2.4.2 wire tray to daemon.
+
+## 2026-09-25 — Codex, task 2.4.2
+Branch: `cdm`; commit: `feat(daemon): expose queue controls via tray`.
+Completed: daemon-loop tray init/shutdown, atomic menu requests for Pause all/Resume all/Quit, and progress tooltip updates on the scheduler flush tick.
+Verification: test-first scheduler progress case; focused tray/scheduler tests and full build/CTest 32/32 passed; daemon lifecycle test covered no-host fallback.
+Open questions: real desktop StatusNotifierHost smoke remains UNKNOWN in headless workspace.
+Next: 2.5.1 clipboard monitor.

@@ -10,6 +10,7 @@
 #include "../platform/file_io.h"
 #include "../platform/ipc_socket.h"
 #include "../platform/thread.h"
+#include "../platform/tray.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
 #include "../utils/notify.h"
@@ -18,6 +19,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +31,58 @@
 
 static volatile sig_atomic_t g_shutdown_requested = 0;
 static bool g_data_dir_migrated = false;
+/* Tray callbacks run on a separate GLib thread; the daemon loop owns actions. */
+enum { TRAY_NONE, TRAY_PAUSE_ALL, TRAY_RESUME_ALL, TRAY_QUIT };
+static _Atomic int g_tray_request = TRAY_NONE;
+
+static void request_tray_action(void *user_data) {
+  atomic_store(&g_tray_request, (int)(intptr_t)user_data);
+}
+
+typedef struct {
+  uint32_t ids[128];
+  size_t count;
+} TrayDownloadPage;
+
+static int collect_tray_download(const DbDownloadRow *row, void *ctx) {
+  TrayDownloadPage *page = ctx;
+  page->ids[page->count++] = row->id;
+  return 0;
+}
+
+static void apply_tray_bulk_action(bool pause_all) {
+  uint32_t offset = 0;
+  for (;;) {
+    TrayDownloadPage page = {0};
+    int count = db_visit_downloads_page(collect_tray_download, &page,
+                                        offset, 128);
+    if (count < 0) {
+      LOG_ERROR("Could not list downloads for tray action");
+      return;
+    }
+    for (size_t i = 0; i < page.count; i++) {
+      uint32_t id = page.ids[i];
+      DownloadStatus status;
+      if (!queue_manager_get_status(id, &status))
+        continue;
+      if (pause_all && (status == DOWNLOAD_ACTIVE || status == DOWNLOAD_QUEUED)) {
+        bool was_active = queue_manager_pause(id);
+        if (!was_active) {
+          db_update_status(id, "PAUSED");
+          ipc_broadcast_status(id, "Paused", 0.0f);
+        }
+      } else if (!pause_all && (status == DOWNLOAD_PAUSED || status == DOWNLOAD_ERROR)) {
+        if (queue_manager_resume(id)) {
+          db_update_status(id, "QUEUED");
+          ipc_broadcast_status(id, "QUEUED", 0.0f);
+        }
+      }
+    }
+    if (count < 128 || offset > UINT32_MAX - 128)
+      return;
+    offset += 128;
+  }
+}
 
 static void request_shutdown(int sig) {
   (void)sig;
@@ -196,7 +250,24 @@ int run_daemon(void) {
 
   /* Main event loop (tick ≈ 200 ms). */
   int iteration = 0;
+  bool tray_started = false;
   while (!g_shutdown_requested) {
+    if (iteration == 0 && tray_init("folder-download") == 0) {
+      const TrayMenuItem items[] = {
+          {"Pause all", true, request_tray_action, (void *)(intptr_t)TRAY_PAUSE_ALL},
+          {"Resume all", true, request_tray_action, (void *)(intptr_t)TRAY_RESUME_ALL},
+          {"Quit", true, request_tray_action, (void *)(intptr_t)TRAY_QUIT},
+      };
+      tray_set_menu(items, sizeof(items) / sizeof(items[0]));
+      tray_started = true;
+    }
+    int action = atomic_exchange(&g_tray_request, TRAY_NONE);
+    if (action == TRAY_QUIT) {
+      g_shutdown_requested = 1;
+      break;
+    }
+    if (action == TRAY_PAUSE_ALL || action == TRAY_RESUME_ALL)
+      apply_tray_bulk_action(action == TRAY_PAUSE_ALL);
     if (iteration % 25 == 0) /* roughly every 5 seconds */
       LOG_DEBUG("Daemon heartbeat: iter %d", iteration);
     iteration++;
@@ -209,6 +280,8 @@ int run_daemon(void) {
   }
 
   LOG_INFO("Received shutdown signal, cleaning up");
+  if (tray_started)
+    tray_shutdown();
   ipc_server_stop();
   scheduler_shutdown();
   db_close();

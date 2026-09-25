@@ -9,6 +9,7 @@
 #include "../platform/ipc_socket.h"
 #include "../platform/spawn.h"
 #include "../platform/thread.h"
+#include "../platform/tray.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
 #include "../utils/notify.h"
@@ -394,7 +395,18 @@ void scheduler_report_progress(void) {
                         : 0;
   DownloadProgressSnapshot snaps[64];
   int n = queue_manager_snapshot_active_progress(snaps, 64);
+  uint64_t tray_received = 0, tray_total = 0;
+  bool unknown_total = false;
   for (int i = 0; i < n; i++) {
+    tray_received = UINT64_MAX - tray_received < snaps[i].bytes_downloaded
+                        ? UINT64_MAX
+                        : tray_received + snaps[i].bytes_downloaded;
+    if (snaps[i].total_size == 0)
+      unknown_total = true;
+    else
+      tray_total = UINT64_MAX - tray_total < snaps[i].total_size
+                       ? UINT64_MAX
+                       : tray_total + snaps[i].total_size;
     if (have_time) {
       DownloadTransferMetrics metrics = scheduler_advance_transfer_metrics(
           snaps[i].transfer_metrics, snaps[i].bytes_downloaded,
@@ -417,4 +429,5 @@ void scheduler_report_progress(void) {
                              chunk_snaps[i].range_start,
                              chunk_snaps[i].bytes_done);
   }
+  tray_set_progress(tray_received, unknown_total ? 0 : tray_total);
 }

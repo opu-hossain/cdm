@@ -16,8 +16,8 @@ failure. The daemon must also continue when no session bus or tray host exists.
 5. Rebuild with `-DDOWNLOADMGR_ENABLE_TRAY=OFF`. Confirm the build succeeds
    and the daemon behaves as in step 4.
 
-Steps 1–3 cover daemon wiring in task 2.4.2. The backend alone exposes the
-menu and progress API but is not yet called by the daemon.
+Steps 1–3 cover daemon wiring in task 2.4.2. The daemon now installs the menu
+and updates the tooltip on the progress flush tick.
 
 Manual desktop/host verification: **UNKNOWN** in the current headless
 workspace. Run these steps in a graphical Linux session before marking tray

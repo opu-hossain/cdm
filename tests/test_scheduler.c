@@ -16,6 +16,13 @@ static _Atomic bool hold_workers;
 static _Atomic bool fail_workers;
 static _Atomic int engine_runs;
 static _Atomic int post_action_runs;
+static _Atomic uint64_t tray_received;
+static _Atomic uint64_t tray_total;
+
+void tray_set_progress(uint64_t received, uint64_t total) {
+  atomic_store(&tray_received, received);
+  atomic_store(&tray_total, total);
+}
 
 int spawn_post_action(const char *action, const char *argument) {
   cr_assert_str_eq(action, "command");
@@ -45,6 +52,8 @@ static void setup_scheduler(void) {
   atomic_store(&fail_workers, false);
   atomic_store(&engine_runs, 0);
   atomic_store(&post_action_runs, 0);
+  atomic_store(&tray_received, UINT64_MAX);
+  atomic_store(&tray_total, UINT64_MAX);
   db_init(":memory:");
 }
 
@@ -54,6 +63,32 @@ static void teardown_scheduler(void) {
 }
 
 TestSuite(scheduler, .init = setup_scheduler, .fini = teardown_scheduler);
+
+Test(scheduler, progress_flush_updates_tray_with_active_totals) {
+  uint32_t first = queue_manager_add("http://127.0.0.1/tray-one",
+                                      "/tmp/tray-one", NULL);
+  uint32_t second = queue_manager_add("http://127.0.0.1/tray-two",
+                                       "/tmp/tray-two", NULL);
+  cr_assert_neq(first, 0);
+  cr_assert_neq(second, 0);
+  Download *one = queue_manager_find_by_id(first);
+  Download *two = queue_manager_find_by_id(second);
+  dm_mutex_t *mutex = queue_manager_get_mutex();
+  dm_mutex_lock(mutex);
+  one->status = two->status = DOWNLOAD_ACTIVE;
+  one->total_size = 100;
+  two->total_size = 200;
+  atomic_store(&one->bytes_downloaded, 25);
+  atomic_store(&two->bytes_downloaded, 50);
+  dm_mutex_unlock(mutex);
+  scheduler_report_progress();
+  cr_assert_eq(atomic_load(&tray_received), 75);
+  cr_assert_eq(atomic_load(&tray_total), 300);
+  queue_manager_update_status(first, DOWNLOAD_PAUSED);
+  queue_manager_update_status(second, DOWNLOAD_PAUSED);
+  queue_manager_remove(first);
+  queue_manager_remove(second);
+}
 
 Test(scheduler, command_post_action_requires_all_done_and_five_seconds) {
   char config_path[] = "/tmp/cdm-actions-XXXXXX";

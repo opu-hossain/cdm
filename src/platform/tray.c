@@ -299,6 +299,9 @@ static gboolean apply_progress(gpointer data) {
     g_tray.tooltip = g_strdup_printf("%llu of %llu bytes downloaded",
         (unsigned long long)update->received,
         (unsigned long long)update->total);
+  else if (update->received)
+    g_tray.tooltip = g_strdup_printf("%llu bytes downloaded",
+        (unsigned long long)update->received);
   else
     g_tray.tooltip = g_strdup("No active downloads");
   g_dbus_connection_emit_signal(g_tray.bus, NULL, TRAY_ITEM_PATH,
