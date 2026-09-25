@@ -697,3 +697,21 @@ Open questions:
 
 Next:
 - 1.5.1 DB delete. Phase 0 merge gate 0.6.3 remains deferred.
+
+## 2026-09-25 — Codex, task 1.5.1
+
+Branch: `cdm`
+Commit: `feat(db): delete download row and optionally the file` (this entry's commit)
+
+Tasks completed:
+- 1.5.1 Added `db_delete_download(id, delete_file)`. A transaction checks status, deletes chunks and the download row, then optionally unlinks the destination after commit. It refuses ACTIVE rows; a failed unlink logs a warning while the row remains deleted. Return values distinguish success, ACTIVE, absent row and DB error.
+
+Tests:
+- Test first: delete tests failed to compile before the API existed.
+- Focused DB tests cover chunks, file retained, file removed, ACTIVE refusal and absent row. `cmake --build build -j` and full CTest passed 31/31. The focused DB tests serve as the persistence smoke test.
+
+Open questions:
+- None for this task.
+
+Next:
+- 1.5.2 IPC remove command. Its planned message ID 34 conflicts with existing `MSG_SUBSCRIBE_V2 = 34`; resolve the ID without changing the existing wire meaning. Phase 0 merge gate 0.6.3 remains deferred.

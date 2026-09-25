@@ -96,6 +96,56 @@ Test(db, insert_download_and_chunks) {
   cr_assert_eq(n, 0);
 }
 
+Test(db, delete_download_removes_chunks_and_optionally_file) {
+  char dir[] = "/tmp/cdm-delete-db-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  char keep[256], remove_path[256];
+  snprintf(keep, sizeof(keep), "%s/keep.bin", dir);
+  snprintf(remove_path, sizeof(remove_path), "%s/remove.bin", dir);
+  FILE *file = fopen(keep, "wb");
+  cr_assert_not_null(file);
+  fclose(file);
+  file = fopen(remove_path, "wb");
+  cr_assert_not_null(file);
+  fclose(file);
+  cr_assert_eq(db_insert_download(201, "http://127.0.0.1/keep", keep, NULL), 0);
+  cr_assert_eq(db_insert_chunk(201, 0, 100), 0);
+  cr_assert_eq(db_delete_download(201, 0), 0);
+  cr_assert_eq(db_count_downloads_total(), 0);
+  cr_assert_eq(access(keep, F_OK), 0);
+  DbChunkRow chunks[2];
+  cr_assert_eq(db_load_chunks(201, chunks, 2), 0);
+  cr_assert_eq(db_insert_download(202, "http://127.0.0.1/remove",
+                                  remove_path, NULL), 0);
+  cr_assert_eq(db_insert_chunk(202, 0, 100), 0);
+  cr_assert_eq(db_delete_download(202, 1), 0);
+  cr_assert_eq(access(remove_path, F_OK), -1);
+  cr_assert_eq(db_load_chunks(202, chunks, 2), 0);
+  unlink(keep);
+  rmdir(dir);
+}
+
+Test(db, delete_download_refuses_active_and_missing) {
+  char dir[] = "/tmp/cdm-active-db-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  char path[256];
+  snprintf(path, sizeof(path), "%s/active.bin", dir);
+  FILE *file = fopen(path, "wb");
+  cr_assert_not_null(file);
+  fclose(file);
+  cr_assert_eq(db_insert_download(203, "http://127.0.0.1/active", path,
+                                  NULL), 0);
+  cr_assert_eq(db_update_status(203, "ACTIVE"), 0);
+  cr_assert_eq(db_delete_download(203, 1), 1);
+  cr_assert_eq(db_count_downloads_total(), 1);
+  cr_assert_eq(access(path, F_OK), 0);
+  cr_assert_eq(db_delete_download(999, 1), 2);
+  cr_assert_eq(db_update_status(203, "DONE"), 0);
+  cr_assert_eq(db_delete_download(203, 1), 0);
+  cr_assert_eq(access(path, F_OK), -1);
+  rmdir(dir);
+}
+
 Test(db, update_status_and_total_size) {
   uint32_t id = 2;
   db_insert_download(id, "http://test2", "/tmp/test2", NULL);

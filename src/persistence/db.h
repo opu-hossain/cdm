@@ -43,6 +43,9 @@ int db_insert_reserved_download(uint32_t id, const char *url,
 int db_insert_reserved_download_auto(uint32_t id, const char *url,
                                      const char *dest_path,
                                      const RequestOptions *opts);
+/* 0 = deleted, 1 = ACTIVE (refused), 2 = not found, -1 = database error.
+ * File deletion happens after the database transaction commits. */
+int db_delete_download(uint32_t id, int delete_file);
 int db_update_resolved_destination(uint32_t id, const char *dest_path);
 bool db_destination_exists(const char *dest_path);
 int db_update_status(uint32_t id, const char *status);

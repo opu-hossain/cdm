@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
+#include <unistd.h>
 
 /* Global state */
 
@@ -173,6 +175,67 @@ void db_close(void) {
     sqlite3_close(g_db);
     g_db = NULL;
   }
+}
+
+static int delete_rows_for_id(const char *sql, uint32_t id) {
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id);
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_DONE ? 0 : -1;
+}
+
+int db_delete_download(uint32_t id, int delete_file) {
+  if (!db_ready() || id == 0 ||
+      sqlite3_exec(g_db, "BEGIN IMMEDIATE;", NULL, NULL, NULL) != SQLITE_OK)
+    return -1;
+
+  int result = -1;
+  char *path = NULL;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db,
+                         "SELECT status, dest_path FROM downloads WHERE id = ?",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    goto rollback;
+  sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id);
+  int step = sqlite3_step(stmt);
+  if (step == SQLITE_DONE) {
+    result = 2;
+    goto rollback;
+  }
+  if (step != SQLITE_ROW)
+    goto rollback;
+  const char *status = (const char *)sqlite3_column_text(stmt, 0);
+  const char *stored_path = (const char *)sqlite3_column_text(stmt, 1);
+  if (status && strcmp(status, "ACTIVE") == 0) {
+    result = 1;
+    goto rollback;
+  }
+  if (!stored_path || !(path = strdup(stored_path)))
+    goto rollback;
+  sqlite3_finalize(stmt);
+  stmt = NULL;
+
+  if (delete_rows_for_id("DELETE FROM chunks WHERE download_id = ?", id) != 0 ||
+      delete_rows_for_id("DELETE FROM downloads WHERE id = ?", id) != 0)
+    goto rollback;
+  if (sqlite3_exec(g_db, "COMMIT;", NULL, NULL, NULL) != SQLITE_OK)
+    goto rollback;
+  result = 0;
+  if (delete_file && unlink(path) != 0)
+    LOG_WARN("could not delete file for download %u (%s): %s", id, path,
+             strerror(errno));
+  free(path);
+  return result;
+
+rollback:
+  if (stmt)
+    sqlite3_finalize(stmt);
+  sqlite3_exec(g_db, "ROLLBACK;", NULL, NULL, NULL);
+  free(path);
+  return result;
 }
 
 /* Download persistence */
