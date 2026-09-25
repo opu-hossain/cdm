@@ -892,3 +892,10 @@ Completed: SQLite schema v8 categories table, seeded Default row, validated exte
 Verification: test-first version-5 migration fixture and CRUD round trip; full build and CTest 33/33 passed.
 Open questions: category-to-download assignment for later editable-sidebar deletion is unspecified.
 Next: 2.6.2 category routing.
+
+## 2026-09-25 — Codex, task 3.1.1
+Branch: `cdm`; commit: `docs(browser): context forwarding design`.
+Completed: consent, field limits, versioned IPC, memory-only lifetime, redaction, and local-user threat model in `docs/browser-context.md`.
+Verification: cross-checked current offer/native code and official Chrome APIs; documentation-only full build and CTest passed.
+Open questions: 2.6.2 routing ownership resolved by user; return there next.
+Next: 2.6.2 category routing.

@@ -42,7 +42,7 @@ with the user; skip to Phase 2 in the meantime.
 
 ## Phase 3 — Browser parity
 
-- [ ] **3.1.1** Request-context forwarding design doc — **L** — privacy/security threat-model writing, sets the contract every later 3.1.x task follows exactly
+- [x] **3.1.1** Request-context forwarding design doc — **L** — privacy/security threat-model writing, sets the contract every later 3.1.x task follows exactly
 - [ ] **3.1.2** Extension captures context — **S** *after 3.1.1 lands* — becomes a mechanical translation of the design doc into `optional_permissions` + capture code
 - [ ] **3.1.3** Native host passes context — **S** *after 3.1.1* — extend offer JSON, enforce size limits
 - [ ] **3.1.4** Daemon applies context — **S**, but verifier must specifically check the "memory-only, cleared after finalize, never logged" requirement against the design doc before approving
