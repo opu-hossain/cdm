@@ -56,7 +56,7 @@ with the user; skip to Phase 2 in the meantime.
 ## Phase 4 — Media
 
 - [x] **4.1.1** Extension media detector — **S** — JS, mechanical
-- [ ] **4.1.2** Native host media offer — **S**
+- [x] **4.1.2** Native host media offer — **S**
 - [ ] **4.2.1** HLS playlist parser — **L** — pure function with exhaustive fixtures (good test-loop fit), but M3U8 edge cases (AES-128, master-playlist selection, `#EXT-X-MAP`) need real parsing judgment
 - [ ] **4.2.2** HLS segment downloader — **L** — reuses `worker_pool` but adds resume-state-file design and AES decryption; concurrency-adjacent
 - [ ] **4.2.3** Optional ffmpeg remux — **S** — spawn wrapper + presence check, mechanical

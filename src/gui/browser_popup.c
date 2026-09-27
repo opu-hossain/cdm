@@ -57,6 +57,7 @@ typedef struct {
   uint32_t download_id;
   uint16_t daemon_version;
   uint32_t context_flags;
+  uint32_t media_kind;
   bool duplicate;
   char filename[IPC_BROWSER_FILENAME_MAX];
   char folder[IPC_MAX_PATH_LEN];
@@ -134,6 +135,18 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
                               int daemon) {
   nk_layout_row_dynamic(ctx, 28, 1);
   nk_label(ctx, "Review download", NK_TEXT_LEFT);
+  bool playlist = state->media_kind == IPC_BROWSER_MEDIA_HLS ||
+                  state->media_kind == IPC_BROWSER_MEDIA_DASH;
+  if (state->media_kind) {
+    nk_layout_row_dynamic(ctx, 18, 1);
+    nk_label_colored(ctx, state->media_kind == IPC_BROWSER_MEDIA_HLS ? "Media: HLS" :
+                         state->media_kind == IPC_BROWSER_MEDIA_DASH ? "Media: DASH" :
+                         "Media: direct video", NK_TEXT_LEFT, MUTED);
+    if (playlist) {
+      nk_layout_row_dynamic(ctx, 18, 1);
+      nk_label_colored(ctx, "Playlist downloading is not available yet.", NK_TEXT_LEFT, MUTED);
+    }
+  }
   nk_layout_row_dynamic(ctx, 18, 1);
   nk_label_colored(ctx, "Download URL", NK_TEXT_LEFT, MUTED);
   nk_layout_row_dynamic(ctx, 43, 1);
@@ -194,7 +207,7 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
     state->close = true;
   }
   nk_layout_row_push(ctx, 97);
-  if (primary_button(ctx, "Download")) {
+  if (!playlist && primary_button(ctx, "Download")) {
     if (!filename_valid(state->filename) || !state->folder[0] ||
         !path_join(state->folder, state->filename, state->full_path,
                    sizeof(state->full_path))) {
@@ -463,12 +476,20 @@ int run_browser_popup(uint32_t offer_id) {
     ipc_client_disconnect(daemon);
     return 1;
   }
+  if (daemon_version >= 10 &&
+      ipc_browser_kind_info_v1(daemon, offer_id, &state.media_kind) != 0) {
+    ipc_client_disconnect(daemon);
+    return 1;
+  }
   snprintf(state.filename, sizeof(state.filename), "%s",
            state.offer.filename);
   snprintf(state.folder, sizeof(state.folder), "%s",
            config_get_default_download_dir());
   file_ensure_directory(state.folder);
   int height = state.context_flags ? 418 : 370;
+  if (state.media_kind) height += 24;
+  if (state.media_kind == IPC_BROWSER_MEDIA_HLS ||
+      state.media_kind == IPC_BROWSER_MEDIA_DASH) height += 24;
   GuiSdlBackendConfig settings = {.width = 480, .height = height,
                                   .title = "cdm — Browser download",
                                   .font_size = 13};

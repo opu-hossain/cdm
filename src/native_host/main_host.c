@@ -154,10 +154,20 @@ static bool copy_context_field(const cJSON *root, const char *key, char *out,
 }
 
 static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer,
-                        HostRequestContext *context) {
+                        HostRequestContext *context, uint32_t *media_kind) {
   const cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
-  if (!cJSON_IsString(type) || strcmp(type->valuestring, "download_offer") != 0)
+  if (!cJSON_IsString(type)) return false;
+  *media_kind = IPC_BROWSER_MEDIA_NONE;
+  const cJSON *kind = cJSON_GetObjectItemCaseSensitive(root, "kind");
+  if (strcmp(type->valuestring, "media_offer") == 0) {
+    if (!cJSON_IsString(kind)) return false;
+    if (strcmp(kind->valuestring, "hls") == 0) *media_kind = IPC_BROWSER_MEDIA_HLS;
+    else if (strcmp(kind->valuestring, "dash") == 0) *media_kind = IPC_BROWSER_MEDIA_DASH;
+    else if (strcmp(kind->valuestring, "video") == 0) *media_kind = IPC_BROWSER_MEDIA_VIDEO;
+    else return false;
+  } else if (strcmp(type->valuestring, "download_offer") != 0 || kind) {
     return false;
+  }
   memset(offer, 0, sizeof(*offer));
   memset(context, 0, sizeof(*context));
   if (!copy_field(root, "request_id", offer->request_id,
@@ -206,7 +216,7 @@ static void clear_context_fields(cJSON *root) {
 }
 
 static char *context_offer_json(const IpcBrowserOffer *offer,
-                                const HostRequestContext *context) {
+                                const HostRequestContext *context, uint32_t media_kind) {
   cJSON *root = cJSON_CreateObject();
   if (!root) return NULL;
   bool ok = cJSON_AddStringToObject(root, "request_id", offer->request_id) &&
@@ -218,6 +228,11 @@ static char *context_offer_json(const IpcBrowserOffer *offer,
             cJSON_AddStringToObject(root, "cookie", context->cookie) &&
             cJSON_AddStringToObject(root, "user_agent", context->user_agent) &&
             cJSON_AddStringToObject(root, "referer", context->referer);
+  if (media_kind) {
+    const char *kind = media_kind == IPC_BROWSER_MEDIA_HLS ? "hls" :
+                       media_kind == IPC_BROWSER_MEDIA_DASH ? "dash" : "video";
+    ok = ok && cJSON_AddStringToObject(root, "kind", kind);
+  }
   char *json = ok ? cJSON_PrintUnformatted(root) : NULL;
   clear_context_fields(root);
   cJSON_Delete(root);
@@ -437,7 +452,8 @@ static bool handle_message(const char *json) {
   }
   IpcBrowserOffer offered = {0};
   HostRequestContext context = {0};
-  if (!parse_offer(root, &offered, &context)) {
+  uint32_t media_kind = IPC_BROWSER_MEDIA_NONE;
+  if (!parse_offer(root, &offered, &context, &media_kind)) {
     const cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "request_id");
     bool ok = send_error(cJSON_IsString(id) ? id->valuestring : NULL,
                          "invalid or unsupported download offer");
@@ -463,9 +479,10 @@ static bool handle_message(const char *json) {
 
   bool has_context = context.cookie[0] || context.user_agent[0] ||
                      context.referer[0];
-  char *context_json = has_context ? context_offer_json(&offered, &context) : NULL;
+  bool use_json = has_context || media_kind;
+  char *context_json = use_json ? context_offer_json(&offered, &context, media_kind) : NULL;
   clear_context(&context);
-  if (has_context) {
+  if (use_json) {
     /* Check the 16 KiB daemon frame before starting or contacting it. */
     if (!context_json || strlen(context_json) > IPC_MAX_FRAME_SIZE) {
       clear_json(context_json);
@@ -488,13 +505,18 @@ static bool handle_message(const char *json) {
     clear_json(context_json);
     return send_error(offered.request_id, "cdm daemon is unavailable");
   }
+  if (media_kind && daemon_version < 10) {
+    ipc_client_disconnect(daemon);
+    clear_json(context_json);
+    return send_error(offered.request_id, "daemon does not support media offers");
+  }
   if (has_context && daemon_version < 8) {
     ipc_client_disconnect(daemon);
     clear_json(context_json);
     return send_error(offered.request_id, "daemon does not support browser context");
   }
   IpcBrowserOffer registered = {0};
-  int result = has_context ? forward_context_offer(daemon, context_json, &registered)
+  int result = use_json ? forward_context_offer(daemon, context_json, &registered)
                            : ipc_browser_offer(daemon, &offered, &registered);
   clear_json(context_json);
   ipc_client_disconnect(daemon);

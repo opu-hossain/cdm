@@ -173,6 +173,7 @@ static once_flag g_client_mutex_once = ONCE_FLAG_INIT;
 
 typedef struct {
   IpcBrowserOffer offer;
+  uint32_t media_kind; // IPC poll thread owns offer metadata
   RequestOptions context; // IPC-thread-owned until copied on confirmation
   time_t touched_at;
   bool duplicate;
@@ -269,21 +270,29 @@ static bool browser_header_valid(const char *value) {
 }
 
 static bool browser_parse_offer(const char *json, IpcBrowserOffer *out,
-                                 RequestOptions *context) {
-  if (context) {
-    for (const char *p = json; *p; p++) {
-      if (*p == '\\' && p[1]) {
-        if (p[1] == 'u' && strncmp(p + 2, "0000", 4) == 0)
-          return false;
-        p++;
-      }
+                                 RequestOptions *context, uint32_t *media_kind) {
+  /* cJSON strings have no length; reject escaped NUL in all offer fields. */
+  for (const char *p = json; *p; p++) {
+    if (*p == '\\' && p[1]) {
+      if (p[1] == 'u' && strncmp(p + 2, "0000", 4) == 0)
+        return false;
+      p++;
     }
   }
   cJSON *root = cJSON_Parse(json);
   if (!root)
     return false;
   memset(out, 0, sizeof(*out));
-  bool valid = browser_json_string(root, "request_id", out->request_id,
+  *media_kind = IPC_BROWSER_MEDIA_NONE;
+  const cJSON *kind = cJSON_GetObjectItemCaseSensitive(root, "kind");
+  bool kind_valid = !kind;
+  if (cJSON_IsString(kind) && context) {
+    if (strcmp(kind->valuestring, "hls") == 0) *media_kind = IPC_BROWSER_MEDIA_HLS;
+    else if (strcmp(kind->valuestring, "dash") == 0) *media_kind = IPC_BROWSER_MEDIA_DASH;
+    else if (strcmp(kind->valuestring, "video") == 0) *media_kind = IPC_BROWSER_MEDIA_VIDEO;
+    kind_valid = *media_kind != IPC_BROWSER_MEDIA_NONE;
+  }
+  bool valid = kind_valid && browser_json_string(root, "request_id", out->request_id,
                                    sizeof(out->request_id), true) &&
                browser_json_string(root, "url", out->url,
                                    sizeof(out->url), true) &&
@@ -478,6 +487,7 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_GET_DETAILS:
   case MSG_GET_DETAILS_V2:
   case MSG_BROWSER_GET_OFFER:
+  case MSG_BROWSER_KIND_INFO_V1:
   case MSG_BROWSER_CONTEXT_INFO_V1:
   case MSG_BROWSER_DISMISS:
   case MSG_BROWSER_SUBSCRIBE_PROGRESS:
@@ -753,12 +763,14 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     json[hdr->length] = '\0';
     IpcBrowserOffer proposed = {0};
     RequestOptions context = {0};
+    uint32_t media_kind = IPC_BROWSER_MEDIA_NONE;
     if (!memchr(json, '\0', hdr->length) &&
         browser_parse_offer(json, &proposed,
-            hdr->type == MSG_BROWSER_OFFER_V2 ? &context : NULL)) {
+            hdr->type == MSG_BROWSER_OFFER_V2 ? &context : NULL, &media_kind)) {
       BrowserOfferSlot *slot = browser_find_request(proposed.request_id);
-      if (slot && strcmp(slot->offer.url, proposed.url) != 0) {
-        LOG_WARN("Browser request ID reused with a different URL");
+      if (slot && (strcmp(slot->offer.url, proposed.url) != 0 ||
+                   slot->media_kind != media_kind)) {
+        LOG_WARN("Browser request ID reused with different offer metadata");
         slot = NULL;
       } else if (!slot) {
         for (size_t i = 0; i < MAX_BROWSER_OFFERS; i++) {
@@ -777,6 +789,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
           if (id) {
             slot->offer = proposed;
             slot->context = context;
+            slot->media_kind = media_kind;
             slot->offer.offer_id = id;
             slot->touched_at = time(NULL);
             LOG_INFO("Browser offer %u registered", id);
@@ -804,6 +817,14 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       response = slot->offer;
     }
     ipc_write_exact(client_fd, &response, sizeof(response));
+    break;
+  }
+  case MSG_BROWSER_KIND_INFO_V1: {
+    uint32_t id = 0, kind = IPC_BROWSER_MEDIA_NONE;
+    if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0) return;
+    BrowserOfferSlot *slot = browser_find_offer(id);
+    if (slot) kind = slot->media_kind;
+    ipc_write_exact(client_fd, &kind, sizeof(kind));
     break;
   }
   case MSG_BROWSER_CONTEXT_INFO_V1: {
@@ -838,7 +859,9 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       if (slot && slot->offer.state == IPC_BROWSER_CONFIRMED) {
         download_id = slot->offer.download_id;
         duplicate = slot->duplicate;
-      } else if (slot && slot->offer.state == IPC_BROWSER_WAITING) {
+      } else if (slot && slot->offer.state == IPC_BROWSER_WAITING &&
+                 (slot->media_kind == IPC_BROWSER_MEDIA_NONE ||
+                  slot->media_kind == IPC_BROWSER_MEDIA_VIDEO)) {
         RequestOptions opts = slot->context;
         if (!opts.browser_context)
           strcpy(opts.referrer, slot->offer.referrer);
@@ -2082,6 +2105,14 @@ int ipc_browser_context_info_v1(int sock, uint32_t offer_id, uint32_t *flags) {
                              sizeof(offer_id)) != 0)
     return -1;
   return ipc_read_exact(sock, flags, sizeof(*flags));
+}
+
+int ipc_browser_kind_info_v1(int sock, uint32_t offer_id, uint32_t *kind) {
+  if (!kind || !offer_id ||
+      browser_write_request(sock, MSG_BROWSER_KIND_INFO_V1, &offer_id,
+                            sizeof(offer_id)) != 0)
+    return -1;
+  return ipc_read_exact(sock, kind, sizeof(*kind));
 }
 
 static int browser_confirm_request(int sock, MsgType type, uint32_t offer_id,

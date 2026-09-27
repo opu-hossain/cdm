@@ -55,9 +55,10 @@ typedef enum {
   MSG_LIST_PAGE_WITH_CATEGORY_V1 = 55,
   MSG_BROWSER_OFFER_V2 = 56, // JSON request context; legacy raw offer reply
   MSG_BROWSER_CONTEXT_INFO_V1 = 57, // uint32 offer ID -> uint32 presence bits
+  MSG_BROWSER_KIND_INFO_V1 = 58, // uint32 offer ID -> uint32 IpcBrowserMediaKind
 } MsgType;
 
-#define IPC_PROTOCOL_VERSION 9
+#define IPC_PROTOCOL_VERSION 10
 #define IPC_BROWSER_HAS_COOKIE 1u
 #define IPC_BROWSER_HAS_USER_AGENT 2u
 #define IPC_BROWSER_HAS_REFERER 4u
@@ -102,6 +103,14 @@ typedef enum {
 #define IPC_MAX_PATH_LEN 1024
 #define IPC_MAX_FRAME_SIZE 16384
 #define IPC_CATEGORY_MAX 256
+
+/* Offer metadata only; the legacy IpcBrowserOffer wire layout is unchanged. */
+typedef enum {
+  IPC_BROWSER_MEDIA_NONE = 0,
+  IPC_BROWSER_MEDIA_HLS = 1,
+  IPC_BROWSER_MEDIA_DASH = 2,
+  IPC_BROWSER_MEDIA_VIDEO = 3
+} IpcBrowserMediaKind;
 
 #ifdef __cplusplus
 }

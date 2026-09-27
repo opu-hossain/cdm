@@ -37,6 +37,67 @@ TestSuite(ipc, .init = setup_ipc, .fini = teardown_ipc);
 static atomic_bool browser_server_running;
 static int browser_server_thread(void *unused);
 
+Test(ipc, browser_media_metadata_preserves_raw_offer_and_blocks_playlists) {
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  const char *kinds[] = {"hls", "dash", "video"};
+  for (uint32_t i = 0; i < 3; i++) {
+    char json[256];
+    int length = snprintf(json, sizeof(json),
+        "{\"request_id\":\"media-%u\",\"url\":\"https://example.invalid/media\","
+        "\"kind\":\"%s\"}", i, kinds[i]);
+    cr_assert_gt(length, 0);
+    cr_assert_lt((size_t)length, sizeof(json));
+    MsgHeader header = {.length = (uint32_t)length, .type = MSG_BROWSER_OFFER_V2};
+    cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+    cr_assert_eq(ipc_write_exact(client, json, (size_t)length), 0);
+    IpcBrowserOffer offer = {0}, fetched = {0};
+    cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+    cr_assert_neq(offer.offer_id, 0);
+    uint32_t kind = 99;
+    cr_assert_eq(ipc_browser_kind_info_v1(client, offer.offer_id, &kind), 0);
+    cr_assert_eq(kind, i + 1);
+    cr_assert_eq(ipc_browser_get_offer(client, offer.offer_id, &fetched), 0);
+    cr_assert_eq(memcmp(&offer, &fetched, sizeof(offer)), 0);
+    if (i < 2) {
+      IpcAddResponse response = {0};
+      cr_assert_eq(ipc_browser_confirm_v2(client, offer.offer_id,
+                                          "/tmp/media-not-created", &response), -1);
+      cr_assert_eq(response.id, 0);
+      cr_assert_eq(ipc_browser_get_offer(client, offer.offer_id, &fetched), 0);
+      cr_assert_eq(fetched.state, IPC_BROWSER_WAITING);
+    }
+    cr_assert_eq(ipc_browser_dismiss(client, offer.offer_id), 0);
+  }
+  const char *invalid[] = {
+    "{\"request_id\":\"bad\",\"url\":\"https://example.invalid/m\",\"kind\":3}",
+    "{\"request_id\":\"bad\",\"url\":\"https://example.invalid/m\",\"kind\":\"unknown\"}",
+    "{\"request_id\":\"media-0\",\"url\":\"https://example.invalid/media\",\"kind\":\"video\"}"
+  };
+  for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+    MsgHeader header = {.length = (uint32_t)strlen(invalid[i]), .type = MSG_BROWSER_OFFER_V2};
+    cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+    cr_assert_eq(ipc_write_exact(client, invalid[i], header.length), 0);
+    IpcBrowserOffer offer = {0};
+    cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+    cr_assert_eq(offer.offer_id, 0);
+  }
+  IpcBrowserOffer legacy = {0}, registered = {0};
+  strcpy(legacy.request_id, "ordinary");
+  strcpy(legacy.url, "https://example.invalid/file");
+  cr_assert_eq(ipc_browser_offer(client, &legacy, &registered), 0);
+  uint32_t kind = 99;
+  cr_assert_eq(ipc_browser_kind_info_v1(client, registered.offer_id, &kind), 0);
+  cr_assert_eq(kind, IPC_BROWSER_MEDIA_NONE);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+}
+
 Test(ipc, browser_context_is_ephemeral_and_can_refresh_after_restore) {
   char root[] = "/tmp/cdm-browser-context-XXXXXX";
   cr_assert_not_null(mkdtemp(root));

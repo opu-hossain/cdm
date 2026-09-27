@@ -990,3 +990,10 @@ Completed: user chose collection then explicit selection; opt-in response-header
 Verification: test-first Node mocks cover matching, private/excluded requests, dedup/caps/expiry, options permissions, privileged selection and no automatic native offers; bundle smoke and full build/CTest 33/33 pass.
 Open questions: real browser visual smoke UNKNOWN; native media acceptance is the next task. Existing Phase 2 TSan and Phase 3 manual gates remain open.
 Next: 4.1.2 native media offers; user approved popup scope and versioned kind lookup. All task code committed; no push.
+
+## 2026-09-28 — Codex, task 4.1.2
+Branch: `cdm`; commit: `feat(native-host): accept media offers`.
+Completed: approved popup scope; media JSON validation, IPC v10 kind lookup (58), private offer metadata, old-daemon rejection and popup kind display; legacy raw offer unchanged.
+Verification: test-first native framing/fake-daemon smoke plus IPC tests cover three kinds, context/no-context, validation, dedup and legacy metadata; full Debug build/CTest 33/33 pass, no new warnings.
+Open questions: visual popup smoke UNKNOWN; HLS/DASH confirmation deliberately unavailable until playlist engines dispatch them. Phase 2 TSan and Phase 3 manual gates remain open.
+Next: 4.2.1 HLS playlist parser. All task changes committed; no push.
