@@ -284,6 +284,7 @@ foreach(_browser IN ITEMS chromium firefox)
         DEPENDS browser/${_browser}/manifest.json
                 browser/${_browser}/${_browser_script}
                 browser/${_browser}/README.md
+                browser/${_browser}/options.html
                 cmake/BundleBrowserExtension.py
         VERBATIM
     )

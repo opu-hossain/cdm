@@ -157,15 +157,13 @@ function supported(item) {
   return /^https?:\/\//i.test(url) && item.state === "in_progress";
 }
 
-chrome.downloads.onCreated.addListener(async item => {
-  if (!supported(item)) return;
+async function offerDownload(item, url) {
   const requestId = crypto.randomUUID();
   const filename = (item.filename || "").split(/[\\/]/).pop() || "";
-  const url = item.finalUrl || item.url;
   const context = await offerContext(item, url);
-  const port = connectHost();
   pending.set(requestId, item.id);
   try {
+    const port = connectHost();
     port.postMessage({
       type: "download_offer",
       request_id: requestId,
@@ -180,11 +178,39 @@ chrome.downloads.onCreated.addListener(async item => {
   } catch (error) {
     pending.delete(requestId);
     showError(error.message || "could not contact native host");
-    return;
+    return false;
   }
+  return true;
+}
+
+chrome.downloads.onCreated.addListener(async item => {
+  if (!supported(item)) return;
+  if (!await offerDownload(item, item.finalUrl || item.url)) return;
   // MV3 observes this event after the browser starts the download.
   // Cancellation is best effort and can leave a partial browser file.
   chrome.downloads.cancel(item.id).catch(error => {
     showError(`could not cancel browser download: ${error.message}`);
   });
+});
+
+chrome.runtime.onInstalled.addListener(async () => {
+  // Callback form also works before Chrome 123's Promise support.
+  await new Promise(resolve => chrome.contextMenus.removeAll(() => {
+    if (chrome.runtime.lastError) showError("could not reset context menu");
+    resolve();
+  }));
+  const report = () => {
+    if (chrome.runtime.lastError) showError("could not create context menu");
+  };
+  chrome.contextMenus.create({id: "cdm-download-link", title: "Download link with cdm",
+    contexts: ["link"], targetUrlPatterns: ["http://*/*", "https://*/*"]}, report);
+  chrome.contextMenus.create({id: "cdm-download-page", title: "Download page with cdm",
+    contexts: ["page"], documentUrlPatterns: ["http://*/*", "https://*/*"]}, report);
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  const url = info.menuItemId === "cdm-download-link" ? info.linkUrl
+    : info.menuItemId === "cdm-download-page" ? info.pageUrl || tab?.url : "";
+  if (!originFor(url)) return;
+  await offerDownload({referrer: info.pageUrl || "", incognito: !!tab?.incognito}, url);
 });

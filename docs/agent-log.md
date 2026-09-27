@@ -941,3 +941,10 @@ Completed: IPC v8 context/presence flow, ephemeral queue options, schema v10 pre
 Verification: IPC cleanup/restore tests and protected 127.0.0.1 HEAD/GET smoke pass; captured sentinels absent from database/WAL/logs; full build/CTest 33/33, no new warnings.
 Open questions: popup visual smoke UNKNOWN without display; expiry clearing inspected but clock-driven test not added; contextual redirects require a fresh offer. Phase 2 TSan blocker remains.
 Next: 3.2.1 browser context menu.
+
+## 2026-09-28 — Codex, task 3.2.1
+Branch: `cdm`; commit: `feat(browser): add download-with-cdm context menu`.
+Completed: HTTP(S) link/page menus reuse offer/consent flow without browser cancellation; options pages explain confirmation and session privacy; bundles track the new assets.
+Verification: test-first Node mocks cover menu registration/update, page/link targets, unsupported schemes, consent and incognito; archive smoke and full build/CTest 33/33 passed.
+Open questions: installed-browser menu/visual smoke UNKNOWN; Phase 2 TSan blocker remains. All task code committed; pre-existing user files left unstaged; no push.
+Next: 3.2.2 automatic interception size/type filters.

@@ -10,6 +10,9 @@ async function verify(file, globalName, expectedBrowser) {
   let headerOptions;
   let nativeListener;
   let disconnectListener;
+  let installListener;
+  let menuListener;
+  const menuItems = [];
   const messages = [];
   const canceled = [];
   const badges = [];
@@ -27,10 +30,16 @@ async function verify(file, globalName, expectedBrowser) {
       onCreated: { addListener(listener) { downloadListener = listener; } },
       cancel(id) { canceled.push(id); return Promise.resolve(); }
     },
-    runtime: { connectNative(name) {
+    runtime: { onInstalled: {addListener(listener) { installListener = listener; }},
+      connectNative(name) {
       assert.equal(name, "org.cdm.browser");
       return port;
     } },
+    contextMenus: {
+      removeAll(callback) { menuItems.length = 0; callback?.(); return Promise.resolve(); },
+      create(item, callback) { menuItems.push(item); callback?.(); return item.id; },
+      onClicked: {addListener(listener) { menuListener = listener; }}
+    },
     action: {
       onClicked: { addListener(listener) { actionListener = listener; } },
       setBadgeText(value) { badges.push(value.text); },
@@ -60,6 +69,16 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal(typeof downloadListener, "function");
   assert.equal(typeof actionListener, "function");
   assert.equal(typeof headerListener, "function");
+  assert.equal(typeof installListener, "function");
+  assert.equal(typeof menuListener, "function");
+  await installListener();
+  assert.equal(menuItems.length, 2);
+  assert.deepEqual(Array.from(menuItems[0].contexts), ["link"]);
+  assert.deepEqual(Array.from(menuItems[1].contexts), ["page"]);
+  assert.deepEqual(Array.from(menuItems[0].targetUrlPatterns),
+                   ["http://*/*", "https://*/*"]);
+  await installListener();
+  assert.equal(menuItems.length, 2, "install/update must replace menu items");
   assert(headerOptions.includes("requestHeaders"));
   assert.equal(headerOptions.includes("extraHeaders"),
                expectedBrowser === "chromium");
@@ -127,11 +146,39 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal(messages.at(-1).cookie, undefined);
   await downloadListener({ id: 8, state: "in_progress", url: "blob:unsupported" });
   assert.equal(messages.length, 8);
+  const cancelCount = canceled.length;
+  await menuListener({menuItemId: "cdm-download-link",
+    linkUrl: "https://example.invalid/manual.zip",
+    pageUrl: "https://example.invalid/page"}, {incognito: false});
+  assert.equal(messages.at(-1).url, "https://example.invalid/manual.zip");
+  assert.equal(messages.at(-1).type, "download_offer");
+  assert.equal(messages.at(-1).total_bytes, 0);
+  assert.equal(messages.at(-1).cookie, undefined);
+  await menuListener({menuItemId: "cdm-download-page",
+    pageUrl: "https://example.invalid/page"}, {});
+  assert.equal(messages.at(-1).url, "https://example.invalid/page");
+  assert.equal(messages.at(-1).filename, "");
+  assert.equal(canceled.length, cancelCount, "explicit offers must not cancel downloads");
+  const offered = messages.length;
+  await menuListener({menuItemId: "cdm-download-link", linkUrl: "javascript:alert(1)"}, {});
+  await menuListener({menuItemId: "unknown", linkUrl: "https://example.invalid/file"}, {});
+  assert.equal(messages.length, offered);
+  granted = true;
+  cookieRows = [{name: "session", value: "manual-fixture"}];
+  await actionListener({url: "https://example.invalid/page"});
+  await menuListener({menuItemId: "cdm-download-link",
+    linkUrl: "https://example.invalid/session.zip",
+    pageUrl: "https://example.invalid/page"}, {});
+  assert.equal(messages.at(-1).cookie, "session=manual-fixture");
+  assert.equal(messages.at(-1).referer, "https://example.invalid/page");
+  await menuListener({menuItemId: "cdm-download-page",
+    pageUrl: "https://example.invalid/private"}, {incognito: true});
+  assert.equal(messages.at(-1).cookie, undefined);
   nativeListener({ type: "error", request_id: "browser-test-request",
     error: "host unavailable" });
   assert.equal(badges.at(-1), "!");
   nativeListener({ type: "offer_registered", request_id: "browser-test-request" });
-  assert.equal(badges.at(-1), "");
+  assert.equal(badges.at(-1), "ON");
   assert.equal(typeof disconnectListener, "function");
 }
 
@@ -139,6 +186,9 @@ for (const file of [process.argv[2], process.argv[3]]) {
   const manifest = JSON.parse(fs.readFileSync(
     path.join(path.dirname(file), "manifest.json"), "utf8"));
   assert(manifest.permissions.includes("activeTab"));
+  assert(manifest.permissions.includes("contextMenus"));
+  assert.equal(manifest.options_ui.page, "options.html");
+  assert(fs.existsSync(path.join(path.dirname(file), "options.html")));
   assert.deepEqual(manifest.optional_permissions, ["cookies", "webRequest"]);
   assert(manifest.optional_host_permissions.includes("https://*/*"));
 }

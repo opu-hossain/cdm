@@ -151,15 +151,13 @@ function connectHost() {
   return port;
 }
 
-browser.downloads.onCreated.addListener(async item => {
-  const url = item.finalUrl || item.url || "";
-  if (!/^https?:\/\//i.test(url) || item.state !== "in_progress") return;
+async function offerDownload(item, url) {
   const requestId = crypto.randomUUID();
   const filename = (item.filename || "").split(/[\\/]/).pop() || "";
   const context = await offerContext(item, url);
-  const port = connectHost();
   pending.set(requestId, item.id);
   try {
+    const port = connectHost();
     port.postMessage({
       type: "download_offer",
       request_id: requestId,
@@ -174,9 +172,35 @@ browser.downloads.onCreated.addListener(async item => {
   } catch (error) {
     pending.delete(requestId);
     showError(error.message || "could not contact native host");
-    return;
+    return false;
   }
+  return true;
+}
+
+browser.downloads.onCreated.addListener(async item => {
+  const url = item.finalUrl || item.url || "";
+  if (!/^https?:\/\//i.test(url) || item.state !== "in_progress") return;
+  if (!await offerDownload(item, url)) return;
   browser.downloads.cancel(item.id).catch(error => {
     showError(`could not cancel browser download: ${error.message}`);
   });
+});
+
+browser.runtime.onInstalled.addListener(async () => {
+  try {
+    await browser.contextMenus.removeAll();
+    browser.contextMenus.create({id: "cdm-download-link", title: "Download link with cdm",
+      contexts: ["link"], targetUrlPatterns: ["http://*/*", "https://*/*"]});
+    browser.contextMenus.create({id: "cdm-download-page", title: "Download page with cdm",
+      contexts: ["page"], documentUrlPatterns: ["http://*/*", "https://*/*"]});
+  } catch (_) {
+    showError("could not create context menu");
+  }
+});
+
+browser.contextMenus.onClicked.addListener(async (info, tab) => {
+  const url = info.menuItemId === "cdm-download-link" ? info.linkUrl
+    : info.menuItemId === "cdm-download-page" ? info.pageUrl || tab?.url : "";
+  if (!originFor(url)) return;
+  await offerDownload({referrer: info.pageUrl || "", incognito: !!tab?.incognito}, url);
 });
