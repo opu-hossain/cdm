@@ -37,7 +37,7 @@ TestSuite(ipc, .init = setup_ipc, .fini = teardown_ipc);
 static atomic_bool browser_server_running;
 static int browser_server_thread(void *unused);
 
-Test(ipc, browser_media_metadata_preserves_raw_offer_and_blocks_playlists) {
+Test(ipc, browser_media_metadata_preserves_raw_offer_and_blocks_dash) {
   cr_assert_eq(ipc_server_start(), 0);
   atomic_store(&browser_server_running, true);
   thrd_t server;
@@ -63,7 +63,7 @@ Test(ipc, browser_media_metadata_preserves_raw_offer_and_blocks_playlists) {
     cr_assert_eq(kind, i + 1);
     cr_assert_eq(ipc_browser_get_offer(client, offer.offer_id, &fetched), 0);
     cr_assert_eq(memcmp(&offer, &fetched, sizeof(offer)), 0);
-    if (i < 2) {
+    if (i == 1) {
       IpcAddResponse response = {0};
       cr_assert_eq(ipc_browser_confirm_v2(client, offer.offer_id,
                                           "/tmp/media-not-created", &response), -1);
@@ -96,6 +96,55 @@ Test(ipc, browser_media_metadata_preserves_raw_offer_and_blocks_playlists) {
   ipc_client_disconnect(client);
   atomic_store(&browser_server_running, false);
   thrd_join(server, NULL);
+}
+
+Test(ipc, hls_confirmation_persists_kind_without_browser_credentials) {
+  char directory[] = "/tmp/cdm-hls-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(directory));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", directory, 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  const char json[] = "{\"request_id\":\"hls-confirm\",\"url\":\"https://example.invalid/list.m3u8\","
+                      "\"kind\":\"hls\",\"cookie\":\"synthetic=1\"}";
+  MsgHeader header = {.length = sizeof(json)-1, .type = MSG_BROWSER_OFFER_V2};
+  cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+  cr_assert_eq(ipc_write_exact(client, json, header.length), 0);
+  IpcBrowserOffer offer = {0};
+  cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+  char path[128];
+  int n = snprintf(path, sizeof(path), "%s/output.ts", directory);
+  cr_assert_gt(n, 0); cr_assert_lt((size_t)n, sizeof(path));
+  IpcAddResponse response = {0};
+  cr_assert_eq(ipc_browser_confirm_v2(client, offer.offer_id, path, &response), 0);
+  Download *d = queue_manager_find_by_id(response.id);
+  cr_assert_not_null(d);
+  cr_assert_eq(d->media_kind, DOWNLOAD_MEDIA_HLS);
+  cr_assert(d->requires_browser_context);
+  queue_manager_remove(d->id);
+  cr_assert_eq(db_restore_queue(), 0);
+  d = queue_manager_find_by_id(response.id);
+  cr_assert_not_null(d);
+  cr_assert_eq(d->media_kind, DOWNLOAD_MEDIA_HLS);
+  cr_assert_eq(d->status, DOWNLOAD_PAUSED);
+  cr_assert_null(d->request);
+  IpcDownloadDetails details = {0};
+  cr_assert_eq(db_get_download_details(d->id, &details), 0);
+  cr_assert_eq(details.cookie[0], '\0');
+  IpcBrowserOffer ordinary = {0}, registered = {0};
+  strcpy(ordinary.request_id, "hls-as-ordinary");
+  strcpy(ordinary.url, "https://example.invalid/list.m3u8");
+  cr_assert_eq(ipc_browser_offer(client, &ordinary, &registered), 0);
+  cr_assert_eq(ipc_browser_confirm_v2(client, registered.offer_id, path, &response), -1);
+  cr_assert_eq(response.id, 0);
+  queue_manager_remove(d->id);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false); thrd_join(server, NULL);
+  db_close(); unlink(path); rmdir(directory); unsetenv("DOWNLOADMGR_ROOT");
 }
 
 Test(ipc, browser_context_is_ephemeral_and_can_refresh_after_restore) {

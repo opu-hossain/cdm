@@ -1004,3 +1004,10 @@ Completed: bounded pure RFC 8216 parser, highest-bandwidth master selection, HTT
 Verification: test-first Criterion fixtures cover valid/malformed playlists, key rotations, UTF-8/NUL checks, URLs, sequence overflow, deterministic ties and resource caps; full Debug build/CTest 34/34 pass, no new warnings.
 Open questions: existing Phase 2 TSan and Phase 3 manual gates remain open; user approved task 4.2.2 daemon/persistence/crypto scope.
 Next: 4.2.2 with approved end-to-end scope and OpenSSL crypto. Parser changes committed; no push.
+
+## 2026-09-28 — Codex, task 4.2.2
+Branch: `cdm`; commit: `feat(engine): download and concatenate hls segments`.
+Completed: approved end-to-end scope; SQLite v11 media kind, HLS confirmation/dispatch, bounded segment jobs via worker_pool, OpenSSL AES-128, ordered maps/segments, private hashed resume state and atomic publication/cleanup.
+Verification: test-first local HTTP/process-restart fixtures cover truncation, retries, stale/corrupt parts, AES/maps, parallel jobs, pause/cancel, publication recovery, checksum failure and context privacy; full Debug build/CTest 35/35 pass, no new warnings.
+Open questions: POSIX VOD scope and Windows TODO recorded; live/ranges/discontinuities/separate audio unsupported; real browser visual smoke and existing phase gates remain open.
+Next: 4.2.3 optional ffmpeg remux. All task changes committed; no push.

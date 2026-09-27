@@ -184,7 +184,9 @@ downloadmgr_enable_warnings(downloadmgr_core)
 downloadmgr_enable_sanitizer(downloadmgr_core)
 
 target_include_directories(downloadmgr_core PRIVATE src)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 target_link_libraries(downloadmgr_core PUBLIC
+    OpenSSL::Crypto
     cdm_vendor
     cdm_curl
     cdm_sqlite
@@ -307,6 +309,16 @@ if(BUILD_TESTING)
     downloadmgr_enable_sanitizer(test_hls)
     target_link_libraries(test_hls PRIVATE downloadmgr_core PkgConfig::CRITERION)
     add_test(NAME test_hls COMMAND test_hls)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(UNIX AND NOT WIN32 AND Python3_Interpreter_FOUND)
+        add_executable(hls_download_driver tests/hls_download_driver.c)
+        downloadmgr_enable_warnings(hls_download_driver)
+        downloadmgr_enable_sanitizer(hls_download_driver)
+        target_link_libraries(hls_download_driver PRIVATE downloadmgr_core)
+        add_test(NAME test_hls_download COMMAND ${Python3_EXECUTABLE} -B
+                 ${CMAKE_SOURCE_DIR}/tests/test_hls_download.py
+                 $<TARGET_FILE:hls_download_driver>)
+    endif()
 endif()
 
 install(TARGETS cdm cdm_native_host

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Opu Hossain
 
 #include "queue_manager.h"
+#include "../engine/hls.h"
 #include "scheduler.h"
 #include "../persistence/db.h"
 #include "../platform/thread.h"
@@ -69,6 +70,8 @@ static void clear_browser_request(Download *download) {
 }
 
 static void free_download(Download *download) {
+  if (download->media_kind == DOWNLOAD_MEDIA_HLS)
+    hls_discard_state(download->dest_path);
   clear_browser_request(download);
   free(download->request);
   free(download);
@@ -186,6 +189,7 @@ static uint32_t add_download(const char *url, const char *dest_path,
   strncpy(d->dest_path, dest_path, sizeof(d->dest_path) - 1);
   d->dest_path[sizeof(d->dest_path) - 1] = '\0';
   atomic_store(&d->auto_filename, auto_filename);
+  d->media_kind = opts ? opts->media_kind : DOWNLOAD_MEDIA_NONE;
   d->requires_browser_context = opts && opts->browser_context;
 
   if (request_options_present(opts) || d->requires_browser_context) {
@@ -443,6 +447,21 @@ bool queue_manager_get_status(uint32_t id, DownloadStatus *out_status) {
   return false;
 }
 
+bool queue_manager_get_media_kind(uint32_t id, DownloadMediaKind *out) {
+  if (!out) return false;
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  for (Download *d = g_head; d; d = d->next) {
+    if (d->id == id) {
+      *out = d->media_kind;
+      dm_mutex_unlock(&g_mutex);
+      return true;
+    }
+  }
+  dm_mutex_unlock(&g_mutex);
+  return false;
+}
+
 bool queue_manager_get_runtime_snapshot(uint32_t id,
                                         DownloadRuntimeSnapshot *out) {
   if (!out)
@@ -451,6 +470,7 @@ bool queue_manager_get_runtime_snapshot(uint32_t id,
   dm_mutex_lock(&g_mutex);
   for (Download *cur = g_head; cur != NULL; cur = cur->next) {
     if (cur->id == id) {
+      out->media_kind = cur->media_kind;
       out->status = cur->status;
       out->total_size = cur->total_size;
       out->bytes_downloaded = atomic_load(&cur->bytes_downloaded);
@@ -566,6 +586,7 @@ void queue_manager_clear_resume_state(uint32_t id) {
   for (Download *cur = g_head; cur != NULL; cur = cur->next) {
     if (cur->id != id)
       continue;
+    if (cur->media_kind == DOWNLOAD_MEDIA_HLS) hls_discard_state(cur->dest_path);
     memset(cur->chunks, 0, sizeof(cur->chunks));
     cur->chunk_count = 0;
     cur->total_size = 0;

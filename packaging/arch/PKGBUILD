@@ -13,6 +13,7 @@ depends=(
   'mesa'
   'curl'
   'sqlite'
+  'openssl'
   'glibc'
   'gcc-libs'
 )

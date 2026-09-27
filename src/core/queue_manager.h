@@ -22,8 +22,15 @@ typedef struct Category Category;
 /* Chooses a stored category by extension; unknown names use Default. */
 bool category_for_filename(const char *name, Category *out);
 
+/* Internal engine selector; persisted independently of request credentials. */
+typedef enum {
+  DOWNLOAD_MEDIA_NONE = 0, DOWNLOAD_MEDIA_HLS = 1,
+  DOWNLOAD_MEDIA_DASH = 2, DOWNLOAD_MEDIA_VIDEO = 3
+} DownloadMediaKind;
+
 /* Request options (supplied by the user) */
 typedef struct {
+  DownloadMediaKind media_kind;
   char cookie[4097];
   char referrer[2049];
   char user_agent[257]; // ephemeral browser override only
@@ -56,6 +63,7 @@ typedef enum {
 /* Full download entry */
 typedef struct Download {
   uint32_t id;
+  DownloadMediaKind media_kind; // immutable after queue publication
   uint32_t queue_id; // 1 = default queue; 0 maps to default for old rows
   time_t created_at;
   char url[2048];
@@ -103,6 +111,7 @@ typedef struct {
 } ChunkProgressSnapshot;
 
 typedef struct {
+  DownloadMediaKind media_kind;
   DownloadStatus status;
   uint64_t total_size;
   uint64_t bytes_downloaded;
@@ -165,6 +174,7 @@ int queue_manager_count_by_status_locked(DownloadStatus s);
 
 /** Read a download status without exposing the queue entry pointer. */
 bool queue_manager_get_status(uint32_t id, DownloadStatus *out_status);
+bool queue_manager_get_media_kind(uint32_t id, DownloadMediaKind *out);
 bool queue_manager_get_runtime_snapshot(uint32_t id,
                                         DownloadRuntimeSnapshot *out);
 

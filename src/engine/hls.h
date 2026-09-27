@@ -64,4 +64,9 @@ typedef struct {
 HlsResult hls_parse(const char *text, size_t length, const char *base_url,
                     HlsPlaylist *out, char *error, size_t error_size);
 void hls_playlist_free(HlsPlaylist *playlist);
+struct Download;
+/* Linux VOD engine; same return convention as engine_run_download. */
+int hls_run_download(struct Download *download);
+/* Non-active download only; refuses a locked or unowned staging directory. */
+void hls_discard_state(const char *destination);
 #endif

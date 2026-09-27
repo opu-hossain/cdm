@@ -291,7 +291,7 @@ Test(db, version_four_fixture_migrates_to_named_queues) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 10);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 11);
   sqlite3_finalize(statement);
   cr_assert_eq(sqlite3_prepare_v2(reader,
       "SELECT name,extensions,default_dir FROM categories WHERE id=1",
@@ -391,7 +391,7 @@ Test(db, version_five_migrates_and_categories_round_trip) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 10);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 11);
   sqlite3_finalize(statement);
   sqlite3_close(reader);
   db_close();
@@ -426,7 +426,7 @@ Test(db, legacy_schema_migrates_transactionally) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 10);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 11);
   sqlite3_finalize(statement);
 
   cr_assert_eq(sqlite3_prepare_v2(

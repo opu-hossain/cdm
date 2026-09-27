@@ -358,7 +358,7 @@ static IpcBrowserProgress browser_progress_snapshot(uint32_t id,
            status_to_string(snapshot.status));
   event.total_bytes = snapshot.total_size;
   memcpy(event.dest_path, snapshot.dest_path, sizeof(event.dest_path));
-  if (snapshot.status == DOWNLOAD_ACTIVE)
+  if (snapshot.status == DOWNLOAD_ACTIVE || snapshot.media_kind == DOWNLOAD_MEDIA_HLS)
     event.bytes_received = snapshot.bytes_downloaded;
   else if (snapshot.status == DOWNLOAD_DONE)
     event.bytes_received = snapshot.total_size ? snapshot.total_size
@@ -861,14 +861,24 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         duplicate = slot->duplicate;
       } else if (slot && slot->offer.state == IPC_BROWSER_WAITING &&
                  (slot->media_kind == IPC_BROWSER_MEDIA_NONE ||
+                  slot->media_kind == IPC_BROWSER_MEDIA_HLS ||
                   slot->media_kind == IPC_BROWSER_MEDIA_VIDEO)) {
         RequestOptions opts = slot->context;
+        opts.media_kind = (DownloadMediaKind)slot->media_kind;
         if (!opts.browser_context)
           strcpy(opts.referrer, slot->offer.referrer);
         char normalized[IPC_MAX_URL_LEN];
         int found = 0;
         if (url_normalize(slot->offer.url, normalized, sizeof(normalized)))
           found = db_find_active_by_url(normalized, &download_id);
+        if (found == 1) {
+          DownloadMediaKind existing_kind;
+          if (!queue_manager_get_media_kind(download_id, &existing_kind) ||
+              ((existing_kind == DOWNLOAD_MEDIA_HLS) !=
+               (opts.media_kind == DOWNLOAD_MEDIA_HLS))) {
+            found = -1; download_id = 0;
+          }
+        }
         if (found == 0)
           download_id = reserve_download(slot->offer.url, dest, &opts, false);
         int refresh_result = found == 1

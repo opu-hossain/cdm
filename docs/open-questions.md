@@ -146,3 +146,25 @@ matched response? Automatic offers can flood the desktop on segmented streams.
 Resolved: user chose collection and offer only after selection on 2026-09-28.
 The options page lists a bounded, expiring in-memory collection; detection alone
 does not open native offers. Browser-session context remains separately gated.
+
+## Task 4.2.2 — HLS dispatch and AES dependency scope
+
+The brief lists only hls.c/hls.h. Connecting confirmed HLS offers needs IPC
+confirmation, persisted media kind, queue/engine dispatch, and integration tests;
+AES-128 needs an audited crypto implementation (proposed OpenSSL dependency).
+Asked whether to extend scope for working end-to-end downloads or keep the
+standalone downloader API for now. Resolved: user approved working end-to-end
+HLS dispatch, persistence and OpenSSL dependency on 2026-09-28.
+
+## Task 4.2.2 — Platform and supported-stream constraints
+
+TODO(platform): secure HLS staging, file locking and resume need a Windows
+implementation; the current downloader uses POSIX files and flock.
+Current scope supports finite ENDLIST VOD, a selected master variant, AES-128
+identity keys, and whole-file initialization maps. Byte ranges, discontinuities,
+DRM, live reload and separate HLS audio renditions are not implemented.
+Captured browser context is restricted to its original origin and does not
+follow redirects; cross-origin resources require a future context design.
+State JSON stores layout/key/file hashes and HTTP validators, never captured
+header values or AES key bytes. Missing validators force a segment re-download.
+Remux is the next task; current output is the concatenated native media bytes.

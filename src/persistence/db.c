@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Opu Hossain
 
 #include "db.h"
+#include "../engine/hls.h"
 
 #include "../core/queue_manager.h"
 #include "../utils/log.h"
@@ -117,7 +118,8 @@ int db_init(const char *db_path) {
       "  schedule_paused INTEGER NOT NULL DEFAULT 0,"
       "  queue_id INTEGER DEFAULT 1 REFERENCES queues(id) ON DELETE SET NULL,"
       "  category_id INTEGER NOT NULL DEFAULT 1 REFERENCES categories(id),"
-      "  requires_browser_context INTEGER NOT NULL DEFAULT 0"
+      "  requires_browser_context INTEGER NOT NULL DEFAULT 0,"
+      "  media_kind INTEGER NOT NULL DEFAULT 0 CHECK(media_kind BETWEEN 0 AND 3)"
       ");"
       ""
       "CREATE TABLE IF NOT EXISTS chunks ("
@@ -143,7 +145,7 @@ int db_init(const char *db_path) {
                                           "last_modified", "auto_filename",
                                           "auth_user", "auth_password",
                                           "queue_id", "schedule_paused",
-                                          "category_id", "requires_browser_context"};
+                                          "category_id", "requires_browser_context", "media_kind"};
   static const char *migration_types[] = {"TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "INTEGER DEFAULT 0", "INTEGER DEFAULT 0",
@@ -153,7 +155,8 @@ int db_init(const char *db_path) {
                                           "INTEGER DEFAULT 1 REFERENCES queues(id) ON DELETE SET NULL",
                                           "INTEGER NOT NULL DEFAULT 0",
                                           "INTEGER NOT NULL DEFAULT 1 REFERENCES categories(id)",
-                                          "INTEGER NOT NULL DEFAULT 0"};
+                                          "INTEGER NOT NULL DEFAULT 0",
+                                          "INTEGER NOT NULL DEFAULT 0 CHECK(media_kind BETWEEN 0 AND 3)"};
 
   char *migration_error = NULL;
   /* SQLite requires a NULL default when adding REFERENCES with FK checks
@@ -263,7 +266,7 @@ int db_init(const char *db_path) {
   }
   sqlite3_finalize(fk_check);
 
-  rc = sqlite3_exec(g_db, "PRAGMA user_version = 10; COMMIT;", NULL, NULL,
+  rc = sqlite3_exec(g_db, "PRAGMA user_version = 11; COMMIT;", NULL, NULL,
                     &migration_error);
   if (rc != SQLITE_OK) {
     LOG_ERROR("could not commit database migration: %s",
@@ -518,9 +521,10 @@ int db_delete_download(uint32_t id, int delete_file) {
 
   int result = -1;
   char *path = NULL;
+  int media_kind = DOWNLOAD_MEDIA_NONE;
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db,
-                         "SELECT status, dest_path FROM downloads WHERE id = ?",
+                         "SELECT status, dest_path, media_kind FROM downloads WHERE id = ?",
                          -1, &stmt, NULL) != SQLITE_OK)
     goto rollback;
   sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id);
@@ -533,6 +537,7 @@ int db_delete_download(uint32_t id, int delete_file) {
     goto rollback;
   const char *status = (const char *)sqlite3_column_text(stmt, 0);
   const char *stored_path = (const char *)sqlite3_column_text(stmt, 1);
+  media_kind = sqlite3_column_int(stmt, 2);
   if (status && strcmp(status, "ACTIVE") == 0) {
     result = 1;
     goto rollback;
@@ -548,6 +553,7 @@ int db_delete_download(uint32_t id, int delete_file) {
   if (sqlite3_exec(g_db, "COMMIT;", NULL, NULL, NULL) != SQLITE_OK)
     goto rollback;
   result = 0;
+  if (media_kind == DOWNLOAD_MEDIA_HLS) hls_discard_state(path);
   if (delete_file && unlink(path) != 0)
     LOG_WARN("could not delete file for download %u (%s): %s", id, path,
              strerror(errno));
@@ -799,8 +805,8 @@ static int insert_download(uint32_t id, const char *url,
       "(id, url, dest_path, status, created_at, cookie, referrer, "
       "extra_headers, expected_sha256, speed_limit_bps, reserved_file, "
       "auto_filename, auth_user, auth_password, queue_id, category_id, "
-      "requires_browser_context) "
-      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+      "requires_browser_context, media_kind) "
+      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
     LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
@@ -828,6 +834,7 @@ static int insert_download(uint32_t id, const char *url,
                      opts && opts->queue_id ? (sqlite3_int64)opts->queue_id : 1);
   sqlite3_bind_int64(stmt, 15, (sqlite3_int64)category.id);
   sqlite3_bind_int(stmt, 16, ephemeral ? 1 : 0);
+  sqlite3_bind_int(stmt, 17, opts ? (int)opts->media_kind : 0);
 
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
@@ -1267,7 +1274,7 @@ int db_restore_queue(void) {
                     "speed_limit_bps, reserved_file, auto_filename, etag, "
                     "last_modified, auth_user, auth_password, "
                     "COALESCE(queue_id,1), created_at, schedule_paused, "
-                    "requires_browser_context "
+                    "requires_browser_context, media_kind "
                     "FROM downloads WHERE status != 'DONE'";
 
   sqlite3_stmt *stmt = NULL;
@@ -1289,6 +1296,7 @@ int db_restore_queue(void) {
     d->created_at = (time_t)sqlite3_column_int64(stmt, 18);
     d->schedule_paused = sqlite3_column_int(stmt, 19) != 0;
     d->requires_browser_context = sqlite3_column_int(stmt, 20) != 0;
+    d->media_kind = (DownloadMediaKind)sqlite3_column_int(stmt, 21);
 
     const char *url = (const char *)sqlite3_column_text(stmt, 1);
     const char *path = (const char *)sqlite3_column_text(stmt, 2);

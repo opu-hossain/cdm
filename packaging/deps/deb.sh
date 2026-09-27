@@ -5,5 +5,5 @@ sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
     build-essential cmake pkg-config \
     libnotify-dev libsdl2-dev libepoxy-dev libgl1-mesa-dev \
-    libcurl4-openssl-dev libsqlite3-dev \
+    libcurl4-openssl-dev libsqlite3-dev libssl-dev \
     libcriterion-dev python3

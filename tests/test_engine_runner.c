@@ -1,5 +1,6 @@
 #include "../src/core/queue_manager.h"
 #include "../src/engine/engine_runner.h"
+#include "../src/engine/hls.h"
 #include "../src/engine/worker_pool.h"
 #include "../src/persistence/db.h"
 #include "../src/platform/curl_client.h"
@@ -29,6 +30,26 @@ static void fill_file(const char *path, char value, uint64_t length) {
     cr_assert_eq(pwrite(fd, block, sizeof(block), (off_t)offset),
                  (ssize_t)sizeof(block));
   close(fd);
+}
+
+/* Keep this coordinator unit test isolated from the real HLS/curl backend.
+ * The process-restart HTTP fixture tests the full HLS implementation. */
+static int hls_calls;
+int hls_run_download(Download *d) {
+  cr_assert_eq(d->media_kind, DOWNLOAD_MEDIA_HLS);
+  hls_calls++;
+  return -1;
+}
+void hls_discard_state(const char *destination) { (void)destination; }
+
+Test(engine_runner, hls_dispatch_preserves_lost_context_guard) {
+  Download d = {.media_kind = DOWNLOAD_MEDIA_HLS};
+  hls_calls = 0;
+  cr_assert_eq(engine_run_download(&d), -1);
+  cr_assert_eq(hls_calls, 1);
+  d.requires_browser_context = true;
+  cr_assert_eq(engine_run_download(&d), -5);
+  cr_assert_eq(hls_calls, 1);
 }
 
 /* Mocks for external dependencies */
