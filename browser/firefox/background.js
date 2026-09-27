@@ -151,6 +151,20 @@ function connectHost() {
   return port;
 }
 
+async function automaticAllowed(item) {
+  try {
+    const stored = await browser.storage.sync.get("interceptionFilters");
+    const reason = CdmFilters.reason(item, CdmFilters.normalize(stored.interceptionFilters));
+    if (!reason) return true;
+    browser.action.setTitle({title: `cdm: left in browser (${reason})`});
+  } catch (_) {
+    browser.action.setTitle({title: "cdm: left in browser because filters could not be loaded"});
+  }
+  browser.action.setBadgeBackgroundColor({color: "#687785"});
+  browser.action.setBadgeText({text: "SKIP"});
+  return false;
+}
+
 async function offerDownload(item, url) {
   const requestId = crypto.randomUUID();
   const filename = (item.filename || "").split(/[\\/]/).pop() || "";
@@ -180,6 +194,7 @@ async function offerDownload(item, url) {
 browser.downloads.onCreated.addListener(async item => {
   const url = item.finalUrl || item.url || "";
   if (!/^https?:\/\//i.test(url) || item.state !== "in_progress") return;
+  if (!await automaticAllowed(item)) return;
   if (!await offerDownload(item, url)) return;
   browser.downloads.cancel(item.id).catch(error => {
     showError(`could not cancel browser download: ${error.message}`);

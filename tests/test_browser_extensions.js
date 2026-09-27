@@ -17,6 +17,8 @@ async function verify(file, globalName, expectedBrowser) {
   const canceled = [];
   const badges = [];
   let granted = true;
+  let filterSettings;
+  let storageFails = false;
   let cookieReads = 0;
   let cookieRows = [{name: "session", value: "fixture"}];
   const permissionRequests = [];
@@ -26,6 +28,10 @@ async function verify(file, globalName, expectedBrowser) {
     onDisconnect: { addListener(listener) { disconnectListener = listener; } }
   };
   const api = {
+    storage: {sync: {get() {
+      return storageFails ? Promise.reject(new Error("fixture storage failure"))
+        : Promise.resolve({interceptionFilters: filterSettings});
+    }}},
     downloads: {
       onCreated: { addListener(listener) { downloadListener = listener; } },
       cancel(id) { canceled.push(id); return Promise.resolve(); }
@@ -63,9 +69,15 @@ async function verify(file, globalName, expectedBrowser) {
   const context = {
     [globalName]: api,
     crypto: { randomUUID: () => "browser-test-request" },
-    console, URL, TextEncoder
+    console, URL, TextEncoder,
+    importScripts(name) {
+      vm.runInContext(fs.readFileSync(path.join(path.dirname(file), name), "utf8"), sandbox);
+    }
   };
-  vm.runInNewContext(fs.readFileSync(file, "utf8"), context);
+  const sandbox = vm.createContext(context);
+  if (globalName === "browser")
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(file), "filters.js"), "utf8"), sandbox);
+  vm.runInContext(fs.readFileSync(file, "utf8"), sandbox);
   assert.equal(typeof downloadListener, "function");
   assert.equal(typeof actionListener, "function");
   assert.equal(typeof headerListener, "function");
@@ -180,6 +192,105 @@ async function verify(file, globalName, expectedBrowser) {
   nativeListener({ type: "offer_registered", request_id: "browser-test-request" });
   assert.equal(badges.at(-1), "ON");
   assert.equal(typeof disconnectListener, "function");
+  async function automatic(item, expected) {
+    const before = messages.length;
+    const cancels = canceled.length;
+    await downloadListener({id: 30, state: "in_progress",
+      url: "https://example.invalid/file.zip", totalBytes: 128, ...item});
+    assert.equal(messages.length - before, expected ? 1 : 0, JSON.stringify(item));
+    assert.equal(canceled.length - cancels, expected ? 1 : 0);
+    if (!expected) assert.equal(badges.at(-1), "SKIP");
+  }
+  filterSettings = {minSizeBytes: 128};
+  await automatic({totalBytes: 127}, false);
+  await automatic({totalBytes: 128}, true);
+  await automatic({totalBytes: -1}, false);
+  await automatic({totalBytes: 0}, false);
+  filterSettings = {extensionsAllow: [".ZIP", "tar.gz"], mimeAllow: ["application/pdf"],
+    extensionsDeny: ["exe"], mimeDeny: ["video/*"]};
+  await automatic({filename: "file.ZIP"}, true);
+  await automatic({url: "https://example.invalid/file%2Etar.gz?ignore=.exe"}, true);
+  await automatic({filename: "file.pdf", mime: "Application/PDF; charset=utf-8"}, true);
+  await automatic({filename: "file.exe", mime: "application/pdf"}, false);
+  await automatic({filename: "file.zip", mime: "video/mp4"}, false);
+  await automatic({filename: "file.txt", mime: "text/plain"}, false);
+  const reads = cookieReads;
+  filterSettings = {minSizeBytes: 1000000, extensionsDeny: ["zip"]};
+  await automatic({}, false);
+  assert.equal(cookieReads, reads, "skipped downloads must not collect context");
+  const manual = messages.length;
+  await menuListener({menuItemId: "cdm-download-link",
+    linkUrl: "https://example.invalid/explicit.zip"}, {});
+  assert.equal(messages.length, manual + 1, "manual choices bypass filters");
+  storageFails = true;
+  await automatic({}, false);
+  storageFails = false;
+  filterSettings = {minSizeBytes: -1};
+  await automatic({}, false);
+  filterSettings = undefined;
+  await automatic({totalBytes: -1}, true);
+}
+
+async function verifyOptions(file, globalName) {
+  const directory = path.dirname(file);
+  const elements = {};
+  for (const id of ["filters", "status", "save", "minSizeBytes", "extensionsAllow",
+                    "extensionsDeny", "mimeAllow", "mimeDeny"])
+    elements[id] = {value: "", textContent: "", disabled: false};
+  let submit;
+  let saved;
+  let failSave = false;
+  elements.filters.addEventListener = (name, listener) => {
+    assert.equal(name, "submit"); submit = listener;
+  };
+  const context = vm.createContext({TextEncoder, URL,
+    document: {getElementById(id) { assert(elements[id], id); return elements[id]; }},
+    [globalName]: {storage: {sync: {
+      get() { return Promise.resolve({interceptionFilters: {minSizeBytes: 7,
+          extensionsAllow: ["PDF"]}}); },
+      set(value) { if (failSave) return Promise.reject(new Error("fixture quota failure"));
+        saved = JSON.parse(JSON.stringify(value)); return Promise.resolve(); }
+    }}}
+  });
+  vm.runInContext(fs.readFileSync(path.join(directory, "filters.js"), "utf8"), context);
+  vm.runInContext(fs.readFileSync(path.join(directory, "options.js"), "utf8"), context);
+  await new Promise(setImmediate);
+  assert.equal(elements.minSizeBytes.value, "7");
+  assert.equal(elements.extensionsAllow.value, "pdf");
+  assert.equal(elements.save.disabled, false);
+  elements.minSizeBytes.value = "128";
+  elements.extensionsAllow.value = ".ZIP, zip, tar.gz";
+  elements.mimeDeny.value = "VIDEO/*";
+  await submit({preventDefault() {}});
+  assert.deepEqual(saved.interceptionFilters, {minSizeBytes: 128,
+    extensionsAllow: ["zip", "tar.gz"], extensionsDeny: [],
+    mimeAllow: [], mimeDeny: ["video/*"]});
+  const previous = saved;
+  for (const invalid of ["", "-1", "1.5", "9007199254740992"]) {
+    elements.minSizeBytes.value = invalid;
+    await submit({preventDefault() {}});
+    assert.equal(saved, previous);
+    assert.match(elements.status.textContent, /whole number/);
+  }
+  elements.minSizeBytes.value = "0";
+  elements.mimeDeny.value = "regex:.*";
+  await submit({preventDefault() {}});
+  assert.equal(saved, previous);
+  assert.match(elements.status.textContent, /MIME/);
+  elements.mimeDeny.value = "";
+  failSave = true;
+  await submit({preventDefault() {}});
+  assert.match(elements.status.textContent, /quota failure/);
+  assert.equal(elements.save.disabled, false);
+  const filters = context.CdmFilters;
+  assert.throws(() => filters.normalize({extensionsAllow: Array(65).fill("zip")}), /64/);
+  assert.throws(() => filters.normalize({mimeAllow: [3]}), /text/);
+  assert.throws(() => filters.normalize({extensionsDeny: ["*"]}), /extension/);
+  assert.throws(() => filters.normalize({mimeDeny: ["x".repeat(129) + "/pdf"]}), /too long/);
+  assert.equal(filters.reason({url: "https://example.invalid/a", mime: "text/plain"},
+    filters.normalize({mimeAllow: ["*/*"]})), "");
+  assert.notEqual(filters.reason({url: "https://example.invalid/a"},
+    filters.normalize({mimeAllow: ["*/*"]})), "");
 }
 
 for (const file of [process.argv[2], process.argv[3]]) {
@@ -187,6 +298,7 @@ for (const file of [process.argv[2], process.argv[3]]) {
     path.join(path.dirname(file), "manifest.json"), "utf8"));
   assert(manifest.permissions.includes("activeTab"));
   assert(manifest.permissions.includes("contextMenus"));
+  assert(manifest.permissions.includes("storage"));
   assert.equal(manifest.options_ui.page, "options.html");
   assert(fs.existsSync(path.join(path.dirname(file), "options.html")));
   assert.deepEqual(manifest.optional_permissions, ["cookies", "webRequest"]);
@@ -194,5 +306,7 @@ for (const file of [process.argv[2], process.argv[3]]) {
 }
 Promise.all([
   verify(process.argv[2], "chrome", "chromium"),
-  verify(process.argv[3], "browser", "firefox")
+  verify(process.argv[3], "browser", "firefox"),
+  verifyOptions(process.argv[2], "chrome"),
+  verifyOptions(process.argv[3], "browser")
 ]).catch(error => { console.error(error); process.exitCode = 1; });

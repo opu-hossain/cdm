@@ -948,3 +948,10 @@ Completed: HTTP(S) link/page menus reuse offer/consent flow without browser canc
 Verification: test-first Node mocks cover menu registration/update, page/link targets, unsupported schemes, consent and incognito; archive smoke and full build/CTest 33/33 passed.
 Open questions: installed-browser menu/visual smoke UNKNOWN; Phase 2 TSan blocker remains. All task code committed; pre-existing user files left unstaged; no push.
 Next: 3.2.2 automatic interception size/type filters.
+
+## 2026-09-28 — Codex, task 3.2.2
+Branch: `cdm`; commit: `feat(browser): add size and type interception filters`.
+Completed: sync-backed byte minimum and extension/MIME lists, deny precedence, explicit-offer bypass, SKIP badge, and validated options forms; user chose unknown-size bypass when a minimum is set.
+Verification: test-first Node mocks cover filtering, consent omission, persistence, normalization, and failed writes; bundle smoke and full build/CTest 33/33 pass with no new warnings.
+Open questions: installed-browser visual smoke UNKNOWN; existing Phase 2 TSan runner blocker remains.
+Next: 3.2.3 hostname exclusions and native-host configuration.

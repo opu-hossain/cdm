@@ -1,3 +1,4 @@
+importScripts("filters.js");
 const HOST_NAME = "org.cdm.browser";
 let hostPort = null;
 const pending = new Map();
@@ -157,6 +158,20 @@ function supported(item) {
   return /^https?:\/\//i.test(url) && item.state === "in_progress";
 }
 
+async function automaticAllowed(item) {
+  try {
+    const stored = await chrome.storage.sync.get("interceptionFilters");
+    const reason = CdmFilters.reason(item, CdmFilters.normalize(stored.interceptionFilters));
+    if (!reason) return true;
+    chrome.action.setTitle({title: `cdm: left in browser (${reason})`});
+  } catch (_) {
+    chrome.action.setTitle({title: "cdm: left in browser because filters could not be loaded"});
+  }
+  chrome.action.setBadgeBackgroundColor({color: "#687785"});
+  chrome.action.setBadgeText({text: "SKIP"});
+  return false;
+}
+
 async function offerDownload(item, url) {
   const requestId = crypto.randomUUID();
   const filename = (item.filename || "").split(/[\\/]/).pop() || "";
@@ -184,7 +199,7 @@ async function offerDownload(item, url) {
 }
 
 chrome.downloads.onCreated.addListener(async item => {
-  if (!supported(item)) return;
+  if (!supported(item) || !await automaticAllowed(item)) return;
   if (!await offerDownload(item, item.finalUrl || item.url)) return;
   // MV3 observes this event after the browser starts the download.
   // Cancellation is best effort and can leave a partial browser file.

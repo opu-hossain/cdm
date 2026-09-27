@@ -47,7 +47,7 @@ with the user; skip to Phase 2 in the meantime.
 - [x] **3.1.3** Native host passes context — **S** *after 3.1.1* — extend offer JSON, enforce size limits
 - [x] **3.1.4** Daemon applies context — **S**, but verifier must specifically check the "memory-only, cleared after finalize, never logged" requirement against the design doc before approving
 - [x] **3.2.1** Context menu — **S** — JS, mechanical
-- [ ] **3.2.2** Filters — **S** — JS, mechanical, test cases implied by the spec
+- [x] **3.2.2** Filters — **S** — JS, mechanical, test cases implied by the spec
 - [ ] **3.2.3** Site exclusions — **S** — JS, mechanical
 - [ ] **3.3.1** Link refresh — **S** — new IPC message reusing the existing probe path
 - [ ] **3.4.1** Installer support for Edge/Brave/Opera/Vivaldi — **L** — plan requires searching for current per-browser Linux config paths; research-heavy, mechanical once found

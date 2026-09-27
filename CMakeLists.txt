@@ -264,6 +264,8 @@ add_custom_target(browser_extension_validate ALL
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ValidateBrowserExtensions.cmake"
     DEPENDS browser/chromium/manifest.json browser/chromium/service_worker.js
             browser/firefox/manifest.json browser/firefox/background.js
+            browser/chromium/filters.js browser/firefox/filters.js
+            browser/chromium/options.js browser/firefox/options.js
     VERBATIM
 )
 
@@ -285,6 +287,8 @@ foreach(_browser IN ITEMS chromium firefox)
                 browser/${_browser}/${_browser_script}
                 browser/${_browser}/README.md
                 browser/${_browser}/options.html
+                browser/${_browser}/filters.js
+                browser/${_browser}/options.js
                 cmake/BundleBrowserExtension.py
         VERBATIM
     )
