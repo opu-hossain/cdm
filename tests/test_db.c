@@ -291,7 +291,7 @@ Test(db, version_four_fixture_migrates_to_named_queues) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 11);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 12);
   sqlite3_finalize(statement);
   cr_assert_eq(sqlite3_prepare_v2(reader,
       "SELECT name,extensions,default_dir FROM categories WHERE id=1",
@@ -391,7 +391,7 @@ Test(db, version_five_migrates_and_categories_round_trip) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 11);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 12);
   sqlite3_finalize(statement);
   sqlite3_close(reader);
   db_close();
@@ -426,7 +426,7 @@ Test(db, legacy_schema_migrates_transactionally) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 11);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 12);
   sqlite3_finalize(statement);
 
   cr_assert_eq(sqlite3_prepare_v2(
@@ -489,4 +489,16 @@ Test(db, automatic_filename_mode_survives_restart) {
   queue_manager_remove(81);
   db_close();
   unlink(path);
+}
+
+Test(db, media_completion_persists_and_deletes_companion) {
+ char directory[]="/tmp/cdm-media-db-XXXXXX";cr_assert_not_null(mkdtemp(directory));
+ char video[256],audio[256];int n=snprintf(video,sizeof(video),"%s/video.mp4",directory);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(video));
+ n=snprintf(audio,sizeof(audio),"%s/audio.m4a",directory);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(audio));
+ FILE *f=fopen(video,"wb");cr_assert_not_null(f);fclose(f);f=fopen(audio,"wb");cr_assert_not_null(f);fclose(f);
+ RequestOptions options={.media_kind=DOWNLOAD_MEDIA_DASH};
+ cr_assert_eq(db_insert_download(404,"https://example.invalid/main.mpd",video,&options),0);
+ cr_assert_eq(db_complete_media_outputs(404,video,audio,20),0);
+ DbDownloadRow row={0};cr_assert_eq(db_list_all_downloads(&row,1),1);cr_assert_str_eq(row.status,"DONE");cr_assert_eq(row.total_size,20);
+ cr_assert_eq(db_delete_download(404,1),0);cr_assert_eq(access(video,F_OK),-1);cr_assert_eq(access(audio,F_OK),-1);rmdir(directory);
 }

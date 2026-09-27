@@ -135,16 +135,11 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
                               int daemon) {
   nk_layout_row_dynamic(ctx, 28, 1);
   nk_label(ctx, "Review download", NK_TEXT_LEFT);
-  bool playlist = state->media_kind == IPC_BROWSER_MEDIA_DASH;
   if (state->media_kind) {
     nk_layout_row_dynamic(ctx, 18, 1);
     nk_label_colored(ctx, state->media_kind == IPC_BROWSER_MEDIA_HLS ? "Media: HLS" :
                          state->media_kind == IPC_BROWSER_MEDIA_DASH ? "Media: DASH" :
                          "Media: direct video", NK_TEXT_LEFT, MUTED);
-    if (playlist) {
-      nk_layout_row_dynamic(ctx, 18, 1);
-      nk_label_colored(ctx, "DASH downloading is not available yet.", NK_TEXT_LEFT, MUTED);
-    }
   }
   nk_layout_row_dynamic(ctx, 18, 1);
   nk_label_colored(ctx, "Download URL", NK_TEXT_LEFT, MUTED);
@@ -206,7 +201,7 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
     state->close = true;
   }
   nk_layout_row_push(ctx, 97);
-  if (!playlist && primary_button(ctx, "Download")) {
+  if (primary_button(ctx, "Download")) {
     if (!filename_valid(state->filename) || !state->folder[0] ||
         !path_join(state->folder, state->filename, state->full_path,
                    sizeof(state->full_path))) {
@@ -488,12 +483,17 @@ int run_browser_popup(uint32_t offer_id) {
     if (prefix + sizeof(".ts") <= sizeof(state.filename))
       memcpy(state.filename + prefix, ".ts", sizeof(".ts"));
   }
+  if (state.media_kind == IPC_BROWSER_MEDIA_DASH) {
+    char *extension = strrchr(state.filename, '.');
+    size_t prefix = extension ? (size_t)(extension - state.filename) : strlen(state.filename);
+    if (prefix + sizeof(".mp4") <= sizeof(state.filename))
+      memcpy(state.filename + prefix, ".mp4", sizeof(".mp4"));
+  }
   snprintf(state.folder, sizeof(state.folder), "%s",
            config_get_default_download_dir());
   file_ensure_directory(state.folder);
   int height = state.context_flags ? 418 : 370;
   if (state.media_kind) height += 24;
-  if (state.media_kind == IPC_BROWSER_MEDIA_DASH) height += 24;
   GuiSdlBackendConfig settings = {.width = 480, .height = height,
                                   .title = "cdm — Browser download",
                                   .font_size = 13};

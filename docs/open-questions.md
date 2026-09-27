@@ -195,3 +195,16 @@ SegmentList and inherited SegmentTemplate Number/Time addressing. Dynamic,
 DRM, SegmentBase, byte ranges/indexes, multiple BaseURL choices, external
 xlink/xml:base, nonzero period start/eptDelta and calendar ISO durations are
 rejected explicitly. Downloader/merge wiring is task 4.3.2.
+
+## Task 4.3.2 — Dispatch, merge and retained-output scope
+
+Resolved: user approved engine/browser dispatch, two-input ffmpeg spawning,
+cleanup/tests and persistence of the retained companion audio path on
+2026-09-28. SQLite v12 companion_path is internal; raw wire structs are unchanged.
+DASH reuses HLS whole-file asset jobs and private validator/hash resume state.
+Successful merge publishes one unique MP4; missing/failed ffmpeg publishes
+native video/audio separately, atomically records both paths, and keeps them.
+A supplied checksum applies to the final primary file (merged when available).
+TODO(platform): secure DASH staging/publication needs a Windows implementation.
+The static parser restrictions from 4.3.1 also apply to the downloader; companion
+path display in the GUI/CLI and crash-orphan staging discovery remain future work.

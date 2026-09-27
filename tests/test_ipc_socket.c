@@ -37,7 +37,7 @@ TestSuite(ipc, .init = setup_ipc, .fini = teardown_ipc);
 static atomic_bool browser_server_running;
 static int browser_server_thread(void *unused);
 
-Test(ipc, browser_media_metadata_preserves_raw_offer_and_blocks_dash) {
+Test(ipc, browser_media_metadata_preserves_raw_offer) {
   cr_assert_eq(ipc_server_start(), 0);
   atomic_store(&browser_server_running, true);
   thrd_t server;
@@ -990,4 +990,19 @@ Test(ipc, refresh_url_refuses_active_and_missing_context_without_desync) {
   ipc_client_disconnect(client);
   queue_manager_remove(id);
   unsetenv("DOWNLOADMGR_ROOT");
+}
+
+Test(ipc, dash_confirmation_persists_media_kind) {
+ char directory[]="/tmp/cdm-dash-ipc-XXXXXX";cr_assert_not_null(mkdtemp(directory));
+ cr_assert_eq(setenv("DOWNLOADMGR_ROOT",directory,1),0);cr_assert_eq(db_init(":memory:"),0);cr_assert_eq(ipc_server_start(),0);
+ atomic_store(&browser_server_running,true);thrd_t server;cr_assert_eq(thrd_create(&server,browser_server_thread,NULL),thrd_success);
+ int client=ipc_client_connect_compatible(-1,NULL);cr_assert_geq(client,0);
+ const char json[]="{\"request_id\":\"dash-confirm\",\"url\":\"https://example.invalid/main.mpd\",\"kind\":\"dash\"}";
+ MsgHeader header={.length=sizeof(json)-1,.type=MSG_BROWSER_OFFER_V2};cr_assert_eq(ipc_write_exact(client,&header,sizeof(header)),0);cr_assert_eq(ipc_write_exact(client,json,header.length),0);
+ IpcBrowserOffer offer={0};cr_assert_eq(ipc_read_exact(client,&offer,sizeof(offer)),0);
+ char path[256];int n=snprintf(path,sizeof(path),"%s/output.mp4",directory);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(path));
+ IpcAddResponse response={0};cr_assert_eq(ipc_browser_confirm_v2(client,offer.offer_id,path,&response),0);
+ Download *d=queue_manager_find_by_id(response.id);cr_assert_not_null(d);cr_assert_eq(d->media_kind,DOWNLOAD_MEDIA_DASH);
+ queue_manager_remove(response.id);cr_assert_eq(db_restore_queue(),0);d=queue_manager_find_by_id(response.id);cr_assert_not_null(d);cr_assert_eq(d->media_kind,DOWNLOAD_MEDIA_DASH);queue_manager_remove(response.id);
+ ipc_client_disconnect(client);atomic_store(&browser_server_running,false);thrd_join(server,NULL);ipc_server_stop();db_close();unlink(path);unsetenv("DOWNLOADMGR_ROOT");rmdir(directory);
 }

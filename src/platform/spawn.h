@@ -39,6 +39,9 @@ int spawn_ffmpeg_remux(const char *input, const char *output,
                        const _Atomic bool *cancel, const _Atomic bool *pause,
                        int timeout_sec);
 
+int spawn_ffmpeg_merge(const char *video, const char *audio, const char *output,
+                       const _Atomic bool *cancel, const _Atomic bool *pause, int timeout_sec);
+
 /* Launch an explicitly enabled queue action without an implicit shell. */
 int spawn_post_action(const char *action, const char *argument);
 

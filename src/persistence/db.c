@@ -3,6 +3,7 @@
 
 #include "db.h"
 #include "../engine/hls.h"
+#include "../engine/dash.h"
 
 #include "../core/queue_manager.h"
 #include "../utils/log.h"
@@ -119,7 +120,8 @@ int db_init(const char *db_path) {
       "  queue_id INTEGER DEFAULT 1 REFERENCES queues(id) ON DELETE SET NULL,"
       "  category_id INTEGER NOT NULL DEFAULT 1 REFERENCES categories(id),"
       "  requires_browser_context INTEGER NOT NULL DEFAULT 0,"
-      "  media_kind INTEGER NOT NULL DEFAULT 0 CHECK(media_kind BETWEEN 0 AND 3)"
+      "  media_kind INTEGER NOT NULL DEFAULT 0 CHECK(media_kind BETWEEN 0 AND 3),"
+      "  companion_path TEXT NOT NULL DEFAULT ''"
       ");"
       ""
       "CREATE TABLE IF NOT EXISTS chunks ("
@@ -145,7 +147,7 @@ int db_init(const char *db_path) {
                                           "last_modified", "auto_filename",
                                           "auth_user", "auth_password",
                                           "queue_id", "schedule_paused",
-                                          "category_id", "requires_browser_context", "media_kind"};
+                                          "category_id", "requires_browser_context", "media_kind", "companion_path"};
   static const char *migration_types[] = {"TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "INTEGER DEFAULT 0", "INTEGER DEFAULT 0",
@@ -156,7 +158,8 @@ int db_init(const char *db_path) {
                                           "INTEGER NOT NULL DEFAULT 0",
                                           "INTEGER NOT NULL DEFAULT 1 REFERENCES categories(id)",
                                           "INTEGER NOT NULL DEFAULT 0",
-                                          "INTEGER NOT NULL DEFAULT 0 CHECK(media_kind BETWEEN 0 AND 3)"};
+                                          "INTEGER NOT NULL DEFAULT 0 CHECK(media_kind BETWEEN 0 AND 3)",
+                                          "TEXT NOT NULL DEFAULT ''"};
 
   char *migration_error = NULL;
   /* SQLite requires a NULL default when adding REFERENCES with FK checks
@@ -266,7 +269,7 @@ int db_init(const char *db_path) {
   }
   sqlite3_finalize(fk_check);
 
-  rc = sqlite3_exec(g_db, "PRAGMA user_version = 11; COMMIT;", NULL, NULL,
+  rc = sqlite3_exec(g_db, "PRAGMA user_version = 12; COMMIT;", NULL, NULL,
                     &migration_error);
   if (rc != SQLITE_OK) {
     LOG_ERROR("could not commit database migration: %s",
@@ -520,11 +523,11 @@ int db_delete_download(uint32_t id, int delete_file) {
     return -1;
 
   int result = -1;
-  char *path = NULL;
+  char *path = NULL, *companion = NULL;
   int media_kind = DOWNLOAD_MEDIA_NONE;
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db,
-                         "SELECT status, dest_path, media_kind FROM downloads WHERE id = ?",
+                         "SELECT status, dest_path, media_kind, companion_path FROM downloads WHERE id = ?",
                          -1, &stmt, NULL) != SQLITE_OK)
     goto rollback;
   sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id);
@@ -544,6 +547,9 @@ int db_delete_download(uint32_t id, int delete_file) {
   }
   if (!stored_path || !(path = strdup(stored_path)))
     goto rollback;
+  const char *stored_companion = (const char *)sqlite3_column_text(stmt, 3);
+  companion = strdup(stored_companion ? stored_companion : "");
+  if (!companion) goto rollback;
   sqlite3_finalize(stmt);
   stmt = NULL;
 
@@ -554,9 +560,13 @@ int db_delete_download(uint32_t id, int delete_file) {
     goto rollback;
   result = 0;
   if (media_kind == DOWNLOAD_MEDIA_HLS) hls_discard_state(path);
+  if (media_kind == DOWNLOAD_MEDIA_DASH) dash_discard_state(path);
+  if (delete_file && companion[0] && unlink(companion) != 0)
+    LOG_WARN("could not delete companion audio for download %u", id);
   if (delete_file && unlink(path) != 0)
     LOG_WARN("could not delete file for download %u (%s): %s", id, path,
              strerror(errno));
+  free(companion);
   free(path);
   return result;
 
@@ -564,6 +574,7 @@ rollback:
   if (stmt)
     sqlite3_finalize(stmt);
   sqlite3_exec(g_db, "ROLLBACK;", NULL, NULL, NULL);
+  free(companion);
   free(path);
   return result;
 }
@@ -861,17 +872,21 @@ int db_insert_reserved_download_auto(uint32_t id, const char *url,
   return insert_download(id, url, dest_path, opts, true, true);
 }
 
-int db_update_media_output(uint32_t id, const char *path, uint64_t size) {
-  if (!db_ready() || !path || strlen(path) >= 1024 || size > INT64_MAX) return -1;
-  const char *sql = "UPDATE downloads SET dest_path=?, total_size=?, auto_filename=0, status='DONE' WHERE id=?";
+int db_complete_media_outputs(uint32_t id, const char *path, const char *companion, uint64_t size) {
+  if (!db_ready() || !path || !companion || strlen(path) >= 1024 || strlen(companion) >= 1024 || size > INT64_MAX) return -1;
+  const char *sql = "UPDATE downloads SET dest_path=?, companion_path=?, total_size=?, auto_filename=0, status='DONE' WHERE id=?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
   sqlite3_bind_text(stmt, 1, path, -1, SQLITE_STATIC);
-  sqlite3_bind_int64(stmt, 2, (sqlite3_int64)size);
-  sqlite3_bind_int64(stmt, 3, (sqlite3_int64)id);
+  sqlite3_bind_text(stmt, 2, companion, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 3, (sqlite3_int64)size);
+  sqlite3_bind_int64(stmt, 4, (sqlite3_int64)id);
   int result = sqlite3_step(stmt), changed = sqlite3_changes(g_db);
   sqlite3_finalize(stmt);
   return result == SQLITE_DONE && changed == 1 ? 0 : -1;
+}
+int db_update_media_output(uint32_t id, const char *path, uint64_t size) {
+  return db_complete_media_outputs(id, path, "", size);
 }
 
 int db_update_resolved_destination(uint32_t id, const char *dest_path) {

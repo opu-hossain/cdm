@@ -326,6 +326,9 @@ if(BUILD_TESTING)
         downloadmgr_enable_warnings(hls_download_driver)
         downloadmgr_enable_sanitizer(hls_download_driver)
         target_link_libraries(hls_download_driver PRIVATE downloadmgr_core)
+        add_test(NAME test_dash_download COMMAND ${Python3_EXECUTABLE} -B
+                 ${CMAKE_SOURCE_DIR}/tests/test_dash_download.py
+                 $<TARGET_FILE:hls_download_driver>)
         add_test(NAME test_hls_download COMMAND ${Python3_EXECUTABLE} -B
                  ${CMAKE_SOURCE_DIR}/tests/test_hls_download.py
                  $<TARGET_FILE:hls_download_driver>)

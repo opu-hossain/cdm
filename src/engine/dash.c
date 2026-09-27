@@ -703,3 +703,314 @@ done:
   }
   return p.result;
 }
+
+/* DASH shares the HLS whole-file asset pool, hashed resume state, validator
+ * checks and ordered assembly; only manifest interpretation and final mux
+ * differ. */
+#include "../core/queue_manager.h"
+#include "../persistence/db.h"
+#include "../platform/spawn.h"
+#include "../platform/thread.h"
+#include "../utils/config.h"
+#include "../utils/log.h"
+#include "../utils/path.h"
+#include "finalize.h"
+#include "hls.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#ifndef _WIN32
+#include <sys/file.h>
+static bool dash_stopped(Download *d) {
+  return atomic_load(&d->cancel_requested) || atomic_load(&d->pause_requested);
+}
+static bool owned_file(int fd) {
+  struct stat st;
+  return fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) &&
+         st.st_uid == getuid() && st.st_nlink == 1;
+}
+static bool dash_path(const char *base, const char *suffix, char *out,
+                      size_t capacity) {
+  int n = snprintf(out, capacity, "%s%s", base, suffix);
+  return n >= 0 && (size_t)n < capacity;
+}
+static bool owned_directory(const char *path) {
+  struct stat st;
+  return lstat(path, &st) == 0 && S_ISDIR(st.st_mode) &&
+         st.st_uid == getuid() && !(st.st_mode & 077);
+}
+void dash_discard_state(const char *destination) {
+  char dir[1200], path[1300];
+  if (!dash_path(destination, ".dashparts", dir, sizeof(dir)) ||
+      !owned_directory(dir) || !dash_path(dir, "/lock", path, sizeof(path)))
+    return;
+  int lock = open(path, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
+  if (!owned_file(lock) || flock(lock, LOCK_EX | LOCK_NB) != 0) {
+    if (lock >= 0)
+      close(lock);
+    return;
+  }
+  const char *files[] = {"/video.mp4", "/audio.m4a", "/merged.mp4"};
+  for (size_t i = 0; i < 3; i++)
+    if (dash_path(dir, files[i], path, sizeof(path))) {
+      hls_discard_state(path);
+      unlink(path);
+    }
+  if (dash_path(dir, "/lock", path, sizeof(path)))
+    unlink(path);
+  rmdir(dir);
+  flock(lock, LOCK_UN);
+  close(lock);
+}
+static bool reserve_track(const char *path) {
+  int fd = open(path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+  bool ok = owned_file(fd);
+  if (fd >= 0)
+    close(fd);
+  return ok;
+}
+static int download_track(Download *d, const DashTrack *track, const char *path,
+                          const char *fingerprint, uint64_t *bytes) {
+  HlsPlaylist p = {.end_list = true, .segment_count = track->segment_count};
+  p.segments = calloc(p.segment_count, sizeof(*p.segments));
+  if (!p.segments)
+    return -1;
+  if (track->initialization_url[0]) {
+    p.maps = calloc(1, sizeof(*p.maps));
+    if (!p.maps) {
+      hls_playlist_free(&p);
+      return -1;
+    }
+    p.map_count = 1;
+    strcpy(p.maps[0].url, track->initialization_url);
+  }
+  for (size_t i = 0; i < p.segment_count; i++) {
+    strcpy(p.segments[i].url, track->segments[i].url);
+    p.segments[i].sequence = track->segments[i].number;
+    p.segments[i].duration =
+        (double)track->segments[i].duration / track->timescale;
+    p.segments[i].map_index = p.map_count ? 0 : HLS_NO_MAP;
+  }
+  int rc = reserve_track(path)
+               ? hls_run_asset_playlist(d, path, &p, fingerprint, bytes)
+               : -1;
+  hls_playlist_free(&p);
+  return rc;
+}
+static bool publish_track(const char *source, const char *desired,
+                          char *published) {
+  for (int i = 0; i < 1000000; i++) {
+    if (!path_make_unique(desired, published, 1024))
+      return false;
+    if (link(source, published) == 0)
+      return true;
+    if (errno != EEXIST)
+      return false;
+  }
+  return false;
+}
+static bool sync_parent(const char *path) {
+  char parent[1024];
+  if (strlen(path) >= sizeof(parent))
+    return false;
+  strcpy(parent, path);
+  char *slash = strrchr(parent, '/');
+  if (!slash)
+    strcpy(parent, ".");
+  else if (slash == parent)
+    slash[1] = 0;
+  else
+    *slash = 0;
+  int fd = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  bool ok = fd >= 0 && fsync(fd) == 0;
+  if (fd >= 0)
+    close(fd);
+  return ok;
+}
+int dash_run_download(Download *d) {
+  if (d->requires_browser_context &&
+      (!d->request || !d->request->browser_context))
+    return -5;
+  char original[1024], dir[1200], video[1300], audio[1300], merged[1300],
+      lock_path[1300];
+  strcpy(original, d->dest_path);
+  if (!dash_path(original, ".dashparts", dir, sizeof(dir)) ||
+      !dash_path(dir, "/video.mp4", video, sizeof(video)) ||
+      !dash_path(dir, "/audio.m4a", audio, sizeof(audio)) ||
+      !dash_path(dir, "/merged.mp4", merged, sizeof(merged)) ||
+      !dash_path(dir, "/lock", lock_path, sizeof(lock_path)))
+    return -1;
+  int reserved = open(original, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  struct stat claim;
+  if (!d->reserved_file || !owned_file(reserved) ||
+      fstat(reserved, &claim) != 0 || claim.st_size != 0) {
+    if (reserved >= 0)
+      close(reserved);
+    return -3;
+  }
+  if ((mkdir(dir, 0700) != 0 && errno != EEXIST) || !owned_directory(dir)) {
+    close(reserved);
+    return -1;
+  }
+  int lock = open(lock_path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+  if (!owned_file(lock) || flock(lock, LOCK_EX | LOCK_NB) != 0) {
+    if (lock >= 0)
+      close(lock);
+    close(reserved);
+    return -1;
+  }
+  int rc = -1;
+  DashManifest manifest = {0};
+  unsigned char *buffer = malloc(DASH_MAX_MANIFEST_BYTES + 1);
+  char base[DASH_URL_MAX], fingerprint[65], error[128];
+  size_t length = 0;
+  uint64_t vbytes = 0, abytes = 0;
+  if (!buffer || dash_stopped(d))
+    goto finish;
+  rc = hls_fetch_manifest(d, buffer, DASH_MAX_MANIFEST_BYTES, &length, base,
+                          fingerprint);
+  if (rc != 0)
+    goto finish;
+  rc = -1;
+  if (dash_parse((char *)buffer, length, base, &manifest, error,
+                 sizeof(error)) != DASH_OK) {
+    LOG_WARN("DASH download %u: %s", d->id, error);
+    goto finish;
+  }
+  atomic_store(&d->bytes_downloaded, 0);
+  if (manifest.video.present &&
+      (rc = download_track(d, &manifest.video, video, fingerprint, &vbytes)) !=
+          0)
+    goto finish;
+  if (manifest.audio.present &&
+      (rc = download_track(d, &manifest.audio, audio, fingerprint, &abytes)) !=
+          0)
+    goto finish;
+  if (dash_stopped(d)) {
+    rc = -1;
+    goto finish;
+  }
+  const char *primary = manifest.video.present ? video : audio;
+  bool muxed = false;
+  if (spawn_ffmpeg_available() && reserve_track(merged)) {
+    DownloadManagerConfig config;
+    config_get(&config);
+    int status = manifest.video.present && manifest.audio.present
+                     ? spawn_ffmpeg_merge(
+                           video, audio, merged, &d->cancel_requested,
+                           &d->pause_requested, config.transfer_timeout_sec)
+                     : spawn_ffmpeg_remux(primary, merged, &d->cancel_requested,
+                                          &d->pause_requested,
+                                          config.transfer_timeout_sec);
+    int fd = open(merged, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    struct stat st;
+    muxed = status == 0 && owned_file(fd) && fstat(fd, &st) == 0 &&
+            st.st_size > 0 && fsync(fd) == 0;
+    if (fd >= 0)
+      close(fd);
+    if (muxed)
+      primary = merged;
+    else
+      LOG_WARN("DASH download %u: ffmpeg failed (%d); retained tracks", d->id,
+               status);
+  } else
+    LOG_WARN("DASH download %u: ffmpeg unavailable; retained tracks", d->id);
+  if (dash_stopped(d)) {
+    rc = -1;
+    goto finish;
+  }
+  if (d->request && d->request->expected_sha256[0]) {
+    if (engine_finalize(primary, 0, d->request->expected_sha256) != 0) {
+      rc = -2;
+      goto finish;
+    }
+  }
+  uint64_t total = vbytes + abytes;
+  if (muxed) {
+    struct stat st;
+    if (stat(primary, &st) != 0 || st.st_size < 0) {
+      rc = -1;
+      goto finish;
+    }
+    total = (uint64_t)st.st_size;
+  }
+  char desired[1024], published[1024] = "", companion[1024] = "";
+  size_t stem = strlen(original);
+  const char *slash = strrchr(original, '/'), *ext = strrchr(original, '.');
+  if (ext && (!slash || ext > slash))
+    stem = (size_t)(ext - original);
+  const char *suffix = manifest.video.present || muxed ? ".mp4" : ".m4a";
+  if (stem + strlen(suffix) >= sizeof(desired)) {
+    rc = -1;
+    goto finish;
+  }
+  memcpy(desired, original, stem);
+  strcpy(desired + stem, suffix);
+  if (!publish_track(primary, desired, published)) {
+    rc = -1;
+    goto finish;
+  }
+  if (!muxed && manifest.video.present && manifest.audio.present) {
+    if (!dash_path(published, ".audio.m4a", desired, sizeof(desired)) ||
+        !publish_track(audio, desired, companion)) {
+      unlink(published);
+      rc = -1;
+      goto finish;
+    }
+  }
+  if (!sync_parent(published)) {
+    unlink(published);
+    if (companion[0])
+      unlink(companion);
+    rc = -1;
+    goto finish;
+  }
+  struct stat current;
+  bool unchanged = lstat(original, &current) == 0 &&
+                   current.st_dev == claim.st_dev &&
+                   current.st_ino == claim.st_ino && current.st_size == 0;
+  dm_mutex_t *mutex = queue_manager_get_mutex();
+  dm_mutex_lock(mutex);
+  rc = unchanged && !dash_stopped(d)
+           ? db_complete_media_outputs(d->id, published, companion, total)
+           : -1;
+  if (rc == 0) {
+    strcpy(d->dest_path, published);
+    d->total_size = total;
+    d->progress = 1.0f;
+    atomic_store(&d->auto_filename, false);
+    atomic_store(&d->bytes_downloaded, total);
+  }
+  dm_mutex_unlock(mutex);
+  if (rc != 0) {
+    unlink(published);
+    if (companion[0])
+      unlink(companion);
+  } else {
+    if (unlink(original) != 0)
+      LOG_WARN("DASH download %u: could not remove original reservation",
+               d->id);
+  }
+finish:
+  free(buffer);
+  dash_manifest_free(&manifest);
+  close(reserved);
+  flock(lock, LOCK_UN);
+  close(lock);
+  if (rc == 0 || rc == -2 || atomic_load(&d->cancel_requested))
+    dash_discard_state(original);
+  if (rc == -2)
+    unlink(original);
+  return rc;
+}
+#else
+/* TODO(platform): secure DASH staging and publication require a Windows port.
+ */
+int dash_run_download(struct Download *d) {
+  (void)d;
+  return -1;
+}
+void dash_discard_state(const char *destination) { (void)destination; }
+#endif

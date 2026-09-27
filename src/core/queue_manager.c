@@ -3,6 +3,7 @@
 
 #include "queue_manager.h"
 #include "../engine/hls.h"
+#include "../engine/dash.h"
 #include "scheduler.h"
 #include "../persistence/db.h"
 #include "../platform/thread.h"
@@ -72,6 +73,7 @@ static void clear_browser_request(Download *download) {
 static void free_download(Download *download) {
   if (download->media_kind == DOWNLOAD_MEDIA_HLS)
     hls_discard_state(download->dest_path);
+  if (download->media_kind == DOWNLOAD_MEDIA_DASH) dash_discard_state(download->dest_path);
   clear_browser_request(download);
   free(download->request);
   free(download);
@@ -587,6 +589,7 @@ void queue_manager_clear_resume_state(uint32_t id) {
     if (cur->id != id)
       continue;
     if (cur->media_kind == DOWNLOAD_MEDIA_HLS) hls_discard_state(cur->dest_path);
+    if (cur->media_kind == DOWNLOAD_MEDIA_DASH) dash_discard_state(cur->dest_path);
     memset(cur->chunks, 0, sizeof(cur->chunks));
     cur->chunk_count = 0;
     cur->total_size = 0;

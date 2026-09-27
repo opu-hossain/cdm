@@ -67,6 +67,15 @@ void hls_playlist_free(HlsPlaylist *playlist);
 struct Download;
 /* Linux VOD engine; same return convention as engine_run_download. */
 int hls_run_download(struct Download *download);
+/* Shared manifest/asset transfer for DASH: no queue/DB completion or remux.
+ * Uses parent's cancellation/context/progress and retains track resume state
+ * until the caller durably publishes all outputs. Caller owns playlist. */
+int hls_run_asset_playlist(struct Download *download, const char *destination,
+                           const HlsPlaylist *playlist, const char *fingerprint,
+                           uint64_t *bytes);
+int hls_fetch_manifest(struct Download *download, unsigned char *buffer,
+                       size_t capacity, size_t *length, char *base,
+                       char *fingerprint);
 /* Non-active download only; refuses a locked or unowned staging directory. */
 void hls_discard_state(const char *destination);
 #endif

@@ -13,6 +13,7 @@
 #include "../utils/path.h"
 #include "finalize.h"
 #include "hls.h"
+#include "dash.h"
 #include "segmenter.h"
 #include "worker_pool.h"
 
@@ -174,6 +175,8 @@ int engine_run_download(struct Download *d) {
     return -5;
   if (d->media_kind == DOWNLOAD_MEDIA_HLS)
     return hls_run_download(d);
+  if (d->media_kind == DOWNLOAD_MEDIA_DASH)
+    return dash_run_download(d);
 
   if (d->chunk_count > 0 && access(d->dest_path, F_OK) != 0 &&
       errno == ENOENT) {

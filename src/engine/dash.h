@@ -42,4 +42,7 @@ typedef struct {
 DashResult dash_parse(const char *text, size_t length, const char *base_url,
                       DashManifest *out, char *error, size_t error_size);
 void dash_manifest_free(DashManifest *manifest);
+struct Download;
+int dash_run_download(struct Download *download);
+void dash_discard_state(const char *destination);
 #endif

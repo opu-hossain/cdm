@@ -1025,3 +1025,10 @@ Completed: approved system libxml2/build/package scope; bounded pure static MPD 
 Verification: test-first eight Criterion fixtures cover schemes, inheritance, offsets, selection/ties, malformed/hostile XML, URI validation, limits and overflow; full Debug build/CTest 36/36 pass, no new warnings.
 Open questions: supported-layout limits recorded; existing phase gates remain open. Asked for 4.3.2 dispatch/spawn/persistence scope.
 Next: 4.3.2 DASH download and merge. No push.
+
+## 2026-09-28 — Codex, task 4.3.2
+Branch: `cdm`; commit: `feat(engine): dash download and ffmpeg merge`.
+Completed: approved dispatch/persistence scope; reuse HLS asset pool/resume checks, download tracks separately, fixed-argv merge, unique durable publication, SQLite v12 companion path and delete cleanup, DASH popup confirmation.
+Verification: test-first loopback/real-ffmpeg smoke covers merge, missing/failed tool, retained paths, failed-audio restart reuse, pause/cancel and lost context; IPC/DB/coordinator regressions and full Debug build/CTest 37/37 pass, no new warnings.
+Open questions: Windows staging remains TODO(platform); companion path UI and crash-orphan discovery recorded; existing phase gates remain open.
+Next: 4.4.1 optional yt-dlp integration; requested startup/dispatch/IPC/build scope. No push.

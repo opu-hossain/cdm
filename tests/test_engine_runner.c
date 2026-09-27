@@ -41,6 +41,7 @@ int hls_run_download(Download *d) {
   return -1;
 }
 void hls_discard_state(const char *destination) { (void)destination; }
+void dash_discard_state(const char *destination) { (void)destination; }
 
 Test(engine_runner, hls_dispatch_preserves_lost_context_guard) {
   Download d = {.media_kind = DOWNLOAD_MEDIA_HLS};
@@ -52,6 +53,12 @@ Test(engine_runner, hls_dispatch_preserves_lost_context_guard) {
   cr_assert_eq(hls_calls, 1);
 }
 
+int dash_run_download(Download *d) { cr_assert_eq(d->media_kind, DOWNLOAD_MEDIA_DASH); return -7; }
+Test(engine_runner, dash_dispatch_preserves_lost_context_guard) {
+ Download d = {.media_kind = DOWNLOAD_MEDIA_DASH};
+ cr_assert_eq(engine_run_download(&d), -7); d.requires_browser_context = true;
+ cr_assert_eq(engine_run_download(&d), -5);
+}
 /* Mocks for external dependencies */
 int curl_client_head(const char *url, const RequestContext *ctx, FileInfo *out) {
   (void)url;

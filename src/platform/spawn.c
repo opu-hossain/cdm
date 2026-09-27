@@ -69,6 +69,11 @@ int spawn_ffmpeg_remux(const char *input, const char *output,
   return -1;
 }
 
+int spawn_ffmpeg_merge(const char *video, const char *audio, const char *output,
+                       const _Atomic bool *cancel, const _Atomic bool *pause, int timeout_sec) {
+ (void)video;(void)audio;(void)output;(void)cancel;(void)pause;(void)timeout_sec;return -1;
+}
+
 int spawn_post_action(const char *action, const char *argument) {
   (void)action;
   (void)argument;
@@ -345,7 +350,7 @@ static uint64_t monotonic_ms(void) {
   return (uint64_t)time.tv_sec * 1000 + (uint64_t)time.tv_nsec / 1000000;
 }
 
-int spawn_ffmpeg_remux(const char *input, const char *output,
+static int run_ffmpeg(const char *input, const char *audio, const char *output,
                        const _Atomic bool *cancel, const _Atomic bool *pause,
                        int timeout_sec) {
   if (!input || !output || timeout_sec < 1 || !spawn_ffmpeg_available()) return -1;
@@ -354,13 +359,18 @@ int spawn_ffmpeg_remux(const char *input, const char *output,
       "-protocol_whitelist", "file,pipe", "-format_whitelist", "mpegts,mov,aac,mp3",
       "-i", (char *)input, "-c", "copy", "-bsf:a", "aac_adtstoasc", "-f", "mp4",
       (char *)output, NULL};
+  char *merge_argv[] = {ffmpeg_executable, "-nostdin", "-hide_banner", "-v", "error", "-y",
+      "-protocol_whitelist", "file,pipe", "-format_whitelist", "mpegts,mov,aac,mp3",
+      "-i", (char *)input, "-protocol_whitelist", "file,pipe", "-format_whitelist", "mpegts,mov,aac,mp3",
+      "-i", (char *)audio, "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-f", "mp4", (char *)output, NULL};
+  char **chosen_argv = audio ? merge_argv : argv;
   posix_spawn_file_actions_t actions;
   if (posix_spawn_file_actions_init(&actions) != 0) return -1;
   int error = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
   if (!error) error = posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
   if (!error) error = posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
   pid_t pid = -1;
-  if (!error) error = posix_spawn(&pid, ffmpeg_executable, &actions, NULL, argv, environ);
+  if (!error) error = posix_spawn(&pid, ffmpeg_executable, &actions, NULL, chosen_argv, environ);
   posix_spawn_file_actions_destroy(&actions);
   if (error) return -1;
   uint64_t start = monotonic_ms();
@@ -387,6 +397,16 @@ int spawn_ffmpeg_remux(const char *input, const char *output,
   }
   if (result) return result;
   return WIFEXITED(status) ? WEXITSTATUS(status) : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1;
+}
+
+int spawn_ffmpeg_remux(const char *input, const char *output,
+                       const _Atomic bool *cancel, const _Atomic bool *pause, int timeout_sec) {
+  return run_ffmpeg(input, NULL, output, cancel, pause, timeout_sec);
+}
+int spawn_ffmpeg_merge(const char *video, const char *audio, const char *output,
+                       const _Atomic bool *cancel, const _Atomic bool *pause, int timeout_sec) {
+  if (!audio || !*audio) return -1;
+  return run_ffmpeg(video, audio, output, cancel, pause, timeout_sec);
 }
 
 #endif

@@ -1205,9 +1205,13 @@ static int remux_output(Download *d, const char *directory) {
   return 0;
 }
 
-int hls_run_download(Download *d) {
-  char original_destination[sizeof(d->dest_path)];
-  strcpy(original_destination, d->dest_path);
+static int run_asset_playlist(Download *d, const char *destination,
+                              const HlsPlaylist *provided, const char *identity,
+                              uint64_t *output_bytes) {
+  char original_destination[HLS_PATH_MAX];
+  if (!destination || strlen(destination) >= sizeof(original_destination))
+    return -1;
+  strcpy(original_destination, destination);
   const RequestOptions *r = d->request;
   RequestContext context = {
       .cookie = r && r->cookie[0] ? r->cookie : NULL,
@@ -1222,10 +1226,10 @@ int hls_run_download(Download *d) {
   int result = -1, output = -1, lock = -1;
   char state_path[HLS_PATH_MAX], directory[HLS_PATH_MAX],
       lock_path[HLS_PATH_MAX];
-  int n = snprintf(state_path, sizeof(state_path), "%s.hlsstate", d->dest_path);
+  int n = snprintf(state_path, sizeof(state_path), "%s.hlsstate", destination);
   if (n < 0 || (size_t)n >= sizeof(state_path))
     return -1;
-  n = snprintf(directory, sizeof(directory), "%s.hlsparts", d->dest_path);
+  n = snprintf(directory, sizeof(directory), "%s.hlsparts", destination);
   if (n < 0 || (size_t)n >= sizeof(directory))
     return -1;
   n = snprintf(lock_path, sizeof(lock_path), "%s/lock", directory);
@@ -1246,7 +1250,7 @@ int hls_run_download(Download *d) {
       close(lock);
     return -1;
   }
-  output = open(d->dest_path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  output = open(destination, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
   if (!d->reserved_file || !safe_file(output) || fstat(output, &st) != 0) {
     result = -3;
     goto finish;
@@ -1259,50 +1263,74 @@ int hls_run_download(Download *d) {
       goto finish;
     }
   }
-  unsigned char *data = malloc(HLS_MAX_PLAYLIST_BYTES + 1);
-  if (!data)
-    goto finish;
-  char url[HLS_URL_MAX];
-  strcpy(url, d->url);
-  char fingerprint[65] = "";
   HlsPlaylist playlist = {0};
+  char fingerprint[65] = "";
   bool parsed = false;
-  for (int depth = 0; depth < 5; depth++) {
-    HlsBody body = {
-        .data = data, .limit = HLS_MAX_PLAYLIST_BYTES, .download = d};
-    char effective[HLS_URL_MAX], error[128];
-    if (!fetch_body(d, &context, url, &body, effective) ||
-        hls_parse((char *)data, body.size, effective, &playlist, error,
-                  sizeof(error)) != HLS_OK)
-      break;
-    if (playlist.is_master) {
-      strcpy(url, playlist.selected_url);
+  if (provided) {
+    if (!identity || strlen(identity) != 64)
+      goto finish;
+    playlist = *provided;
+    playlist.segments =
+        calloc(provided->segment_count, sizeof(*playlist.segments));
+    playlist.maps = provided->map_count
+                        ? calloc(provided->map_count, sizeof(*playlist.maps))
+                        : NULL;
+    if (!playlist.segments || (provided->map_count && !playlist.maps)) {
       hls_playlist_free(&playlist);
-      continue;
+      goto finish;
     }
-    /* Manifest body and final base URL identify both the selected layout and
-     * relative-resource resolution. Key identity is checked per item on resume.
-     */
-    EVP_MD_CTX *digest = EVP_MD_CTX_new();
-    unsigned char hash[32];
-    unsigned int length = 0;
-    bool ok = digest && EVP_DigestInit_ex(digest, EVP_sha256(), NULL) == 1 &&
-              EVP_DigestUpdate(digest, data, body.size) == 1 &&
-              EVP_DigestUpdate(digest, effective, strlen(effective) + 1) == 1 &&
-              EVP_DigestFinal_ex(digest, hash, &length) == 1 && length == 32;
-    EVP_MD_CTX_free(digest);
-    if (ok) {
-      const char digits[] = "0123456789abcdef";
-      for (size_t i = 0; i < 32; i++) {
-        fingerprint[i * 2] = digits[hash[i] >> 4];
-        fingerprint[i * 2 + 1] = digits[hash[i] & 15];
+    memcpy(playlist.segments, provided->segments,
+           provided->segment_count * sizeof(*playlist.segments));
+    if (provided->map_count)
+      memcpy(playlist.maps, provided->maps,
+             provided->map_count * sizeof(*playlist.maps));
+    strcpy(fingerprint, identity);
+    parsed = true;
+  } else {
+    unsigned char *data = malloc(HLS_MAX_PLAYLIST_BYTES + 1);
+    if (!data)
+      goto finish;
+    char url[HLS_URL_MAX];
+    strcpy(url, d->url);
+    for (int depth = 0; depth < 5; depth++) {
+      HlsBody body = {
+          .data = data, .limit = HLS_MAX_PLAYLIST_BYTES, .download = d};
+      char effective[HLS_URL_MAX], error[128];
+      if (!fetch_body(d, &context, url, &body, effective) ||
+          hls_parse((char *)data, body.size, effective, &playlist, error,
+                    sizeof(error)) != HLS_OK)
+        break;
+      if (playlist.is_master) {
+        strcpy(url, playlist.selected_url);
+        hls_playlist_free(&playlist);
+        continue;
       }
-      fingerprint[64] = '\0';
-      parsed = true;
+      /* Manifest body and final base URL identify both the selected layout and
+       * relative-resource resolution. Key identity is checked per item on
+       * resume.
+       */
+      EVP_MD_CTX *digest = EVP_MD_CTX_new();
+      unsigned char hash[32];
+      unsigned int length = 0;
+      bool ok =
+          digest && EVP_DigestInit_ex(digest, EVP_sha256(), NULL) == 1 &&
+          EVP_DigestUpdate(digest, data, body.size) == 1 &&
+          EVP_DigestUpdate(digest, effective, strlen(effective) + 1) == 1 &&
+          EVP_DigestFinal_ex(digest, hash, &length) == 1 && length == 32;
+      EVP_MD_CTX_free(digest);
+      if (ok) {
+        const char digits[] = "0123456789abcdef";
+        for (size_t i = 0; i < 32; i++) {
+          fingerprint[i * 2] = digits[hash[i] >> 4];
+          fingerprint[i * 2 + 1] = digits[hash[i] & 15];
+        }
+        fingerprint[64] = '\0';
+        parsed = true;
+      }
+      break;
     }
-    break;
+    free(data);
   }
-  free(data);
   if (!parsed || !playlist.end_list) {
     LOG_WARN("HLS download %u requires a supported finite VOD playlist", d->id);
     hls_playlist_free(&playlist);
@@ -1315,7 +1343,8 @@ int hls_run_download(Download *d) {
     goto finish;
   }
   load_state(state_path, fingerprint, saved, count);
-  atomic_store(&d->bytes_downloaded, 0);
+  if (!provided)
+    atomic_store(&d->bytes_downloaded, 0);
   DownloadManagerConfig config;
   config_get(&config);
   uint64_t limit = r ? r->speed_limit_bps : 0;
@@ -1388,20 +1417,20 @@ int hls_run_download(Download *d) {
     char hash[65];
     uint64_t bytes = 0;
     all_ok = all_ok && digest_file(concat, hash, &bytes);
-    if (all_ok && r && r->expected_sha256[0] &&
+    if (all_ok && !provided && r && r->expected_sha256[0] &&
         strcasecmp(hash, r->expected_sha256) != 0) {
       all_ok = false;
       result = -2;
     }
     struct stat current, reserved;
-    all_ok = all_ok && lstat(d->dest_path, &current) == 0 &&
+    all_ok = all_ok && lstat(destination, &current) == 0 &&
              fstat(output, &reserved) == 0 &&
              current.st_dev == reserved.st_dev &&
              current.st_ino == reserved.st_ino;
     if (all_ok && current.st_size != 0) {
       char published_hash[65];
       uint64_t published_size = 0;
-      all_ok = digest_file(d->dest_path, published_hash, &published_size) &&
+      all_ok = digest_file(destination, published_hash, &published_size) &&
                published_size == bytes && strcmp(published_hash, hash) == 0;
       if (!all_ok)
         result = -3;
@@ -1410,28 +1439,35 @@ int hls_run_download(Download *d) {
        * Renaming within the destination filesystem publishes complete bytes.
        * A restart can verify an already-published file against this assembly.
        */
-      all_ok = !stopped(d) && rename(concat, d->dest_path) == 0;
+      all_ok = !stopped(d) && rename(concat, destination) == 0;
     }
     if (all_ok) {
-      dm_mutex_t *mutex = queue_manager_get_mutex();
-      dm_mutex_lock(mutex);
-      d->total_size = bytes;
-      d->progress = 1.0f;
-      db_update_total_size(d->id, bytes);
-      dm_mutex_unlock(mutex);
-      atomic_store(&d->bytes_downloaded, bytes);
-      result = remux_output(d, directory);
+      if (output_bytes)
+        *output_bytes = bytes;
+      if (provided)
+        result = 0;
+      else {
+        dm_mutex_t *mutex = queue_manager_get_mutex();
+        dm_mutex_lock(mutex);
+        d->total_size = bytes;
+        d->progress = 1.0f;
+        db_update_total_size(d->id, bytes);
+        dm_mutex_unlock(mutex);
+        atomic_store(&d->bytes_downloaded, bytes);
+        result = remux_output(d, directory);
+      }
     }
     unlink(concat);
   }
-  if (result == 0) {
+  if (result == 0 && !provided) {
     dm_mutex_t *mutex = queue_manager_get_mutex();
     dm_mutex_lock(mutex);
-    if (db_update_media_output(d->id, d->dest_path, d->total_size) != 0)
+    if (db_update_media_output(d->id, destination, d->total_size) != 0)
       result = -1;
     dm_mutex_unlock(mutex);
   }
-  if (result == 0 || result == -2 || atomic_load(&d->cancel_requested)) {
+  if ((!provided && result == 0) || result == -2 ||
+      atomic_load(&d->cancel_requested)) {
     for (size_t i = 0; i < count; i++) {
       char path[HLS_PATH_MAX];
       if (item_path(directory, i, path, sizeof(path)))
@@ -1445,18 +1481,93 @@ finish:
   if (output >= 0)
     close(output);
   close(lock);
-  if (result == 0 || result == -2 || atomic_load(&d->cancel_requested)) {
+  if ((!provided && result == 0) || result == -2 ||
+      atomic_load(&d->cancel_requested)) {
     hls_discard_state(original_destination);
   }
   if (result == -2)
-    unlink(d->dest_path);
+    unlink(destination);
   return result;
 }
+int hls_run_download(Download *d) {
+  return run_asset_playlist(d, d->dest_path, NULL, NULL, NULL);
+}
+int hls_run_asset_playlist(Download *d, const char *destination,
+                           const HlsPlaylist *playlist, const char *fingerprint,
+                           uint64_t *bytes) {
+  if (!playlist || !playlist->segment_count ||
+      playlist->segment_count > HLS_MAX_SEGMENTS ||
+      playlist->map_count > HLS_MAX_MAPS || !playlist->segments ||
+      (playlist->map_count && !playlist->maps))
+    return -1;
+  return run_asset_playlist(d, destination, playlist, fingerprint, bytes);
+}
+int hls_fetch_manifest(Download *d, unsigned char *buffer, size_t capacity,
+                       size_t *length, char *base, char *fingerprint) {
+  if (!buffer || !length || !base || !fingerprint ||
+      capacity > HLS_MAX_PLAYLIST_BYTES)
+    return -1;
+  const RequestOptions *r = d->request;
+  RequestContext context = {
+      .cookie = r && r->cookie[0] ? r->cookie : NULL,
+      .referrer = r && r->referrer[0] ? r->referrer : NULL,
+      .user_agent = r && r->user_agent[0] ? r->user_agent : NULL,
+      .extra_headers = r && r->extra_headers[0] ? r->extra_headers : NULL,
+      .auth_user = r && r->auth_user[0] ? r->auth_user : NULL,
+      .auth_password = r && r->auth_password[0] ? r->auth_password : NULL,
+      .sensitive = r && r->browser_context};
+  if (d->requires_browser_context && !context.sensitive)
+    return -5;
+  HlsBody body = {.data = buffer, .limit = capacity, .download = d};
+  if (!fetch_body(d, &context, d->url, &body, base))
+    return -1;
+  EVP_MD_CTX *digest = EVP_MD_CTX_new();
+  unsigned char hash[32];
+  unsigned int hash_size = 0;
+  bool ok = digest && EVP_DigestInit_ex(digest, EVP_sha256(), NULL) == 1 &&
+            EVP_DigestUpdate(digest, buffer, body.size) == 1 &&
+            EVP_DigestUpdate(digest, base, strlen(base) + 1) == 1 &&
+            EVP_DigestFinal_ex(digest, hash, &hash_size) == 1 &&
+            hash_size == 32;
+  EVP_MD_CTX_free(digest);
+  if (!ok)
+    return -1;
+  const char digits[] = "0123456789abcdef";
+  for (size_t i = 0; i < 32; i++) {
+    fingerprint[i * 2] = digits[hash[i] >> 4];
+    fingerprint[i * 2 + 1] = digits[hash[i] & 15];
+  }
+  fingerprint[64] = 0;
+  *length = body.size;
+  return 0;
+}
+
 #else
 /* TODO(platform): implement secure HLS staging and resume on Windows. */
 void hls_discard_state(const char *destination) { (void)destination; }
 int hls_run_download(struct Download *download) {
   (void)download;
+  return -1;
+}
+int hls_run_asset_playlist(struct Download *d, const char *path,
+                           const HlsPlaylist *playlist, const char *fingerprint,
+                           uint64_t *bytes) {
+  (void)d;
+  (void)path;
+  (void)playlist;
+  (void)fingerprint;
+  (void)bytes;
+  return -1;
+}
+int hls_fetch_manifest(struct Download *d, unsigned char *buffer,
+                       size_t capacity, size_t *length, char *base,
+                       char *fingerprint) {
+  (void)d;
+  (void)buffer;
+  (void)capacity;
+  (void)length;
+  (void)base;
+  (void)fingerprint;
   return -1;
 }
 #endif

@@ -358,7 +358,7 @@ static IpcBrowserProgress browser_progress_snapshot(uint32_t id,
            status_to_string(snapshot.status));
   event.total_bytes = snapshot.total_size;
   memcpy(event.dest_path, snapshot.dest_path, sizeof(event.dest_path));
-  if (snapshot.status == DOWNLOAD_ACTIVE || snapshot.media_kind == DOWNLOAD_MEDIA_HLS)
+  if (snapshot.status == DOWNLOAD_ACTIVE || (snapshot.media_kind == DOWNLOAD_MEDIA_HLS || snapshot.media_kind == DOWNLOAD_MEDIA_DASH))
     event.bytes_received = snapshot.bytes_downloaded;
   else if (snapshot.status == DOWNLOAD_DONE)
     event.bytes_received = snapshot.total_size ? snapshot.total_size
@@ -862,6 +862,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       } else if (slot && slot->offer.state == IPC_BROWSER_WAITING &&
                  (slot->media_kind == IPC_BROWSER_MEDIA_NONE ||
                   slot->media_kind == IPC_BROWSER_MEDIA_HLS ||
+                  slot->media_kind == IPC_BROWSER_MEDIA_DASH ||
                   slot->media_kind == IPC_BROWSER_MEDIA_VIDEO)) {
         RequestOptions opts = slot->context;
         opts.media_kind = (DownloadMediaKind)slot->media_kind;
@@ -874,8 +875,9 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         if (found == 1) {
           DownloadMediaKind existing_kind;
           if (!queue_manager_get_media_kind(download_id, &existing_kind) ||
-              ((existing_kind == DOWNLOAD_MEDIA_HLS) !=
-               (opts.media_kind == DOWNLOAD_MEDIA_HLS))) {
+              ((existing_kind == DOWNLOAD_MEDIA_HLS || existing_kind == DOWNLOAD_MEDIA_DASH ||
+             opts.media_kind == DOWNLOAD_MEDIA_HLS || opts.media_kind == DOWNLOAD_MEDIA_DASH) &&
+             existing_kind != opts.media_kind)) {
             found = -1; download_id = 0;
           }
         }

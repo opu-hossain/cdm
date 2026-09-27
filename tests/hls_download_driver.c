@@ -19,8 +19,11 @@ int main(int argc, char **argv) {
   Download *d = queue_manager_find_by_id(1);
   if (!d) {
     RequestOptions options = {0};
-    options.media_kind = DOWNLOAD_MEDIA_HLS;
-    if (argc == 6 && strcmp(argv[5], "context") == 0) {
+    options.media_kind = argc == 6 && strncmp(argv[5], "dash", 4) == 0
+                             ? DOWNLOAD_MEDIA_DASH
+                             : DOWNLOAD_MEDIA_HLS;
+    if (argc == 6 && (strcmp(argv[5], "context") == 0 ||
+                      strcmp(argv[5], "dash-context") == 0)) {
       options.browser_context = true;
       strcpy(options.cookie, "synthetic=1");
     }
@@ -33,15 +36,19 @@ int main(int argc, char **argv) {
     d = queue_manager_find_by_id(id);
     d->reserved_file = true;
   }
-  if (!d || d->media_kind != DOWNLOAD_MEDIA_HLS)
+  if (!d || (d->media_kind != DOWNLOAD_MEDIA_HLS &&
+             d->media_kind != DOWNLOAD_MEDIA_DASH))
     return 5;
-  if (argc == 6 && strcmp(argv[5], "cancel") == 0)
+  if (argc == 6 &&
+      (strcmp(argv[5], "cancel") == 0 || strcmp(argv[5], "dash-cancel") == 0))
     atomic_store(&d->cancel_requested, true);
-  if (argc == 6 && strcmp(argv[5], "pause") == 0)
+  if (argc == 6 &&
+      (strcmp(argv[5], "pause") == 0 || strcmp(argv[5], "dash-pause") == 0))
     atomic_store(&d->pause_requested, true);
   int rc = engine_run_download(d);
   /* Exercise restart context recovery from an intentionally paused record. */
-  if (rc == 0 && argc == 6 && strcmp(argv[5], "context") == 0)
+  if (rc == 0 && argc == 6 &&
+      (strcmp(argv[5], "context") == 0 || strcmp(argv[5], "dash-context") == 0))
     db_update_status(d->id, "PAUSED");
   printf("%d %llu %llu\n", rc, (unsigned long long)d->total_size,
          (unsigned long long)atomic_load(&d->bytes_downloaded));
