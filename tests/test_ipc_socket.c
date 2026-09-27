@@ -37,6 +37,131 @@ TestSuite(ipc, .init = setup_ipc, .fini = teardown_ipc);
 static atomic_bool browser_server_running;
 static int browser_server_thread(void *unused);
 
+Test(ipc, browser_context_is_ephemeral_and_can_refresh_after_restore) {
+  char root[] = "/tmp/cdm-browser-context-XXXXXX";
+  cr_assert_not_null(mkdtemp(root));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", root, 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  const char *invalid[] = {
+      "{\"request_id\":\"bad\",\"url\":\"https://example.invalid/file\",\"cookie\":3}",
+      "{\"request_id\":\"bad\",\"url\":\"https://example.invalid/file\",\"cookie\":\"x\\r\\ny\"}",
+      "{\"request_id\":\"bad\",\"url\":\"https://example.invalid/file\",\"referer\":\"x\\u0000y\"}",
+      "{\"request_id\":\"bad\",\"url\":\"https://example.invalid/file\",\"user_agent\":\"\xc0\x80\"}",
+  };
+  for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+    MsgHeader bad = {.type = 56, .length = (uint32_t)strlen(invalid[i])};
+    cr_assert_eq(ipc_write_exact(client, &bad, sizeof(bad)), 0);
+    cr_assert_eq(ipc_write_exact(client, invalid[i], bad.length), 0);
+    IpcBrowserOffer rejected = {0};
+    cr_assert_eq(ipc_read_exact(client, &rejected, sizeof(rejected)), 0);
+    cr_assert_eq(rejected.offer_id, 0);
+  }
+  const char json[] = "{\"request_id\":\"context-fixture\","
+      "\"url\":\"https://example.invalid/protected\",\"filename\":\"protected\","
+      "\"cookie\":\"sid=context-fixture\",\"user_agent\":\"context-UA\","
+      "\"referer\":\"https://example.invalid/context-ref\"}";
+  MsgHeader header = {.type = 56, .length = sizeof(json) - 1};
+  cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+  cr_assert_eq(ipc_write_exact(client, json, sizeof(json) - 1), 0);
+  IpcBrowserOffer offer = {0};
+  cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+  cr_assert_neq(offer.offer_id, 0);
+  cr_assert_str_empty(offer.referrer);
+  header.type = 57;
+  header.length = sizeof(offer.offer_id);
+  cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+  cr_assert_eq(ipc_write_exact(client, &offer.offer_id, sizeof(offer.offer_id)), 0);
+  uint32_t flags = 0;
+  cr_assert_eq(ipc_read_exact(client, &flags, sizeof(flags)), 0);
+  cr_assert_eq(flags, 7);
+  char path[1024];
+  int written = snprintf(path, sizeof(path), "%s/protected", root);
+  cr_assert_geq(written, 0);
+  cr_assert_lt((size_t)written, sizeof(path));
+  uint32_t id = 0;
+  cr_assert_eq(ipc_browser_confirm(client, offer.offer_id, path, &id), 0);
+  cr_assert_eq(ipc_browser_context_info_v1(client, offer.offer_id, &flags), 0);
+  cr_assert_eq(flags, 0);
+  Download *download = queue_manager_find_by_id(id);
+  cr_assert_not_null(download);
+  cr_assert(download->requires_browser_context);
+  cr_assert_not_null(download->request);
+  cr_assert(download->request->browser_context);
+  cr_assert_str_eq(download->request->cookie, "sid=context-fixture");
+  cr_assert_str_eq(download->request->user_agent, "context-UA");
+  cr_assert_str_eq(download->request->referrer,
+                   "https://example.invalid/context-ref");
+  IpcDownloadDetails details = {0};
+  cr_assert_eq(db_get_download_details(id, &details), 0);
+  cr_assert_str_empty(details.cookie);
+  cr_assert_str_empty(details.referrer);
+  cr_assert_str_empty(details.extra_headers);
+  queue_manager_update_status(id, DOWNLOAD_DONE);
+  cr_assert_null(download->request);
+  cr_assert_eq(db_update_status(id, "PAUSED"), 0);
+  queue_manager_remove(id);
+  cr_assert_eq(db_restore_queue(), 0);
+  download = queue_manager_find_by_id(id);
+  cr_assert(download->requires_browser_context);
+  cr_assert_null(download->request);
+  cr_assert_not(queue_manager_resume(id));
+  const char refreshed[] = "{\"request_id\":\"context-refresh\","
+      "\"url\":\"https://example.invalid/protected\","
+      "\"cookie\":\"sid=context-refreshed\"}";
+  header.type = 56;
+  header.length = sizeof(refreshed) - 1;
+  cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+  cr_assert_eq(ipc_write_exact(client, refreshed, sizeof(refreshed) - 1), 0);
+  cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+  uint32_t refreshed_id = 0;
+  cr_assert_eq(ipc_browser_confirm(client, offer.offer_id, path, &refreshed_id), 0);
+  cr_assert_eq(refreshed_id, id);
+  cr_assert_str_eq(download->request->cookie, "sid=context-refreshed");
+  cr_assert_eq(download->status, DOWNLOAD_QUEUED);
+  queue_manager_update_status(id, DOWNLOAD_ERROR);
+  cr_assert_null(download->request);
+  const char dismissed_json[] = "{\"request_id\":\"context-dismiss\","
+      "\"url\":\"https://example.invalid/dismiss\",\"cookie\":\"sid=dismiss-fixture\"}";
+  header.type = 56;
+  header.length = sizeof(dismissed_json) - 1;
+  cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+  cr_assert_eq(ipc_write_exact(client, dismissed_json, sizeof(dismissed_json) - 1), 0);
+  cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+  cr_assert_eq(ipc_browser_context_info_v1(client, offer.offer_id, &flags), 0);
+  cr_assert_eq(flags, 1);
+  cr_assert_eq(ipc_browser_dismiss(client, offer.offer_id), 0);
+  cr_assert_eq(ipc_browser_context_info_v1(client, offer.offer_id, &flags), 0);
+  cr_assert_eq(flags, 0);
+  RequestOptions cancel_context = {.browser_context = true};
+  strcpy(cancel_context.cookie, "sid=cancel-fixture");
+  uint32_t cancel_id = queue_manager_add("https://example.invalid/cancel", path,
+                                          &cancel_context);
+  cr_assert_neq(cancel_id, 0);
+  queue_manager_cancel(cancel_id);
+  cr_assert_null(queue_manager_find_by_id(cancel_id)->request);
+  queue_manager_remove(cancel_id);
+  uint32_t shutdown_id = queue_manager_add("https://example.invalid/shutdown", path,
+                                            &cancel_context);
+  cr_assert_neq(shutdown_id, 0);
+  queue_manager_clear_browser_contexts();
+  cr_assert_null(queue_manager_find_by_id(shutdown_id)->request);
+  queue_manager_remove(shutdown_id);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  queue_manager_remove(id);
+  db_close();
+  unsetenv("DOWNLOADMGR_ROOT");
+  rmdir(root);
+}
+
 Test(ipc, category_crud_and_paged_assignment_v1) {
   cr_assert_eq(db_init(":memory:"), 0);
   Category video = {0};

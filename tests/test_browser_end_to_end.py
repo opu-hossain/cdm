@@ -9,6 +9,7 @@ import pty
 import select
 import signal
 import socket
+import sqlite3
 import struct
 import subprocess
 import sys
@@ -18,19 +19,40 @@ import time
 
 
 CONTENT = b"cdm-browser-integration\n" * 4096
+CONTEXT = {"cookie": "sid=browser-context-fixture",
+           "user_agent": "cdm-browser-context-fixture-UA",
+           "referer": "https://example.invalid/browser-context-fixture"}
+OBSERVED = []
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
 
+    def check_context(self):
+        if not self.path.startswith("/protected.bin"):
+            return True
+        fields = {"cookie": self.headers.get("Cookie"),
+                  "user_agent": self.headers.get("User-Agent"),
+                  "referer": self.headers.get("Referer")}
+        OBSERVED.append((self.command, fields))
+        if fields != CONTEXT:
+            self.send_response(403)
+            self.end_headers()
+            return False
+        return True
+
     def do_HEAD(self):
+        if not self.check_context():
+            return
         self.send_response(200)
         self.send_header("Content-Length", str(len(CONTENT)))
         self.send_header("Accept-Ranges", "bytes")
         self.end_headers()
 
     def do_GET(self):
+        if not self.check_context():
+            return
         start, end = 0, len(CONTENT) - 1
         requested = self.headers.get("Range")
         if requested and requested.startswith("bytes="):
@@ -137,6 +159,50 @@ def main(cdm: str, native_host: str) -> None:
                         break
             assert "complete" in states, states
             assert destination.read_bytes() == CONTENT
+
+            contextual = json.dumps({
+                "type": "download_offer", "request_id": "context-flow",
+                "url": f"http://127.0.0.1:{server.server_port}/protected.bin",
+                "filename": "protected.bin", "referrer": CONTEXT["referer"],
+                **CONTEXT,
+            }).encode()
+            host.stdin.write(struct.pack("=I", len(contextual)) + contextual)
+            host.stdin.flush()
+            reply = native_reply(host, time.monotonic() + 10)
+            assert reply["type"] == "offer_registered", reply
+            offer_id = reply["offer_id"]
+            protected = root_path / "protected.bin"
+            raw_path = str(protected).encode()
+            payload = struct.pack("=II", offer_id, len(raw_path)) + raw_path
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(5)
+                client.connect(str(socket_path))
+                client.sendall(struct.pack("=II", len(payload), 14) + payload)
+                download_id = struct.unpack("=I", client.recv(4))[0]
+                assert download_id > 0
+            deadline = time.monotonic() + 20
+            while True:
+                event = native_reply(host, deadline)
+                if event["type"] == "error":
+                    assert event["error"] == "could not launch cdm popup", event
+                    continue
+                if event.get("state") in ("complete", "error"):
+                    assert event["state"] == "complete", event
+                    break
+            assert protected.read_bytes() == CONTENT
+            assert any(method == "HEAD" for method, _ in OBSERVED), OBSERVED
+            assert any(method == "GET" for method, _ in OBSERVED), OBSERVED
+            assert all(fields == CONTEXT for _, fields in OBSERVED)
+            data_dir = root_path / ".local/share/cdm"
+            with sqlite3.connect(data_dir / "downloads.db") as reader:
+                row = reader.execute(
+                    "SELECT cookie,referrer,extra_headers,requires_browser_context "
+                    "FROM downloads WHERE id=?", (download_id,)).fetchone()
+                assert row == ("", "", "", 1), row
+            for artifact in data_dir.iterdir():
+                if artifact.is_file():
+                    data = artifact.read_bytes()
+                    assert all(value.encode() not in data for value in CONTEXT.values()), artifact
         finally:
             if host:
                 host.stdin.close()

@@ -53,9 +53,13 @@ typedef enum {
   MSG_CATEGORY_DELETE_V1 = 54,
   MSG_LIST_PAGE_WITH_CATEGORY_V1 = 55,
   MSG_BROWSER_OFFER_V2 = 56, // JSON request context; legacy raw offer reply
+  MSG_BROWSER_CONTEXT_INFO_V1 = 57, // uint32 offer ID -> uint32 presence bits
 } MsgType;
 
-#define IPC_PROTOCOL_VERSION 7
+#define IPC_PROTOCOL_VERSION 8
+#define IPC_BROWSER_HAS_COOKIE 1u
+#define IPC_BROWSER_HAS_USER_AGENT 2u
+#define IPC_BROWSER_HAS_REFERER 4u
 
 /* Versioned category record; fixed native ABI, with bounded NUL strings. */
 typedef struct {

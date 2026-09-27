@@ -1,4 +1,4 @@
-# cdm daemon IPC (protocol v5)
+# cdm daemon IPC (base reference plus protocol v8 browser context)
 
 Source of truth: `src/platform/ipc_protocol.h`, `src/platform/ipc_socket.h`, and `src/platform/ipc_socket.c`. The transport is a per-user Unix stream socket (`XDG_RUNTIME_DIR/cdm.sock`, otherwise `$HOME/.local/share/cdm/ipc.sock`, otherwise `/tmp/cdm_<uid>.sock`). The socket is created with mode `0600` (`src/platform/ipc_socket.c:81`, `src/platform/ipc_socket.c:903`). The daemon accepts at most 16 clients (`src/platform/ipc_socket.c:32`).
 
@@ -6,7 +6,7 @@ Source of truth: `src/platform/ipc_protocol.h`, `src/platform/ipc_socket.h`, and
 
 Every **request** and asynchronous **event** begins with the unchanged v1 `MsgHeader`: `uint32_t length` (payload bytes, excluding the header), then `MsgType type` (C enum; four bytes on the supported ABI). The current header is eight bytes. Integers, `float`, and raw structs use native byte order, size, alignment, and padding; this is a local, same-ABI protocol, not a portable network format. Strings in length-prefixed fields are byte sequences without a wire NUL: `uint32_t length`, then exactly that many bytes. Fixed `char[]` fields in raw structs are NUL-terminated when populated. Request payloads over `IPC_MAX_FRAME_SIZE = 16384` bytes or with an invalid type/length are rejected by closing the connection (`src/platform/ipc_socket.c:397`). **Command replies have no `MsgHeader`**; their layouts are listed below. Event frames do have a header.
 
-`MSG_HELLO` (41) is a v1-framed empty request. Its unframed reply is native `uint16_t IPC_PROTOCOL_VERSION`, currently **5**. `ipc_client_connect_compatible()` uses a bounded HELLO exchange; if an old daemon closes or fails the exchange, the client reconnects and treats it as v1. A version below 2 uses v1 messages. Clients must check for version 5 before sending queue commands or a nondefault `queue_id` in type 42; older daemons may ignore that JSON key. Existing message payloads must remain byte-compatible; add a new type/versioned payload for new fields, never append fields to an existing wire struct.
+`MSG_HELLO` (41) is a v1-framed empty request. Its unframed reply is native `uint16_t IPC_PROTOCOL_VERSION`, currently **8**. `ipc_client_connect_compatible()` uses a bounded HELLO exchange; if an old daemon closes or fails the exchange, the client reconnects and treats it as v1. A version below 2 uses v1 messages. Clients must check for version 5 before sending queue commands or a nondefault `queue_id` in type 42; older daemons may ignore that JSON key. Existing message payloads must remain byte-compatible; add a new type/versioned payload for new fields, never append fields to an existing wire struct.
 
 ## Message registry
 
@@ -71,6 +71,19 @@ Types 1–17 are legacy. Type 7 exists in the enum but has no producer or reques
 A general type 34 subscriber gets **type 33 then type 6** on each status broadcast; a type 8 subscriber gets only type 6. A browser-specific socket first sends type 16 and consumes its unframed snapshot; it can then send type 34 on the **same socket** to get **type 33 then type 17** for that download. Without type 34 it gets only type 17. Browser-specific v2 subscription does not subscribe to all downloads. Consumers must read or skip both frames in a paired broadcast to keep the stream aligned. Slow or partially written nonblocking event sockets are removed (`src/platform/ipc_socket.c:680`, `:805`, `:1468`).
 
 ## Browser offer struct
+
+### Browser context extension (protocol v8)
+
+Type 56 (`MSG_BROWSER_OFFER_V2`) uses the type 12 JSON keys plus optional
+`cookie` (4096 UTF-8 bytes), `user_agent` (256), and `referer` (2048). Header
+values reject NUL/CR/LF and invalid UTF-8; the total request remains capped at
+16384 bytes. Its reply remains raw `IpcBrowserOffer`, with empty `referrer`.
+Type 57 (`MSG_BROWSER_CONTEXT_INFO_V1`) takes a native `uint32_t offer_id`
+and replies with native `uint32_t` presence bits (Cookie=1, User-Agent=2,
+Referer=4; zero if absent/cleared). Neither response exposes captured values.
+The daemon advertises v8; use types 56/57 only after negotiation. Types 1–55
+retain their existing layouts. See `docs/browser-context.md` for ownership,
+restart, and cleanup rules.
 
 Type 12 JSON accepts `request_id` (required string, max 127 bytes), `url` (required HTTP(S) string, max 2047), `filename` (optional string, max 511), `mime` (optional string, max 127), `referrer` (optional string, max 2047), and `total_bytes` (optional nonnegative JSON number up to 2^53−1, bytes). The raw `IpcBrowserOffer` reply (`src/platform/ipc_socket.h:28`) has `uint32_t offer_id` (`0` means absent/failure), `uint32_t download_id` (`0` until confirmed), `uint64_t total_bytes` (bytes; `0` unknown), `IpcBrowserOfferState state` (`WAITING=0`, `CONFIRMED=1`, `DISMISSED=2`), and NUL-terminated arrays `request_id[128]`, `url[2048]`, `filename[512]`, `mime[128]`, `referrer[2048]`. Offers are held in 64 in-memory slots for 600 seconds; the same `request_id`/URL retrieves the same offer. Confirming a waiting offer queues once; repeat confirm returns its download ID. Dismiss is idempotent for a dismissed offer (`src/platform/ipc_socket.c:34`, `src/platform/ipc_socket.c:242`, `src/platform/ipc_socket.c:571`).
 

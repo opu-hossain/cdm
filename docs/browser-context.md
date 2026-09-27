@@ -92,3 +92,23 @@ browser-captured sentinel. Use only `127.0.0.1` test servers and fake tokens.
 API references: [Chrome optional permissions](https://developer.chrome.com/docs/extensions/reference/api/permissions),
 [Chrome cookies](https://developer.chrome.com/docs/extensions/reference/api/cookies),
 [Chrome webRequest](https://developer.chrome.com/docs/extensions/reference/api/webRequest).
+
+## Implemented daemon contract (task 3.1.4)
+
+IPC v8 uses type 56 JSON for contextual offers and the unchanged raw offer
+reply with an empty `referrer`. Type 57 takes a native `uint32_t` offer ID and
+returns only `uint32_t` presence bits: Cookie=1, User-Agent=2, Referer=4.
+Confirmation copies ephemeral `RequestOptions` into the queued download before
+it becomes runnable; captured fields are excluded from SQLite and details.
+Schema v10 stores only `requires_browser_context`. Restore pauses marked jobs;
+manual and scheduled resume are refused without context. A fresh contextual
+offer confirmed for the same URL restores context and resumes that job.
+Pausing and retry backoff retain context in-process; terminal states and
+shutdown clear it. Pending context clears on confirmation, dismissal, expiry,
+and IPC shutdown. Request URLs are redacted in context-related diagnostics.
+
+Contextual HEAD/probe/segment requests do not follow redirects: captured headers
+belong to the offered final URL. A changed target requires a fresh browser
+offer. Ordinary downloads retain their existing redirect handling. This keeps
+Referer from being forwarded to an uncorrelated target; see
+[libcurl redirect header behavior](https://curl.se/libcurl/c/CURLOPT_FOLLOWLOCATION.html).

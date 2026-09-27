@@ -58,7 +58,17 @@ static bool request_options_present(const RequestOptions *opts) {
           opts->auth_password[0] != '\0');
 }
 
+static void clear_browser_request(Download *download) {
+  if (!download->request || !download->request->browser_context)
+    return;
+  volatile unsigned char *bytes = (volatile unsigned char *)download->request;
+  for (size_t i = 0; i < sizeof(*download->request); i++) bytes[i] = 0;
+  free(download->request);
+  download->request = NULL;
+}
+
 static void free_download(Download *download) {
+  clear_browser_request(download);
   free(download->request);
   free(download);
 }
@@ -175,8 +185,9 @@ static uint32_t add_download(const char *url, const char *dest_path,
   strncpy(d->dest_path, dest_path, sizeof(d->dest_path) - 1);
   d->dest_path[sizeof(d->dest_path) - 1] = '\0';
   atomic_store(&d->auto_filename, auto_filename);
+  d->requires_browser_context = opts && opts->browser_context;
 
-  if (request_options_present(opts)) {
+  if (request_options_present(opts) || d->requires_browser_context) {
     d->request = malloc(sizeof(*d->request));
     if (!d->request) {
       free(d);
@@ -369,6 +380,8 @@ int queue_manager_apply_schedule(uint32_t queue_id, bool active,
         LOG_WARN("Could not persist scheduled pause for download %u", cur->id);
     } else if (active && cur->schedule_paused) {
       if (cur->status == DOWNLOAD_PAUSED) {
+        if (cur->requires_browser_context && !cur->request)
+          continue;
         if (resumed >= capacity)
           continue;
         if (db_resume_scheduled_download(cur->id) != 0) {
@@ -516,6 +529,9 @@ void queue_manager_update_status(uint32_t id, DownloadStatus new_status) {
         cur->transfer_metrics =
             (DownloadTransferMetrics){.eta_seconds = UINT64_MAX};
       cur->status = new_status;
+      if (new_status == DOWNLOAD_DONE || new_status == DOWNLOAD_ERROR ||
+          new_status == DOWNLOAD_CANCELED)
+        clear_browser_request(cur);
       break;
     }
   }
@@ -534,6 +550,7 @@ bool queue_manager_cancel(uint32_t id) {
         was_active = true;
       } else {
         cur->status = DOWNLOAD_CANCELED;
+        clear_browser_request(cur);
       }
       break;
     }
@@ -589,6 +606,8 @@ bool queue_manager_resume(uint32_t id) {
   dm_mutex_lock(&g_mutex);
   for (Download *cur = g_head; cur != NULL; cur = cur->next) {
     if (cur->id == id) {
+      if (cur->requires_browser_context && !cur->request)
+        break;
       if (cur->status == DOWNLOAD_PAUSED || cur->status == DOWNLOAD_ERROR) {
         if (cur->schedule_paused) {
           int persisted = cur->status == DOWNLOAD_PAUSED
@@ -610,6 +629,47 @@ bool queue_manager_resume(uint32_t id) {
   }
   dm_mutex_unlock(&g_mutex);
   return resumed;
+}
+
+int queue_manager_refresh_browser_context(uint32_t id,
+                                           const RequestOptions *options) {
+  if (!options || !options->browser_context)
+    return false;
+  ensure_mutex();
+  int refreshed = 0;
+  dm_mutex_lock(&g_mutex);
+  for (Download *cur = g_head; cur; cur = cur->next) {
+    if (cur->id != id) continue;
+    if (cur->requires_browser_context && !cur->request &&
+        (cur->status == DOWNLOAD_PAUSED || cur->status == DOWNLOAD_ERROR)) {
+      RequestOptions *copy = malloc(sizeof(*copy));
+      if (!copy) { refreshed = -1; break; }
+      int saved = cur->schedule_paused && cur->status == DOWNLOAD_PAUSED
+                      ? db_resume_scheduled_download(cur->id)
+                      : db_update_status(cur->id, "QUEUED");
+      if (saved != 0) { free(copy); refreshed = -1; break; }
+      *copy = *options;
+      cur->request = copy;
+      cur->schedule_paused = false;
+      atomic_store(&cur->pause_requested, false);
+      atomic_store(&cur->cancel_requested, false);
+      cur->retry_count = 0;
+      cur->next_retry_at = 0;
+      cur->status = DOWNLOAD_QUEUED;
+      refreshed = 1;
+    }
+    break;
+  }
+  dm_mutex_unlock(&g_mutex);
+  return refreshed;
+}
+
+void queue_manager_clear_browser_contexts(void) {
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  for (Download *cur = g_head; cur; cur = cur->next)
+    clear_browser_request(cur);
+  dm_mutex_unlock(&g_mutex);
 }
 
 /* Internal (use with care) */

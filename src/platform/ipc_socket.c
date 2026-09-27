@@ -173,6 +173,7 @@ static once_flag g_client_mutex_once = ONCE_FLAG_INIT;
 
 typedef struct {
   IpcBrowserOffer offer;
+  RequestOptions context; // IPC-thread-owned until copied on confirmation
   time_t touched_at;
   bool duplicate;
 } BrowserOfferSlot;
@@ -181,6 +182,11 @@ typedef struct {
 static BrowserOfferSlot g_browser_offers[MAX_BROWSER_OFFERS];
 static const char *status_to_string(DownloadStatus s);
 static float snapshot_progress(const DownloadRuntimeSnapshot *snapshot);
+
+static void browser_clear(void *data, size_t length) {
+  volatile unsigned char *bytes = data;
+  for (size_t i = 0; i < length; i++) bytes[i] = 0;
+}
 
 static void browser_expire_offers(void) {
   time_t now = time(NULL);
@@ -197,7 +203,7 @@ static void browser_expire_offers(void) {
           status != DOWNLOAD_CANCELED)
         continue;
     }
-    memset(slot, 0, sizeof(*slot));
+    browser_clear(slot, sizeof(*slot));
   }
 }
 
@@ -241,7 +247,38 @@ static bool browser_json_string(const cJSON *root, const char *key,
   return true;
 }
 
-static bool browser_parse_offer(const char *json, IpcBrowserOffer *out) {
+static bool browser_header_valid(const char *value) {
+  const unsigned char *p = (const unsigned char *)value;
+  while (*p) {
+    if (*p == '\r' || *p == '\n') return false;
+    if (*p < 0x80) p++;
+    else if (*p >= 0xC2 && *p <= 0xDF &&
+             p[1] >= 0x80 && p[1] <= 0xBF) p += 2;
+    else if (*p >= 0xE0 && *p <= 0xEF && p[1] && p[2] &&
+             p[1] >= (*p == 0xE0 ? 0xA0 : 0x80) &&
+             p[1] <= (*p == 0xED ? 0x9F : 0xBF) &&
+             p[2] >= 0x80 && p[2] <= 0xBF) p += 3;
+    else if (*p >= 0xF0 && *p <= 0xF4 && p[1] && p[2] && p[3] &&
+             p[1] >= (*p == 0xF0 ? 0x90 : 0x80) &&
+             p[1] <= (*p == 0xF4 ? 0x8F : 0xBF) &&
+             p[2] >= 0x80 && p[2] <= 0xBF &&
+             p[3] >= 0x80 && p[3] <= 0xBF) p += 4;
+    else return false;
+  }
+  return true;
+}
+
+static bool browser_parse_offer(const char *json, IpcBrowserOffer *out,
+                                 RequestOptions *context) {
+  if (context) {
+    for (const char *p = json; *p; p++) {
+      if (*p == '\\' && p[1]) {
+        if (p[1] == 'u' && strncmp(p + 2, "0000", 4) == 0)
+          return false;
+        p++;
+      }
+    }
+  }
   cJSON *root = cJSON_Parse(json);
   if (!root)
     return false;
@@ -256,6 +293,29 @@ static bool browser_parse_offer(const char *json, IpcBrowserOffer *out) {
                                    sizeof(out->mime), false) &&
                browser_json_string(root, "referrer", out->referrer,
                                    sizeof(out->referrer), false);
+  if (context) {
+    valid = valid &&
+        browser_json_string(root, "cookie", context->cookie,
+                             sizeof(context->cookie), false) &&
+        browser_json_string(root, "user_agent", context->user_agent,
+                             sizeof(context->user_agent), false) &&
+        browser_json_string(root, "referer", context->referrer,
+                             sizeof(context->referrer), false) &&
+        browser_header_valid(context->cookie) &&
+        browser_header_valid(context->user_agent) &&
+        browser_header_valid(context->referrer);
+    context->browser_context = context->cookie[0] || context->user_agent[0] ||
+                               context->referrer[0];
+    /* Sensitive Referer must never travel in the raw popup reply. */
+    memset(out->referrer, 0, sizeof(out->referrer));
+    for (cJSON *field = root->child; field; field = field->next)
+      if (field->string && cJSON_IsString(field) && field->valuestring &&
+          (strcmp(field->string, "cookie") == 0 ||
+           strcmp(field->string, "user_agent") == 0 ||
+           strcmp(field->string, "referer") == 0 ||
+           strcmp(field->string, "referrer") == 0))
+        browser_clear(field->valuestring, strlen(field->valuestring));
+  }
   const cJSON *total = cJSON_GetObjectItemCaseSensitive(root, "total_bytes");
   if (total) {
     if (!cJSON_IsNumber(total) || total->valuedouble < 0 ||
@@ -409,6 +469,7 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_ADD_DOWNLOAD_V2:
   case MSG_ADD_DOWNLOAD_V3:
   case MSG_BROWSER_OFFER:
+  case MSG_BROWSER_OFFER_V2:
     return header->length <= IPC_MAX_FRAME_SIZE;
   case MSG_PAUSE:
   case MSG_RESUME:
@@ -416,6 +477,7 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_GET_DETAILS:
   case MSG_GET_DETAILS_V2:
   case MSG_BROWSER_GET_OFFER:
+  case MSG_BROWSER_CONTEXT_INFO_V1:
   case MSG_BROWSER_DISMISS:
   case MSG_BROWSER_SUBSCRIBE_PROGRESS:
     return header->length == sizeof(uint32_t);
@@ -681,14 +743,18 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     }
     break;
   }
-  case MSG_BROWSER_OFFER: {
+  case MSG_BROWSER_OFFER:
+  case MSG_BROWSER_OFFER_V2: {
     char json[IPC_MAX_FRAME_SIZE + 1];
     IpcBrowserOffer response = {0};
     if (ipc_read_exact(client_fd, json, hdr->length) != 0)
       return;
     json[hdr->length] = '\0';
     IpcBrowserOffer proposed = {0};
-    if (browser_parse_offer(json, &proposed)) {
+    RequestOptions context = {0};
+    if (!memchr(json, '\0', hdr->length) &&
+        browser_parse_offer(json, &proposed,
+            hdr->type == MSG_BROWSER_OFFER_V2 ? &context : NULL)) {
       BrowserOfferSlot *slot = browser_find_request(proposed.request_id);
       if (slot && strcmp(slot->offer.url, proposed.url) != 0) {
         LOG_WARN("Browser request ID reused with a different URL");
@@ -709,10 +775,10 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
           }
           if (id) {
             slot->offer = proposed;
+            slot->context = context;
             slot->offer.offer_id = id;
             slot->touched_at = time(NULL);
-            LOG_INFO("Browser offer %u registered for %s", id,
-                     proposed.url);
+            LOG_INFO("Browser offer %u registered", id);
           } else {
             slot = NULL;
           }
@@ -721,6 +787,8 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       if (slot)
         response = slot->offer;
     }
+    browser_clear(&context, sizeof(context));
+    browser_clear(json, sizeof(json));
     ipc_write_exact(client_fd, &response, sizeof(response));
     break;
   }
@@ -735,6 +803,18 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       response = slot->offer;
     }
     ipc_write_exact(client_fd, &response, sizeof(response));
+    break;
+  }
+  case MSG_BROWSER_CONTEXT_INFO_V1: {
+    uint32_t id = 0, flags = 0;
+    if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0) return;
+    BrowserOfferSlot *slot = browser_find_offer(id);
+    if (slot) {
+      if (slot->context.cookie[0]) flags |= IPC_BROWSER_HAS_COOKIE;
+      if (slot->context.user_agent[0]) flags |= IPC_BROWSER_HAS_USER_AGENT;
+      if (slot->context.referrer[0]) flags |= IPC_BROWSER_HAS_REFERER;
+    }
+    ipc_write_exact(client_fd, &flags, sizeof(flags));
     break;
   }
   case MSG_BROWSER_CONFIRM:
@@ -758,17 +838,24 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         download_id = slot->offer.download_id;
         duplicate = slot->duplicate;
       } else if (slot && slot->offer.state == IPC_BROWSER_WAITING) {
-        RequestOptions opts = {0};
-        snprintf(opts.referrer, sizeof(opts.referrer), "%s",
-                 slot->offer.referrer);
+        RequestOptions opts = slot->context;
+        if (!opts.browser_context)
+          strcpy(opts.referrer, slot->offer.referrer);
         char normalized[IPC_MAX_URL_LEN];
         int found = 0;
         if (url_normalize(slot->offer.url, normalized, sizeof(normalized)))
           found = db_find_active_by_url(normalized, &download_id);
         if (found == 0)
           download_id = reserve_download(slot->offer.url, dest, &opts, false);
+        int refresh_result = found == 1
+            ? queue_manager_refresh_browser_context(download_id, &opts) : 0;
+        bool refreshed = refresh_result == 1;
+        if (refresh_result < 0)
+          download_id = 0;
+        browser_clear(&opts, sizeof(opts));
         if (download_id) {
-          slot->duplicate = found == 1;
+          browser_clear(&slot->context, sizeof(slot->context));
+          slot->duplicate = found == 1 && !refreshed;
           duplicate = slot->duplicate;
           slot->offer.download_id = download_id;
           slot->offer.state = IPC_BROWSER_CONFIRMED;
@@ -796,6 +883,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     BrowserOfferSlot *slot = browser_find_offer(id);
     IpcResult result = IPC_RESULT_NOT_FOUND;
     if (slot && slot->offer.state == IPC_BROWSER_WAITING) {
+      browser_clear(&slot->context, sizeof(slot->context));
       slot->offer.state = IPC_BROWSER_DISMISSED;
       slot->touched_at = time(NULL);
       result = IPC_RESULT_OK;
@@ -1300,7 +1388,7 @@ int ipc_server_start(void) {
     g_client_browser_download[i] = 0;
     g_client_header_bytes[i] = 0;
   }
-  memset(g_browser_offers, 0, sizeof(g_browser_offers));
+  browser_clear(g_browser_offers, sizeof(g_browser_offers));
   g_client_count = 0;
 
   call_once(&g_client_mutex_once, initialize_client_mutex);
@@ -1407,7 +1495,7 @@ void ipc_server_stop(void) {
   char socket_path[1024];
   get_socket_path(socket_path, sizeof(socket_path));
   unlink(socket_path);
-  memset(g_browser_offers, 0, sizeof(g_browser_offers));
+  browser_clear(g_browser_offers, sizeof(g_browser_offers));
 }
 
 /* Client lifecycle */
@@ -1967,6 +2055,14 @@ int ipc_browser_get_offer(int sock, uint32_t offer_id, IpcBrowserOffer *out) {
       ipc_read_exact(sock, out, sizeof(*out)) != 0)
     return -1;
   return out->offer_id ? 0 : -1;
+}
+
+int ipc_browser_context_info_v1(int sock, uint32_t offer_id, uint32_t *flags) {
+  if (!flags || !offer_id ||
+      browser_write_request(sock, MSG_BROWSER_CONTEXT_INFO_V1, &offer_id,
+                             sizeof(offer_id)) != 0)
+    return -1;
+  return ipc_read_exact(sock, flags, sizeof(*flags));
 }
 
 static int browser_confirm_request(int sock, MsgType type, uint32_t offer_id,

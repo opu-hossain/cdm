@@ -56,6 +56,7 @@ typedef struct {
   IpcBrowserOffer offer;
   uint32_t download_id;
   uint16_t daemon_version;
+  uint32_t context_flags;
   bool duplicate;
   char filename[IPC_BROWSER_FILENAME_MAX];
   char folder[IPC_MAX_PATH_LEN];
@@ -164,6 +165,23 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
     snprintf(size_label, sizeof(size_label), "File size: unknown");
   nk_layout_row_dynamic(ctx, 18, 1);
   nk_label_colored(ctx, size_label, NK_TEXT_LEFT, MUTED);
+  if (state->context_flags) {
+    nk_layout_row_dynamic(ctx, 18, 1);
+    nk_label_colored(ctx,
+        state->context_flags & IPC_BROWSER_HAS_COOKIE
+            ? "Includes browser cookies" : "Includes browser request headers",
+        NK_TEXT_LEFT, MUTED);
+    nk_layout_row_dynamic(ctx, 18, 1);
+    nk_label_colored(ctx,
+        (state->context_flags & (IPC_BROWSER_HAS_USER_AGENT | IPC_BROWSER_HAS_REFERER)) ==
+            (IPC_BROWSER_HAS_USER_AGENT | IPC_BROWSER_HAS_REFERER)
+            ? "User-Agent and Referer available"
+            : state->context_flags & IPC_BROWSER_HAS_USER_AGENT
+                ? "User-Agent available"
+                : state->context_flags & IPC_BROWSER_HAS_REFERER
+                    ? "Referer available" : "Confirm to use this browser session",
+        NK_TEXT_LEFT, MUTED);
+  }
   nk_layout_row_dynamic(ctx, 20, 1);
   nk_label_colored(ctx, state->error, NK_TEXT_LEFT,
                    nk_rgb(224, 132, 136));
@@ -426,12 +444,18 @@ int run_browser_popup(uint32_t offer_id) {
     ipc_client_disconnect(daemon);
     return 1;
   }
+  if (daemon_version >= 8 &&
+      ipc_browser_context_info_v1(daemon, offer_id, &state.context_flags) != 0) {
+    ipc_client_disconnect(daemon);
+    return 1;
+  }
   snprintf(state.filename, sizeof(state.filename), "%s",
            state.offer.filename);
   snprintf(state.folder, sizeof(state.folder), "%s",
            config_get_default_download_dir());
   file_ensure_directory(state.folder);
-  GuiSdlBackendConfig settings = {.width = 480, .height = 370,
+  int height = state.context_flags ? 418 : 370;
+  GuiSdlBackendConfig settings = {.width = 480, .height = height,
                                   .title = "cdm — Browser download",
                                   .font_size = 13};
   GuiSdlBackend *backend = gui_sdl_backend_create(&settings);
@@ -446,7 +470,7 @@ int run_browser_popup(uint32_t offer_id) {
     if (state.download_id)
       poll_progress(&state);
     gui_sdl_backend_begin_frame(backend);
-    if (nk_begin(ctx, "browser-popup", nk_rect(0, 0, 480, 370),
+    if (nk_begin(ctx, "browser-popup", nk_rect(0, 0, 480, height),
                  NK_WINDOW_NO_SCROLLBAR)) {
       if (state.download_id)
         draw_progress(ctx, &state, daemon);

@@ -24,8 +24,10 @@ bool category_for_filename(const char *name, Category *out);
 
 /* Request options (supplied by the user) */
 typedef struct {
-  char cookie[1024];
-  char referrer[2048];
+  char cookie[4097];
+  char referrer[2049];
+  char user_agent[257]; // ephemeral browser override only
+  bool browser_context; // never serialize captured fields to SQLite
   char extra_headers[4096]; // raw "Key: Value" lines separated by '\n'
   char expected_sha256[65]; // 64 hex chars + NUL, empty = no check
   uint64_t speed_limit_bps; // 0 = use daemon default
@@ -81,6 +83,9 @@ typedef struct Download {
   time_t next_retry_at;
 
   RequestOptions *request;
+  bool requires_browser_context; // immutable except on restore; persisted marker
+  /* request is installed before publication or under the queue mutex. The engine
+   * owns its reads until all curl workers join; terminal status then clears it. */
 } Download;
 
 /* Progress snapshots (for external reporting) */
@@ -190,6 +195,11 @@ bool queue_manager_pause(uint32_t id);
 
 /** Request resume. Returns true if found. */
 bool queue_manager_resume(uint32_t id);
+/* 1 = installed and resumed; 0 = not eligible; -1 = allocation/persistence error. */
+int queue_manager_refresh_browser_context(uint32_t id,
+                                           const RequestOptions *options);
+/* Shutdown only, after scheduler workers have joined. */
+void queue_manager_clear_browser_contexts(void);
 
 /* Internal access. */
 

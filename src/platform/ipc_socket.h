@@ -151,6 +151,7 @@ int ipc_send_subscribe_v2(int sock);
 int ipc_browser_offer(int sock, const IpcBrowserOffer *offer,
                       IpcBrowserOffer *out);
 int ipc_browser_get_offer(int sock, uint32_t offer_id, IpcBrowserOffer *out);
+int ipc_browser_context_info_v1(int sock, uint32_t offer_id, uint32_t *flags);
 int ipc_browser_confirm(int sock, uint32_t offer_id, const char *dest_path,
                         uint32_t *download_id);
 int ipc_browser_confirm_v2(int sock, uint32_t offer_id, const char *dest_path,

@@ -45,7 +45,7 @@ with the user; skip to Phase 2 in the meantime.
 - [x] **3.1.1** Request-context forwarding design doc — **L** — privacy/security threat-model writing, sets the contract every later 3.1.x task follows exactly
 - [x] **3.1.2** Extension captures context — **S** *after 3.1.1 lands* — becomes a mechanical translation of the design doc into `optional_permissions` + capture code
 - [x] **3.1.3** Native host passes context — **S** *after 3.1.1* — extend offer JSON, enforce size limits
-- [ ] **3.1.4** Daemon applies context — **S**, but verifier must specifically check the "memory-only, cleared after finalize, never logged" requirement against the design doc before approving
+- [x] **3.1.4** Daemon applies context — **S**, but verifier must specifically check the "memory-only, cleared after finalize, never logged" requirement against the design doc before approving
 - [ ] **3.2.1** Context menu — **S** — JS, mechanical
 - [ ] **3.2.2** Filters — **S** — JS, mechanical, test cases implied by the spec
 - [ ] **3.2.3** Site exclusions — **S** — JS, mechanical

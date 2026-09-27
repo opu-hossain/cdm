@@ -22,6 +22,8 @@ typedef struct {
   const char *if_range; // Stored strong ETag or Last-Modified for resume GETs.
   const char *auth_user;
   const char *auth_password;
+  const char *user_agent;
+  bool sensitive; // redact request URL in diagnostics
 } RequestContext;
 
 typedef struct {

@@ -294,13 +294,15 @@ static size_t worker_write_callback(void *data, size_t size, size_t nmemb,
  * Execute a single HTTP request for the current segment.
  */
 static void run_one_segment(WorkerContext *ctx) {
+  const char *log_url = ctx->request_ctx && ctx->request_ctx->sensitive
+                            ? "[REDACTED]" : ctx->url;
   ctx->succeeded = false;
   ctx->truncated = false;
   atomic_store(&ctx->bytes_done, 0);
 
   CURL *curl = curl_easy_init();
   if (!curl) {
-    LOG_ERROR("curl_easy_init failed for %s", ctx->url);
+    LOG_ERROR("curl_easy_init failed for %s", log_url);
     return;
   }
 
@@ -329,13 +331,16 @@ static void run_one_segment(WorkerContext *ctx) {
              (unsigned long long)ctx->range.end);
     curl_easy_setopt(curl, CURLOPT_RANGE, range_header);
   }
-  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION,
+                   ctx->request_ctx && ctx->request_ctx->sensitive ? 0L : 1L);
   curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, worker_write_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, ctx);
   curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, worker_header_callback);
   curl_easy_setopt(curl, CURLOPT_HEADERDATA, ctx);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, config.user_agent);
+  curl_easy_setopt(curl, CURLOPT_USERAGENT,
+                   ctx->request_ctx && ctx->request_ctx->user_agent
+                       ? ctx->request_ctx->user_agent : config.user_agent);
 
   struct curl_slist *headers = NULL;
   if (ctx->request_ctx) {
@@ -410,7 +415,7 @@ static void run_one_segment(WorkerContext *ctx) {
 
   if (!ctx->succeeded) {
     LOG_WARN("segment request failed url='%s' http=%ld curl=%s",
-             ctx->url, http_status, curl_easy_strerror(res));
+             log_url, http_status, curl_easy_strerror(res));
   }
 
   if (headers)

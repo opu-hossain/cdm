@@ -116,7 +116,8 @@ int db_init(const char *db_path) {
       "  auth_password   TEXT DEFAULT '',"
       "  schedule_paused INTEGER NOT NULL DEFAULT 0,"
       "  queue_id INTEGER DEFAULT 1 REFERENCES queues(id) ON DELETE SET NULL,"
-      "  category_id INTEGER NOT NULL DEFAULT 1 REFERENCES categories(id)"
+      "  category_id INTEGER NOT NULL DEFAULT 1 REFERENCES categories(id),"
+      "  requires_browser_context INTEGER NOT NULL DEFAULT 0"
       ");"
       ""
       "CREATE TABLE IF NOT EXISTS chunks ("
@@ -142,7 +143,7 @@ int db_init(const char *db_path) {
                                           "last_modified", "auto_filename",
                                           "auth_user", "auth_password",
                                           "queue_id", "schedule_paused",
-                                          "category_id"};
+                                          "category_id", "requires_browser_context"};
   static const char *migration_types[] = {"TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "INTEGER DEFAULT 0", "INTEGER DEFAULT 0",
@@ -151,7 +152,8 @@ int db_init(const char *db_path) {
                                           "TEXT DEFAULT ''",
                                           "INTEGER DEFAULT 1 REFERENCES queues(id) ON DELETE SET NULL",
                                           "INTEGER NOT NULL DEFAULT 0",
-                                          "INTEGER NOT NULL DEFAULT 1 REFERENCES categories(id)"};
+                                          "INTEGER NOT NULL DEFAULT 1 REFERENCES categories(id)",
+                                          "INTEGER NOT NULL DEFAULT 0"};
 
   char *migration_error = NULL;
   /* SQLite requires a NULL default when adding REFERENCES with FK checks
@@ -261,7 +263,7 @@ int db_init(const char *db_path) {
   }
   sqlite3_finalize(fk_check);
 
-  rc = sqlite3_exec(g_db, "PRAGMA user_version = 9; COMMIT;", NULL, NULL,
+  rc = sqlite3_exec(g_db, "PRAGMA user_version = 10; COMMIT;", NULL, NULL,
                     &migration_error);
   if (rc != SQLITE_OK) {
     LOG_ERROR("could not commit database migration: %s",
@@ -796,8 +798,9 @@ static int insert_download(uint32_t id, const char *url,
       "INSERT OR REPLACE INTO downloads "
       "(id, url, dest_path, status, created_at, cookie, referrer, "
       "extra_headers, expected_sha256, speed_limit_bps, reserved_file, "
-      "auto_filename, auth_user, auth_password, queue_id, category_id) "
-      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+      "auto_filename, auth_user, auth_password, queue_id, category_id, "
+      "requires_browser_context) "
+      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
     LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
@@ -807,9 +810,10 @@ static int insert_download(uint32_t id, const char *url,
   sqlite3_bind_text(stmt, 2, url, -1, SQLITE_STATIC);
   sqlite3_bind_text(stmt, 3, dest_path, -1, SQLITE_STATIC);
   sqlite3_bind_int64(stmt, 4, (sqlite3_int64)time(NULL));
-  sqlite3_bind_text(stmt, 5, opts ? opts->cookie : "", -1, SQLITE_STATIC);
-  sqlite3_bind_text(stmt, 6, opts ? opts->referrer : "", -1, SQLITE_STATIC);
-  sqlite3_bind_text(stmt, 7, opts ? opts->extra_headers : "", -1,
+  bool ephemeral = opts && opts->browser_context;
+  sqlite3_bind_text(stmt, 5, opts && !ephemeral ? opts->cookie : "", -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 6, opts && !ephemeral ? opts->referrer : "", -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 7, opts && !ephemeral ? opts->extra_headers : "", -1,
                     SQLITE_STATIC);
   sqlite3_bind_text(stmt, 8, opts ? opts->expected_sha256 : "", -1,
                     SQLITE_STATIC);
@@ -823,6 +827,7 @@ static int insert_download(uint32_t id, const char *url,
   sqlite3_bind_int64(stmt, 14,
                      opts && opts->queue_id ? (sqlite3_int64)opts->queue_id : 1);
   sqlite3_bind_int64(stmt, 15, (sqlite3_int64)category.id);
+  sqlite3_bind_int(stmt, 16, ephemeral ? 1 : 0);
 
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
@@ -1152,7 +1157,8 @@ int db_find_active_by_url(const char *normalized, uint32_t *out_id) {
   *out_id = 0;
   const char *sql =
       "SELECT id, url FROM downloads "
-      "WHERE status IN ('QUEUED', 'ACTIVE', 'PAUSED') ORDER BY id DESC";
+      "WHERE status IN ('QUEUED', 'ACTIVE', 'PAUSED') OR "
+      "(status='ERROR' AND requires_browser_context=1) ORDER BY id DESC";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
     return -1;
@@ -1240,7 +1246,8 @@ int db_restore_queue(void) {
                     "cookie, referrer, extra_headers, expected_sha256, "
                     "speed_limit_bps, reserved_file, auto_filename, etag, "
                     "last_modified, auth_user, auth_password, "
-                    "COALESCE(queue_id,1), created_at, schedule_paused "
+                    "COALESCE(queue_id,1), created_at, schedule_paused, "
+                    "requires_browser_context "
                     "FROM downloads WHERE status != 'DONE'";
 
   sqlite3_stmt *stmt = NULL;
@@ -1261,6 +1268,7 @@ int db_restore_queue(void) {
     d->queue_id = (uint32_t)sqlite3_column_int(stmt, 17);
     d->created_at = (time_t)sqlite3_column_int64(stmt, 18);
     d->schedule_paused = sqlite3_column_int(stmt, 19) != 0;
+    d->requires_browser_context = sqlite3_column_int(stmt, 20) != 0;
 
     const char *url = (const char *)sqlite3_column_text(stmt, 1);
     const char *path = (const char *)sqlite3_column_text(stmt, 2);
@@ -1296,10 +1304,11 @@ int db_restore_queue(void) {
     strncpy(options.auth_password, auth_password ? auth_password : "",
             sizeof(options.auth_password) - 1);
 
-    if (options.cookie[0] != '\0' || options.referrer[0] != '\0' ||
+    if (!d->requires_browser_context &&
+        (options.cookie[0] != '\0' || options.referrer[0] != '\0' ||
         options.extra_headers[0] != '\0' ||
         options.expected_sha256[0] != '\0' || options.speed_limit_bps != 0 ||
-        options.auth_user[0] != '\0' || options.auth_password[0] != '\0') {
+        options.auth_user[0] != '\0' || options.auth_password[0] != '\0')) {
       d->request = malloc(sizeof(*d->request));
       if (!d->request) {
         free(d);
@@ -1321,6 +1330,11 @@ int db_restore_queue(void) {
       d->status = DOWNLOAD_CANCELED;
     else
       d->status = DOWNLOAD_QUEUED;
+
+    if (d->requires_browser_context && d->status != DOWNLOAD_CANCELED) {
+      d->status = DOWNLOAD_PAUSED;
+      db_update_status(d->id, "PAUSED");
+    }
 
     /* Restore chunk information so resume can continue. */
     DbChunkRow rows[QM_MAX_CHUNKS];

@@ -934,3 +934,10 @@ Completed: bounded UTF-8 context validation, serialized IPC frame cap, message 5
 Verification: test-first protocol fixture covers unsafe/oversize fields and exact-limit forwarding; URL-only flow smoke and full build/CTest 33/33 passed, no new warnings.
 Open questions: context requires daemon v8, implemented next in 3.1.4; older daemons reject contextual offers explicitly. Phase 2 TSan blocker remains.
 Next: 3.1.4 daemon applies ephemeral context without persistence or payload logging.
+
+## 2026-09-28 — Codex, task 3.1.4
+Branch: `cdm`; commit: `feat(ipc): apply browser-supplied cookies and headers`.
+Completed: IPC v8 context/presence flow, ephemeral queue options, schema v10 presence marker, restart refresh, header application, and terminal/shutdown clearing; user approved expanded scope.
+Verification: IPC cleanup/restore tests and protected 127.0.0.1 HEAD/GET smoke pass; captured sentinels absent from database/WAL/logs; full build/CTest 33/33, no new warnings.
+Open questions: popup visual smoke UNKNOWN without display; expiry clearing inspected but clock-driven test not added; contextual redirects require a fresh offer. Phase 2 TSan blocker remains.
+Next: 3.2.1 browser context menu.

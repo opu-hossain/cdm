@@ -163,11 +163,12 @@ CURLcode curl_apply_basic_auth(CURL *curl, const RequestContext *ctx) {
 int curl_client_head(const char *url, const RequestContext *ctx,
                      FileInfo *out) {
   memset(out, 0, sizeof(*out));
+  const char *log_url = ctx && ctx->sensitive ? "[REDACTED]" : url;
   ProbeState state = {.info = out};
 
   CURL *curl = curl_easy_init();
   if (!curl) {
-    LOG_ERROR("curl_easy_init failed for %s", url);
+    LOG_ERROR("curl_easy_init failed for %s", log_url);
     return -1;
   }
 
@@ -190,11 +191,13 @@ int curl_client_head(const char *url, const RequestContext *ctx,
 
   curl_easy_setopt(curl, CURLOPT_URL, url);
   curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  /* Captured context belongs to the offered final URL, not redirect targets. */
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, ctx && ctx->sensitive ? 0L : 1L);
   curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
   curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, probe_header_callback);
   curl_easy_setopt(curl, CURLOPT_HEADERDATA, &state);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, config.user_agent);
+  curl_easy_setopt(curl, CURLOPT_USERAGENT,
+                   ctx && ctx->user_agent ? ctx->user_agent : config.user_agent);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)config.transfer_timeout_sec);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
                    (long)config.connect_timeout_sec);
@@ -223,10 +226,10 @@ int curl_client_head(const char *url, const RequestContext *ctx,
                       &content_length);
     out->total_size = (content_length > 0) ? (uint64_t)content_length : 0;
   } else if (res != CURLE_OK) {
-    LOG_WARN("HEAD request failed for %s: %s", url,
+    LOG_WARN("HEAD request failed for %s: %s", log_url,
              curl_easy_strerror(res));
   } else {
-    LOG_WARN("HEAD request returned HTTP %ld for %s", http_status, url);
+    LOG_WARN("HEAD request returned HTTP %ld for %s", http_status, log_url);
   }
 
   if (!success) {
@@ -256,7 +259,7 @@ int curl_client_head(const char *url, const RequestContext *ctx,
       out->supports_ranges = false;
     }
     if (!success)
-      LOG_WARN("GET range probe failed for %s: HTTP %ld, %s", url,
+      LOG_WARN("GET range probe failed for %s: HTTP %ld, %s", log_url,
                http_status, curl_easy_strerror(res));
   }
 

@@ -169,6 +169,8 @@ static void clear_resume_state(struct Download *d, bool also_delete_file) {
 
 int engine_run_download(struct Download *d) {
   const RequestOptions *request = d->request;
+  if (d->requires_browser_context && (!request || !request->browser_context))
+    return -5;
 
   if (d->chunk_count > 0 && access(d->dest_path, F_OK) != 0 &&
       errno == ENOENT) {
@@ -178,14 +180,14 @@ int engine_run_download(struct Download *d) {
     return -4;
   }
 
-  LOG_INFO("Starting download: %s\n", d->url);
+  LOG_INFO("Starting download %u\n", d->id);
 
   if (request && request->expected_sha256[0])
     LOG_INFO("Download %u will verify SHA-256: %s\n", d->id,
              request->expected_sha256);
 
   if (!is_valid_url(d->url)) {
-    LOG_ERROR("Invalid URL scheme (only http/https allowed): %s\n", d->url);
+    LOG_ERROR("Invalid URL scheme for download %u (http/https required)", d->id);
     return -1;
   }
 
@@ -199,11 +201,13 @@ int engine_run_download(struct Download *d) {
       .auth_password = request && request->auth_password[0]
                            ? request->auth_password
                            : NULL,
+      .user_agent = request && request->user_agent[0] ? request->user_agent : NULL,
+      .sensitive = request && request->browser_context,
   };
 
   FileInfo info;
   if (curl_client_head(d->url, &req_ctx, &info) != 0) {
-    LOG_ERROR("Metadata probe failed for: %s\n", d->url);
+    LOG_ERROR("Metadata probe failed for download %u", d->id);
     return -1;
   }
 

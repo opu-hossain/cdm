@@ -72,7 +72,7 @@ static int retry_backoff_seconds(int attempt) {
 static int download_thread_fn(void *arg) {
   Download *dl = (Download *)arg;
 
-  LOG_INFO("Starting download %u (%s)", dl->id, dl->url);
+  LOG_INFO("Starting download %u", dl->id);
   int rc = engine_run_download(dl);
 
   bool canceled = atomic_load(&dl->cancel_requested);
@@ -127,13 +127,15 @@ static int download_thread_fn(void *arg) {
     return rc;
   }
 
-  if (rc == -3 || rc == -4) {
+  if (rc == -3 || rc == -4 || rc == -5) {
     dl->retry_count = 0;
     dl->next_retry_at = 0;
     queue_manager_update_status(dl->id, DOWNLOAD_ERROR);
     db_update_status(dl->id, "ERROR");
-    ipc_broadcast_status(dl->id, "Error", dl->progress);
+    ipc_broadcast_status(dl->id, rc == -5 ? "Fresh browser session required" : "Error",
+                          dl->progress);
     LOG_WARN("Download %u failed — %s, not retrying: %s", dl->id,
+             rc == -5 ? "fresh browser session required" :
              rc == -4 ? "resume file is missing" : "destination already exists",
              dl->dest_path);
     dm_notify_send("Download Failed", basename_of(dl->dest_path),
@@ -347,6 +349,7 @@ void scheduler_shutdown(void) {
     worker->download_id = 0;
     worker->in_use = false;
   }
+  queue_manager_clear_browser_contexts();
 }
 
 DownloadTransferMetrics scheduler_advance_transfer_metrics(

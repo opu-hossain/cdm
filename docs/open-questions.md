@@ -105,3 +105,14 @@ assertions because Criterion cannot initialize its inheritable arena or crashes
 inside `libcriterion.so.3`. Debug and ASan suites both pass 33/33. Which
 Criterion/TSan-compatible runner should be used for the release gate? Repeat
 the full TSan suite there before treating it as race-clean.
+
+## Task 3.1.4 — Ephemeral context scope and restart marker
+
+The brief lists IPC, worker pool, and popup files, but `RequestOptions` is
+persisted and caps Cookie at 1024 bytes while the agreed browser contract allows
+4096. May this task extend queue/engine/curl interfaces and persist only a
+`requires_browser_context` boolean (never captured values), so restart/resume
+requires a fresh browser offer? Root AGENTS.md restricts edits to listed files;
+The user approved this expansion and boolean marker on 2026-09-28; captured
+values remain memory-only. The implementation uses ephemeral `RequestOptions`
+and refuses resume after context loss until an explicit fresh offer confirms.
