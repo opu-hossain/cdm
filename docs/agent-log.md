@@ -1018,3 +1018,10 @@ Completed: approved startup/spawn/persistence scope; cached ffmpeg, fixed argv, 
 Verification: test-first real TS-to-MP4 fixture plus mock executable/cache/timeout tests; full Debug build/CTest 35/35 pass, no new warnings.
 Open questions: Windows remux remains TODO(platform); existing TSan/browser phase gates remain open.
 Next: 4.3.1 DASH parser; asked permission for libxml2 and build/package scope. No push.
+
+## 2026-09-28 — Codex, task 4.3.1
+Branch: `cdm`; commit: `feat(engine): dash mpd parser`.
+Completed: approved system libxml2/build/package scope; bounded pure static MPD parser, inherited bases/templates/lists, highest-bandwidth audio/video, Number/Time formatting, timeline repeats and explicit unsupported-layout errors.
+Verification: test-first eight Criterion fixtures cover schemes, inheritance, offsets, selection/ties, malformed/hostile XML, URI validation, limits and overflow; full Debug build/CTest 36/36 pass, no new warnings.
+Open questions: supported-layout limits recorded; existing phase gates remain open. Asked for 4.3.2 dispatch/spawn/persistence scope.
+Next: 4.3.2 DASH download and merge. No push.

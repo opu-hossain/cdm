@@ -62,6 +62,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBNOTIFY REQUIRED IMPORTED_TARGET libnotify)
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
 pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
+pkg_check_modules(LIBXML2 REQUIRED IMPORTED_TARGET libxml-2.0>=2.9)
 option(DOWNLOADMGR_ENABLE_TRAY "Build the Linux tray backend when available" ON)
 if(DOWNLOADMGR_ENABLE_TRAY AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     pkg_check_modules(TRAY_GIO QUIET IMPORTED_TARGET gio-2.0)
@@ -156,6 +157,7 @@ set(UTILS_SOURCES
 )
 
 set(ENGINE_SOURCES
+    src/engine/dash.c
     src/engine/engine_runner.c
     src/engine/hls.c
     src/engine/segmenter.c
@@ -185,6 +187,10 @@ downloadmgr_enable_sanitizer(downloadmgr_core)
 
 target_include_directories(downloadmgr_core PRIVATE src)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+target_link_libraries(downloadmgr_core PUBLIC PkgConfig::LIBXML2)
+if(UNIX)
+    target_link_libraries(downloadmgr_core PUBLIC m)
+endif()
 target_link_libraries(downloadmgr_core PUBLIC
     OpenSSL::Crypto
     cdm_vendor
@@ -305,6 +311,11 @@ add_dependencies(browser_extension_bundle browser_extension_validate)
 if(BUILD_TESTING)
     add_subdirectory(tests)
     add_executable(test_hls tests/test_hls.c)
+    add_executable(test_dash tests/test_dash.c)
+    downloadmgr_enable_warnings(test_dash)
+    downloadmgr_enable_sanitizer(test_dash)
+    target_link_libraries(test_dash PRIVATE downloadmgr_core PkgConfig::CRITERION)
+    add_test(NAME test_dash COMMAND test_dash)
     downloadmgr_enable_warnings(test_hls)
     downloadmgr_enable_sanitizer(test_hls)
     target_link_libraries(test_hls PRIVATE downloadmgr_core PkgConfig::CRITERION)

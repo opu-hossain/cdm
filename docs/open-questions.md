@@ -184,3 +184,14 @@ are not implemented; remux falls back to native output there. POSIX runs fixed
 argv via posix_spawn, limits demuxers/protocols, reaps the child, and honors
 pause/cancel and the configured transfer timeout. Explicit checksum verification
 retains native bytes so remux cannot invalidate the requested checksum.
+
+## Task 4.3.1 — XML dependency and supported layouts
+
+Resolved: user approved libxml2 and CMake/package dependency scope on
+2026-09-28. Parser uses system libxml2 >= 2.9 with forced UTF-8, DTD rejection,
+no expansion/DTD/XInclude flags, NONET, and NO_XXE on libxml2 >= 2.13.
+Current bounded scope is static single-period audio/video, whole-file
+SegmentList and inherited SegmentTemplate Number/Time addressing. Dynamic,
+DRM, SegmentBase, byte ranges/indexes, multiple BaseURL choices, external
+xlink/xml:base, nonzero period start/eptDelta and calendar ISO durations are
+rejected explicitly. Downloader/merge wiring is task 4.3.2.

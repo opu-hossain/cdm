@@ -4,5 +4,5 @@ set -euo pipefail
 dnf install -y \
     cmake gcc gcc-c++ make git pkgconf-pkg-config \
     libnotify-devel SDL2-devel libepoxy-devel mesa-libGL-devel \
-    libcurl-devel sqlite-devel openssl-devel \
+    libcurl-devel sqlite-devel openssl-devel libxml2-devel \
     rpm-build python3 which sed findutils
