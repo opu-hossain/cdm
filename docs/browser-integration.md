@@ -1,16 +1,23 @@
 # Browser integration
 
-cdm can receive HTTP(S) browser downloads from Chrome, Chromium, or Firefox.
-The extension cancels the browser download when it is created, sends its URL to
-the native host, and opens a compact cdm confirmation window. After you choose
-a filename and folder, cdm shows progress and offers Open file, Open folder,
-and Close on completion.
+cdm offers HTTP(S) browser downloads to a native host and a confirmation popup.
+Automatic interception applies the extension's filters and exclusions first;
+only allowed downloads are canceled in the browser. Cancellation is best effort
+and can leave a partial browser file. Link/page **Download with cdm** menu choices
+use the same confirmation flow without canceling browser downloads.
 
-Browser cancellation is best effort. The browser can write a partial file
-before the extension sees `downloads.onCreated`. URL-only GET downloads are
-supported in this release. Downloads that need browser cookies or authorization,
-POST bodies, Blob/data URLs, or browser-internal URLs cannot be handed off
-reliably. The extension does not forward cookies or credentials.
+URL-only offers are the default. Click the extension action on a site to enable
+browser-session capture for that origin; the browser requests optional cookie,
+webRequest, and site permissions. Click again to disable it. Cookie, User-Agent,
+and Referer capture is bounded and best effort; ambiguous request correlation,
+incognito, or unavailable permissions omit context. Authorization headers,
+POST bodies, Blob/data URLs, and browser-internal URLs are unsupported.
+
+Captured values stay in memory and are not saved in SQLite, logs, or sync
+settings. A persisted presence marker makes affected downloads require a fresh
+confirmed browser offer after daemon restart. Captured context is not forwarded
+through redirects; re-offer the final URL. The popup reports header presence
+without exposing values. See [browser-context.md](browser-context.md).
 
 ## Install Chrome or Chromium
 
@@ -56,6 +63,75 @@ restart, so reload the extension after restarting. Persistent Firefox
 installation requires a signed extension package; `cdm-firefox.zip` is an
 unsigned build artifact for signing and testing.
 
+## Install Edge, Brave, Opera, or Vivaldi
+
+Load the same Chromium extension directory through the browser's extensions
+page, then pass its actual 32-character extension ID:
+
+```sh
+cdm browser install --edge --id <extension-id>
+cdm browser install --brave --id <extension-id>
+cdm browser install --opera --id <extension-id>
+cdm browser install --vivaldi --id <extension-id>
+```
+
+Start the stable browser once before registering: these flags require its
+existing default config directory. The manifest paths below are relative to
+HOME and use the file name `org.cdm.browser.json`:
+
+| Flag | Required config directory | Manifest directory |
+|---|---|---|
+| `--edge` | `.config/microsoft-edge` | `.config/microsoft-edge/NativeMessagingHosts` |
+| `--brave` | `.config/BraveSoftware/Brave-Browser` | `.config/BraveSoftware/Brave-Browser/NativeMessagingHosts` |
+| `--opera` | `.config/opera` | `.config/google-chrome/NativeMessagingHosts` |
+| `--vivaldi` | `.config/vivaldi` | `.config/vivaldi/NativeMessagingHosts` |
+
+Opera shares Chrome's registration. Installing or uninstalling that entry also
+affects Chrome's cdm host registration; install again with the desired extension
+ID if switching browsers. Custom/XDG profile roots, beta/dev channels, Flatpak,
+and Snap registration are not covered by these flags. See installer source
+comments for the researched path references. Real browser handshakes remain
+unverified for the four added flags in this environment.
+
+## Automatic interception settings
+
+Open the extension's options page. `storage.sync` stores configuration only:
+
+- Minimum file size is a nonnegative integer in **bytes**, default 0. Unknown
+  sizes remain in the browser when a positive minimum is set.
+- Extension and MIME allow/deny lists are comma-separated, case-insensitive,
+  and default empty. Extension tokens omit the dot; MIME supports exact types,
+  `type/*`, and `*/*`. Deny matches win. When allowlists exist, matching either
+  list allows the download. Each list accepts at most 64 entries.
+- Site exclusions accept ASCII/punycode hostnames and a leading `*.` wildcard;
+  no regular expressions, URLs, or ports. Exact hosts match only that host;
+  `*.example.invalid` matches both the base host and its subdomains, using label
+  boundaries. At most 64 entries are accepted.
+
+Explicit menu choices bypass automatic filters and exclusions. Invalid settings
+or read failures leave automatic downloads in the browser. A `SKIP` badge/title
+explains a bypass. Options writes are validated before saving; failed writes are
+reported. Filter/site JSON is separately capped at 6000 UTF-8 bytes.
+
+The extension sends `{type:"set_site_exclusions",sites:[...]}` before each native
+offer, including a new host connection's first offer. The host validates and
+acknowledges it with `site_exclusions_set`; invalid updates preserve its prior
+policy. Offers carry `automatic:true` for interception or `false` for menu
+choices (missing mode defaults to automatic). Excluded automatic offers return
+`offer_skipped` with the request ID before daemon/popup startup. This policy is
+independent of the daemon IPC protocol.
+
+## Refresh a download URL
+
+Use **Refresh URL** in a non-active row menu or a stopped browser popup. With
+protocol v9, cdm probes the stored URL with its request options and saves the
+final redirected URL, size, ETag, and Last-Modified together. It does not resume
+the transfer automatically. Probe/database failure leaves the record unchanged.
+Active downloads, lost browser context, concurrent changes, and size/validator
+changes for an existing partial download are refused. Changed partial content
+requires re-downloading. This follows existing redirects; it cannot obtain a
+new expired signed URL from a site or recreate browser login state.
+
 ## Remove browser integration
 
 Disable or remove the extension in the browser, then remove its host manifest:
@@ -64,10 +140,14 @@ Disable or remove the extension in the browser, then remove its host manifest:
 cdm browser uninstall --chrome
 cdm browser uninstall --chromium
 cdm browser uninstall --firefox
+cdm browser uninstall --edge
+cdm browser uninstall --brave
+cdm browser uninstall --opera
+cdm browser uninstall --vivaldi
 ```
 
-Only the selected browser's per-user `org.cdm.browser.json` manifest is
-removed. Existing downloads and the cdm daemon are unaffected. Package
+The selected per-user `org.cdm.browser.json` manifest is removed; Opera and
+Chrome share that entry. Existing downloads and the cdm daemon are unaffected. Package
 installation never edits a browser profile automatically.
 
 ## Troubleshooting
@@ -90,7 +170,18 @@ installation never edits a browser profile automatically.
 - **Firefox extension disappears:** temporary add-ons expire when Firefox
   restarts. Reload it through `about:debugging` or install a signed package.
 
-The extension asks for `downloads` to observe/cancel browser downloads and
-`nativeMessaging` to contact the locally installed cdm host. It sends the URL,
-referrer URL, suggested filename, MIME type, and reported size to cdm; it does
-not send cookies, authorization headers, or request bodies.
+Required permissions are `downloads`, `nativeMessaging`, `activeTab`,
+`contextMenus`, and `storage`. Optional `cookies`, `webRequest`, and HTTP(S)
+host access are requested only by the site-specific user gesture. Extension
+context enablement and correlated headers are session memory, not sync settings.
+
+## Phase 3 verification status
+
+On 2026-09-28, all 33 CTest targets pass, including Node extension/options tests,
+native-host JSON/context tests, local HTTP/IPC refresh tests, and temp-HOME
+registration tests for all seven flags. Chromium and Firefox executables are
+available; Chrome, Edge, Brave, Opera, and Vivaldi are unavailable. No installed
+browser visual/handshake smoke was performed, so task 3.5.1's all-browser manual
+gate remains open. To close it, load each extension, register its host, verify
+confirmation and progress, test consent on/off, filters/exclusions and explicit
+menu bypass, and verify refresh success/failure against local HTTP fixtures.

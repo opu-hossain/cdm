@@ -2,6 +2,14 @@
 
 These notes describe the current source and packaging configuration. This draft does not state that a tag or downloadable package has been published.
 
+## Unreleased — phase 3 browser integration
+
+- Added per-origin, optional browser-session consent and bounded Cookie/User-Agent/Referer capture. Captured context stays in memory; SQLite schema v10 stores only `requires_browser_context`. Restarted contextual downloads require a fresh confirmed browser offer. Contextual redirects are refused; Authorization, POST and Blob/data handoff remain unsupported.
+- Added HTTP(S) link/page context menus and sync-backed options for byte minimum, extension/MIME lists, and hostname exclusions. Deny wins; either populated allowlist may match. Unknown sizes bypass positive minimums. Exclusions affect automatic interception only; wildcard patterns include the base host. Explicit menu offers bypass automatic policy.
+- IPC v9 adds type 40 for ID-only URL refresh, type 56 for JSON browser context and type 57 for presence bits. Existing raw-wire layouts remain unchanged. Refresh preserves the record on failure and refuses active/lost-context downloads or changed partial content.
+- Added stable Linux installer flags for Edge, Brave, Opera, and Vivaldi, requiring existing profile roots and the actual extension ID. Opera shares Chrome's native-host registration and reports the replacement. Custom/sandboxed profile layouts remain unsupported.
+- On 2026-09-28 the full Debug build/CTest passes 33/33 with no new warnings, including JS/options, native host, installer, HTTP and IPC fixtures. Installed-browser handshake/visual smoke remains UNKNOWN; five target browsers are unavailable here. Task 3.5.1's manual gate remains unchecked. The earlier Phase 2 Criterion/TSan runner blocker is unchanged.
+
 ## Unreleased — phase 2 queues and automation
 
 - Named queues persist priority (0–1000), concurrency caps, local-time schedules, and post-actions. Deleting a queue moves its downloads to Default. Schedule pauses are tracked separately from user pauses. Post-actions fire only after every download in a nonempty queue is DONE for five seconds; shutdown, sleep, and command execution require explicit config opt-in.

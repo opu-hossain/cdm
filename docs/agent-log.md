@@ -976,3 +976,10 @@ Completed: new stable Linux flags validate profile roots, reuse the supplied Chr
 Verification: test-first temp-HOME installer smoke covers seven flags, missing/non-directory profiles, IDs, manifest contents, and foreign-manifest removal refusal; full build/CTest 33/33 pass with no new warnings.
 Open questions: real installed-browser handshake UNKNOWN; custom/XDG profile roots and sandboxed browsers are not supported by these flags; Phase 2 TSan runner blocker remains.
 Next: 3.5.1 phase 3 documentation and verification gate. All task changes committed; no push.
+
+## 2026-09-28 — Codex, task 3.5.1 documentation/gate
+Branch: `cdm`; commit: `docs(browser): reconcile phase 3 behavior and verification`.
+Completed: project context, release notes, and browser guide now describe IPC v9/schema v10, consent/privacy, filters/exclusions, refresh constraints and installer paths.
+Verification: full Debug build/CTest 33/33 (including Node JS/options tests), no new warnings; checked available browser executables and reconciled critical interfaces against source.
+Open questions: all-browser installed handshake/visual smoke remains UNKNOWN; five browsers unavailable. Task 3.5.1 stays unchecked for that manual gate; Phase 2 TSan runner blocker remains.
+Next: 4.1.1 opt-in extension media detector, independent of the recorded manual gate. All task changes committed; no push.

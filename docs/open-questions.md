@@ -127,3 +127,12 @@ require a fresh browser offer under the agreed privacy policy. Awaiting user
 scope decision; proceed with independent task 3.4.1 meanwhile.
 Resolved: user approved the expanded scope and existing-URL redirect resolution
 on 2026-09-28. Contextual redirects retain the fresh-offer requirement.
+
+## Task 3.5.1 — Installed-browser verification gate
+
+Debug build/CTest and JS/native/HTTP/IPC/installer fixtures pass. Chromium and
+Firefox executables are available, but no installed-browser visual/handshake
+smoke was performed. Chrome, Edge, Brave, Opera and Vivaldi are unavailable.
+Run the local-fixture consent/menu/filter/exclusion/refresh smoke checklist in
+`docs/browser-integration.md` on all seven browsers before closing this gate.
+Phase 3 documentation is updated; task 3.5.1 stays unchecked for this gate.
