@@ -56,6 +56,25 @@ def main(host: str) -> None:
     invalid_env = os.environ.copy()
     invalid_env.update({"HOME": invalid_root.name,
                         "XDG_RUNTIME_DIR": invalid_root.name})
+    configuration = {"type": "set_site_exclusions", "sites": ["*.EXAMPLE.invalid."]}
+    blocked = {**base, "url": "https://example.invalid/file", "automatic": True}
+    frames = [configuration, blocked,
+              {**blocked, "url": "https://sub.example.invalid/file"},
+              {**blocked, "url": "https://EXAMPLE.invalid.:443/file"},
+              {**blocked, "url": "https://exa%6dple.invalid/file"},
+              {"type": "set_site_exclusions", "sites": [".*regex.invalid"]}, blocked,
+              {"type": "set_site_exclusions", "sites": ["example.invalid"] * 65}]
+    result = subprocess.run([host], input=b"".join(frame(json.dumps(value).encode())
+        for value in frames), env=invalid_env, capture_output=True, timeout=5)
+    replies = decode_frames(result.stdout)
+    assert replies[0]["type"] == "site_exclusions_set", replies
+    assert replies[1]["type"] == "offer_skipped", replies
+    assert replies[2]["type"] == "offer_skipped", replies
+    assert replies[3]["type"] == "offer_skipped", replies
+    assert replies[4]["type"] == "offer_skipped", replies
+    assert replies[5]["type"] == "error", replies
+    assert replies[6]["type"] == "offer_skipped", "invalid configuration replaced valid policy"
+    assert replies[7]["type"] == "error", replies
     for field, value in (("cookie", "x\r\nY"), ("cookie", "x" * 4097),
                          ("user_agent", "x" * 257), ("referer", "x" * 2049),
                          ("cookie", 3), ("cookie", "x\x00y"),
@@ -127,8 +146,9 @@ def main(host: str) -> None:
         env = os.environ.copy()
         env.update({"HOME": root, "XDG_RUNTIME_DIR": str(runtime)})
         payload = {**base, "cookie": "x" * 4096, "user_agent": "u" * 256,
-                   "referer": "r" * 2048}
-        result = subprocess.run([host], input=frame(json.dumps(payload).encode()),
+                   "referer": "r" * 2048, "automatic": False}
+        result = subprocess.run([host], input=frame(json.dumps(configuration).encode()) +
+                                frame(json.dumps(payload).encode()),
                                 env=env, capture_output=True, timeout=5)
         worker.join(timeout=2)
         assert not worker.is_alive(), "fake daemon did not finish"
@@ -138,7 +158,8 @@ def main(host: str) -> None:
         assert all(observed[0][1][key] == payload[key]
                    for key in ("cookie", "user_agent", "referer")), observed
         replies = decode_frames(result.stdout)
-        assert replies[0]["type"] == "offer_registered", replies
+        assert replies[0]["type"] == "site_exclusions_set", replies
+        assert replies[1]["type"] == "offer_registered", replies
         assert payload["cookie"].encode() not in result.stderr
 
 

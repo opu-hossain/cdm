@@ -9,6 +9,8 @@
 #include "../vendor/cJSON.h"
 
 #include <errno.h>
+#include <ctype.h>
+#include <curl/curl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,6 +20,11 @@
 
 #define NATIVE_MAX_MESSAGE (1024 * 1024)
 #define HOST_MAX_OFFERS 64
+#define HOST_MAX_EXCLUSIONS 64
+
+/* Native host stdin/event loop is the sole owner of the exclusion policy. */
+static char g_excluded_sites[HOST_MAX_EXCLUSIONS][256];
+static size_t g_excluded_count;
 
 typedef struct {
   char cookie[4097];
@@ -253,6 +260,101 @@ static bool send_error(const char *request_id, const char *message) {
   return ok;
 }
 
+static bool normalize_site(const char *input, char out[256]) {
+  size_t length = strlen(input);
+  if (!length || length >= 256) return false;
+  for (size_t i = 0; i <= length; i++)
+    out[i] = (char)tolower((unsigned char)input[i]);
+  if (out[length - 1] == '.') out[--length] = '\0';
+  const char *host = strncmp(out, "*.", 2) == 0 ? out + 2 : out;
+  if (!*host || strlen(host) > 253) return false;
+  size_t label_length = 0;
+  for (const char *p = host;; p++) {
+    if (*p == '.' || !*p) {
+      if (!label_length || label_length > 63 || p[-1] == '-') return false;
+      label_length = 0;
+      if (!*p) return true;
+    } else {
+      if ((*p < 'a' || *p > 'z') && (*p < '0' || *p > '9') && *p != '-')
+        return false;
+      if (!label_length && *p == '-') return false;
+      label_length++;
+    }
+  }
+}
+
+static bool configure_exclusions(const cJSON *root) {
+  const cJSON *sites = cJSON_GetObjectItemCaseSensitive(root, "sites");
+  int count = cJSON_GetArraySize(sites);
+  if (!cJSON_IsArray(sites) || count > HOST_MAX_EXCLUSIONS)
+    return send_error(NULL, "invalid site exclusion list");
+  char replacement[HOST_MAX_EXCLUSIONS][256] = {{0}};
+  for (int i = 0; i < count; i++) {
+    const cJSON *site = cJSON_GetArrayItem(sites, i);
+    if (!cJSON_IsString(site) || !site->valuestring ||
+        !normalize_site(site->valuestring, replacement[i]))
+      return send_error(NULL, "invalid excluded hostname");
+  }
+  memcpy(g_excluded_sites, replacement, sizeof(replacement));
+  g_excluded_count = (size_t)count;
+  cJSON *reply = cJSON_CreateObject();
+  if (!reply) return false;
+  cJSON_AddStringToObject(reply, "type", "site_exclusions_set");
+  bool ok = native_send(reply);
+  cJSON_Delete(reply);
+  return ok;
+}
+
+/* -1 invalid URL/unsupported IDN, 0 allowed, 1 excluded. */
+static int site_excluded(const char *url) {
+  CURLU *parsed = curl_url();
+  if (!parsed) return -1;
+  char *hostname = NULL;
+  unsigned int flags = 0;
+#if LIBCURL_VERSION_NUM >= 0x075800
+  flags = CURLU_PUNYCODE;
+#endif
+  bool valid = curl_url_set(parsed, CURLUPART_URL, url, 0) == CURLUE_OK &&
+               curl_url_get(parsed, CURLUPART_HOST, &hostname, flags) == CURLUE_OK;
+  int result = valid ? 0 : -1;
+  char host[256] = {0};
+  if (valid) {
+    size_t length = strlen(hostname);
+    if (length >= sizeof(host)) result = -1;
+    else {
+      for (size_t i = 0; i <= length; i++)
+        host[i] = (char)tolower((unsigned char)hostname[i]);
+      if (length && host[length - 1] == '.') host[--length] = '\0';
+      for (size_t i = 0; i < g_excluded_count; i++) {
+        const char *pattern = g_excluded_sites[i];
+        bool wildcard = strncmp(pattern, "*.", 2) == 0;
+        const char *base = wildcard ? pattern + 2 : pattern;
+        size_t base_length = strlen(base);
+        if (strcmp(host, base) == 0 ||
+            (wildcard && length > base_length &&
+             host[length - base_length - 1] == '.' &&
+             strcmp(host + length - base_length, base) == 0)) {
+          result = 1;
+          break;
+        }
+      }
+    }
+  }
+  curl_free(hostname);
+  curl_url_cleanup(parsed);
+  return result;
+}
+
+static bool send_skipped(const char *request_id) {
+  cJSON *reply = cJSON_CreateObject();
+  if (!reply) return false;
+  cJSON_AddStringToObject(reply, "type", "offer_skipped");
+  cJSON_AddStringToObject(reply, "request_id", request_id);
+  bool ok = native_send(reply);
+  cJSON_Delete(reply);
+  return ok;
+}
+
 static bool send_registered(const IpcBrowserOffer *offer) {
   cJSON *reply = cJSON_CreateObject();
   if (!reply)
@@ -327,12 +429,30 @@ static bool handle_message(const char *json) {
   cJSON *root = cJSON_Parse(json);
   if (!root)
     return send_error(NULL, "invalid JSON");
+  const cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
+  if (cJSON_IsString(type) && strcmp(type->valuestring, "set_site_exclusions") == 0) {
+    bool ok = configure_exclusions(root);
+    cJSON_Delete(root);
+    return ok;
+  }
   IpcBrowserOffer offered = {0};
   HostRequestContext context = {0};
   if (!parse_offer(root, &offered, &context)) {
     const cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "request_id");
     bool ok = send_error(cJSON_IsString(id) ? id->valuestring : NULL,
                          "invalid or unsupported download offer");
+    clear_context(&context);
+    clear_context_fields(root);
+    cJSON_Delete(root);
+    return ok;
+  }
+  const cJSON *automatic = cJSON_GetObjectItemCaseSensitive(root, "automatic");
+  int excluded = site_excluded(offered.url);
+  if ((automatic && !cJSON_IsBool(automatic)) || excluded < 0 ||
+      (excluded && (!automatic || cJSON_IsTrue(automatic)))) {
+    bool ok = excluded == 1 && (!automatic || cJSON_IsTrue(automatic))
+                  ? send_skipped(offered.request_id)
+                  : send_error(offered.request_id, "invalid download offer URL or mode");
     clear_context(&context);
     clear_context_fields(root);
     cJSON_Delete(root);

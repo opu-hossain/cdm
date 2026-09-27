@@ -18,19 +18,26 @@ async function verify(file, globalName, expectedBrowser) {
   const badges = [];
   let granted = true;
   let filterSettings;
+  let siteExclusions;
+  const configurations = [];
+  const wireMessages = [];
   let storageFails = false;
   let cookieReads = 0;
   let cookieRows = [{name: "session", value: "fixture"}];
   const permissionRequests = [];
   const port = {
-    postMessage(message) { messages.push(message); },
+    postMessage(message) {
+      wireMessages.push(message);
+      if (message.type === "set_site_exclusions") configurations.push(message);
+      else messages.push(message);
+    },
     onMessage: { addListener(listener) { nativeListener = listener; } },
     onDisconnect: { addListener(listener) { disconnectListener = listener; } }
   };
   const api = {
     storage: {sync: {get() {
       return storageFails ? Promise.reject(new Error("fixture storage failure"))
-        : Promise.resolve({interceptionFilters: filterSettings});
+        : Promise.resolve({interceptionFilters: filterSettings, siteExclusions});
     }}},
     downloads: {
       onCreated: { addListener(listener) { downloadListener = listener; } },
@@ -229,13 +236,34 @@ async function verify(file, globalName, expectedBrowser) {
   await automatic({}, false);
   filterSettings = undefined;
   await automatic({totalBytes: -1}, true);
+  siteExclusions = ["*.EXAMPLE.invalid."];
+  const contextReads = cookieReads;
+  await automatic({}, false);
+  await automatic({url: "https://sub.example.invalid/file.zip"}, false);
+  assert.equal(cookieReads, contextReads);
+  await automatic({url: "https://notexample.invalid/file.zip"}, true);
+  await automatic({url: "https://example.invalid.evil.invalid/file.zip"}, true);
+  const explicit = messages.length;
+  await menuListener({menuItemId: "cdm-download-link",
+    linkUrl: "https://example.invalid/manual.zip"}, {});
+  assert.equal(messages.length, explicit + 1);
+  assert.equal(messages.at(-1).automatic, false);
+  assert.equal(configurations.at(-1).sites[0], "*.example.invalid");
+  assert.equal(wireMessages[0].type, "set_site_exclusions");
+  assert.equal(wireMessages.at(-2).type, "set_site_exclusions");
+  siteExclusions = ["sub.example.invalid"];
+  await automatic({}, true);
+  assert.equal(messages.at(-1).automatic, true);
+  await automatic({url: "https://sub.example.invalid/file.zip"}, false);
+  siteExclusions = [".*regex.invalid"];
+  await automatic({}, false);
 }
 
 async function verifyOptions(file, globalName) {
   const directory = path.dirname(file);
   const elements = {};
   for (const id of ["filters", "status", "save", "minSizeBytes", "extensionsAllow",
-                    "extensionsDeny", "mimeAllow", "mimeDeny"])
+                    "extensionsDeny", "mimeAllow", "mimeDeny", "siteExclusions"])
     elements[id] = {value: "", textContent: "", disabled: false};
   let submit;
   let saved;
@@ -247,7 +275,7 @@ async function verifyOptions(file, globalName) {
     document: {getElementById(id) { assert(elements[id], id); return elements[id]; }},
     [globalName]: {storage: {sync: {
       get() { return Promise.resolve({interceptionFilters: {minSizeBytes: 7,
-          extensionsAllow: ["PDF"]}}); },
+          extensionsAllow: ["PDF"]}, siteExclusions: ["*.EXAMPLE.invalid"]}); },
       set(value) { if (failSave) return Promise.reject(new Error("fixture quota failure"));
         saved = JSON.parse(JSON.stringify(value)); return Promise.resolve(); }
     }}}
@@ -258,6 +286,7 @@ async function verifyOptions(file, globalName) {
   assert.equal(elements.minSizeBytes.value, "7");
   assert.equal(elements.extensionsAllow.value, "pdf");
   assert.equal(elements.save.disabled, false);
+  assert.equal(elements.siteExclusions.value, "*.example.invalid");
   elements.minSizeBytes.value = "128";
   elements.extensionsAllow.value = ".ZIP, zip, tar.gz";
   elements.mimeDeny.value = "VIDEO/*";
@@ -265,6 +294,7 @@ async function verifyOptions(file, globalName) {
   assert.deepEqual(saved.interceptionFilters, {minSizeBytes: 128,
     extensionsAllow: ["zip", "tar.gz"], extensionsDeny: [],
     mimeAllow: [], mimeDeny: ["video/*"]});
+  assert.deepEqual(saved.siteExclusions, ["*.example.invalid"]);
   const previous = saved;
   for (const invalid of ["", "-1", "1.5", "9007199254740992"]) {
     elements.minSizeBytes.value = invalid;
@@ -289,6 +319,11 @@ async function verifyOptions(file, globalName) {
   assert.throws(() => filters.normalize({mimeDeny: ["x".repeat(129) + "/pdf"]}), /too long/);
   assert.equal(filters.reason({url: "https://example.invalid/a", mime: "text/plain"},
     filters.normalize({mimeAllow: ["*/*"]})), "");
+  assert.throws(() => filters.normalizeSites(["https://example.invalid"]), /hostname/);
+  assert.throws(() => filters.normalizeSites(["a".repeat(64) + ".invalid"]), /hostname/);
+  assert.throws(() => filters.normalizeSites(Array(65).fill("example.invalid")), /64/);
+  assert.equal(filters.excluded("https://EXAMPLE.invalid.:443/file",
+    filters.normalizeSites(["*.example.invalid"])), true);
   assert.notEqual(filters.reason({url: "https://example.invalid/a"},
     filters.normalize({mimeAllow: ["*/*"]})), "");
 }

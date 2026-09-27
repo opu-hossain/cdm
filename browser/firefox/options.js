@@ -4,14 +4,15 @@ const status = document.getElementById("status");
 const save = document.getElementById("save");
 let loaded = false; // Options document owns this state.
 save.disabled = true;
-api.storage.sync.get("interceptionFilters").then(stored => {
+api.storage.sync.get(["interceptionFilters", "siteExclusions"]).then(stored => {
   const filters = CdmFilters.normalize(stored.interceptionFilters);
   document.getElementById("minSizeBytes").value = String(filters.minSizeBytes);
   for (const key of CdmFilters.keys)
     document.getElementById(key).value = filters[key].join(", ");
+  document.getElementById("siteExclusions").value = CdmFilters.normalizeSites(stored.siteExclusions).join(", ");
   loaded = true;
   save.disabled = false;
-}).catch(() => { status.textContent = "Could not load saved filters. Reopen this page to retry."; });
+}).catch(() => { status.textContent = "Could not load saved filters or exclusions. Reopen this page to retry."; });
 form.addEventListener("submit", async event => {
   event.preventDefault();
   if (!loaded) return;
@@ -22,9 +23,11 @@ form.addEventListener("submit", async event => {
     for (const key of CdmFilters.keys)
       input[key] = document.getElementById(key).value.split(",").map(s => s.trim()).filter(Boolean);
     const filters = CdmFilters.normalize(input);
+    const siteExclusions = CdmFilters.normalizeSites(document.getElementById("siteExclusions").value
+      .split(",").map(s => s.trim()).filter(Boolean));
     save.disabled = true;
-    await api.storage.sync.set({interceptionFilters: filters});
-    status.textContent = "Filters saved. Explicit menu choices bypass these filters.";
+    await api.storage.sync.set({interceptionFilters: filters, siteExclusions});
+    status.textContent = "Filters and exclusions saved. Explicit menu choices bypass them.";
   } catch (error) {
     status.textContent = error.message || "Could not save filters";
   } finally { save.disabled = false; }

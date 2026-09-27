@@ -23,7 +23,11 @@
     <p><label>Allowed MIME types <input id="mimeAllow" maxlength="2048" placeholder="application/pdf, video/*"></label></p>
     <p><label>Denied MIME types <input id="mimeDeny" maxlength="2048" placeholder="application/x-msdownload"></label></p>
     <p>Use comma-separated lists, up to 64 entries each. MIME types support type/* and */*.</p>
-    <button id="save" type="submit">Save filters</button>
+    <p><label>Excluded hostnames <textarea id="siteExclusions" maxlength="6000" placeholder="example.invalid, *.site.invalid"></textarea></label></p>
+    <p>Use comma-separated ASCII/punycode hostnames, up to 64. A *. prefix
+      matches the base hostname and its subdomains. Exclusions affect automatic
+      interception only; explicit menu choices remain available.</p>
+    <button id="save" type="submit">Save filters and exclusions</button>
     <p id="status" role="status" aria-live="polite"></p>
   </form>
   <h2>Browser session</h2>

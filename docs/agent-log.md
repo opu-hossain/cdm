@@ -955,3 +955,10 @@ Completed: sync-backed byte minimum and extension/MIME lists, deny precedence, e
 Verification: test-first Node mocks cover filtering, consent omission, persistence, normalization, and failed writes; bundle smoke and full build/CTest 33/33 pass with no new warnings.
 Open questions: installed-browser visual smoke UNKNOWN; existing Phase 2 TSan runner blocker remains.
 Next: 3.2.3 hostname exclusions and native-host configuration.
+
+## 2026-09-28 — Codex, task 3.2.3
+Branch: `cdm`; commit: `feat(browser): add hostname exclusion list`.
+Completed: validated sync-backed exact/wildcard host exclusions; user chose automatic-only matching and wildcard base inclusion; native policy precedes every offer and explicit menus bypass exclusions.
+Verification: test-first JS/options mocks and native protocol tests cover boundary matching, canonicalization, invalid policy retention, and manual bypass; full build/CTest 33/33 pass with no new warnings.
+Open questions: installed-browser visual smoke UNKNOWN; Phase 2 TSan runner blocker remains. Pre-existing user files remain unstaged; no push.
+Next: 3.3.1 link refresh; resolve its protocol/persistence scope before implementation.

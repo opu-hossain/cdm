@@ -1,5 +1,27 @@
 // Pure validation/matching shared by each extension's background and options page.
 globalThis.CdmFilters = Object.freeze({
+  normalizeSites(input = []) {
+    if (!Array.isArray(input) || input.length > 64)
+      throw new Error("Use at most 64 excluded hostnames");
+    const sites = [...new Set(input.map(value => {
+      if (typeof value !== "string") throw new Error("Enter hostname patterns");
+      const pattern = value.trim().toLowerCase().replace(/\.$/, "");
+      const hostname = pattern.startsWith("*.") ? pattern.slice(2) : pattern;
+      if (!hostname || hostname.length > 253 || hostname.split(".").some(label =>
+          !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)))
+        throw new Error("Use ASCII/punycode hostnames, optionally prefixed with *.");
+      return pattern;
+    }))];
+    if (new TextEncoder().encode(JSON.stringify(sites)).length > 6000)
+      throw new Error("Excluded hostnames exceed the sync storage limit");
+    return sites;
+  },
+  excluded(url, sites) {
+    const hostname = new URL(url).hostname.toLowerCase().replace(/\.$/, "");
+    return sites.some(pattern => pattern.startsWith("*.")
+      ? hostname === pattern.slice(2) || hostname.endsWith(pattern.slice(1))
+      : hostname === pattern);
+  },
   keys: Object.freeze(["extensionsAllow", "extensionsDeny", "mimeAllow", "mimeDeny"]),
   normalize(input = {}) {
     if (!input || typeof input !== "object" || Array.isArray(input))

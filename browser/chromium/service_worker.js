@@ -134,6 +134,10 @@ function connectHost() {
     if (message.type === "error") {
       showError(message.error || "native host error");
       pending.delete(message.request_id);
+    } else if (message.type === "offer_skipped") {
+      pending.delete(message.request_id);
+      chrome.action.setBadgeText({text: "SKIP"});
+      chrome.action.setTitle({title: "cdm: left in browser (site is excluded)"});
     } else if (message.type === "offer_registered") {
       clearError();
     } else if (message.type === "offer_state") {
@@ -160,8 +164,10 @@ function supported(item) {
 
 async function automaticAllowed(item) {
   try {
-    const stored = await chrome.storage.sync.get("interceptionFilters");
-    const reason = CdmFilters.reason(item, CdmFilters.normalize(stored.interceptionFilters));
+    const stored = await chrome.storage.sync.get(["interceptionFilters", "siteExclusions"]);
+    const sites = CdmFilters.normalizeSites(stored.siteExclusions);
+    const reason = CdmFilters.excluded(item.finalUrl || item.url, sites) ? "site is excluded"
+      : CdmFilters.reason(item, CdmFilters.normalize(stored.interceptionFilters));
     if (!reason) return true;
     chrome.action.setTitle({title: `cdm: left in browser (${reason})`});
   } catch (_) {
@@ -172,15 +178,27 @@ async function automaticAllowed(item) {
   return false;
 }
 
-async function offerDownload(item, url) {
+async function offerDownload(item, url, automatic = false) {
   const requestId = crypto.randomUUID();
   const filename = (item.filename || "").split(/[\\/]/).pop() || "";
-  const context = await offerContext(item, url);
   pending.set(requestId, item.id);
   try {
+    const stored = await chrome.storage.sync.get("siteExclusions");
+    const sites = CdmFilters.normalizeSites(stored.siteExclusions);
+    if (automatic && CdmFilters.excluded(url, sites)) {
+      pending.delete(requestId);
+      chrome.action.setBadgeText({text: "SKIP"});
+      chrome.action.setTitle({title: "cdm: left in browser (site is excluded)"});
+      return false;
+    }
+    const context = await offerContext(item, url);
     const port = connectHost();
+    // Configure each new native-host connection before its first offer;
+    // refreshing per offer also picks up sync edits without cached policy.
+    port.postMessage({type: "set_site_exclusions", sites});
     port.postMessage({
       type: "download_offer",
+      automatic,
       request_id: requestId,
       url,
       referrer: context.referer || "",
@@ -200,7 +218,7 @@ async function offerDownload(item, url) {
 
 chrome.downloads.onCreated.addListener(async item => {
   if (!supported(item) || !await automaticAllowed(item)) return;
-  if (!await offerDownload(item, item.finalUrl || item.url)) return;
+  if (!await offerDownload(item, item.finalUrl || item.url, true)) return;
   // MV3 observes this event after the browser starts the download.
   // Cancellation is best effort and can leave a partial browser file.
   chrome.downloads.cancel(item.id).catch(error => {
