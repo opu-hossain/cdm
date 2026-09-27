@@ -997,3 +997,10 @@ Completed: approved popup scope; media JSON validation, IPC v10 kind lookup (58)
 Verification: test-first native framing/fake-daemon smoke plus IPC tests cover three kinds, context/no-context, validation, dedup and legacy metadata; full Debug build/CTest 33/33 pass, no new warnings.
 Open questions: visual popup smoke UNKNOWN; HLS/DASH confirmation deliberately unavailable until playlist engines dispatch them. Phase 2 TSan and Phase 3 manual gates remain open.
 Next: 4.2.1 HLS playlist parser. All task changes committed; no push.
+
+## 2026-09-28 — Codex, task 4.2.1
+Branch: `cdm`; commit: `feat(engine): hls playlist parser`.
+Completed: bounded pure RFC 8216 parser, highest-bandwidth master selection, HTTP(S) URI resolution, AES key/IV snapshots, initialization-map association, explicit unsupported-layout errors.
+Verification: test-first Criterion fixtures cover valid/malformed playlists, key rotations, UTF-8/NUL checks, URLs, sequence overflow, deterministic ties and resource caps; full Debug build/CTest 34/34 pass, no new warnings.
+Open questions: existing Phase 2 TSan and Phase 3 manual gates remain open; user approved task 4.2.2 daemon/persistence/crypto scope.
+Next: 4.2.2 with approved end-to-end scope and OpenSSL crypto. Parser changes committed; no push.

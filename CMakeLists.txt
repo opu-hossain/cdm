@@ -157,6 +157,7 @@ set(UTILS_SOURCES
 
 set(ENGINE_SOURCES
     src/engine/engine_runner.c
+    src/engine/hls.c
     src/engine/segmenter.c
     src/engine/worker_pool.c
     src/engine/finalize.c
@@ -301,6 +302,11 @@ add_dependencies(browser_extension_bundle browser_extension_validate)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
+    add_executable(test_hls tests/test_hls.c)
+    downloadmgr_enable_warnings(test_hls)
+    downloadmgr_enable_sanitizer(test_hls)
+    target_link_libraries(test_hls PRIVATE downloadmgr_core PkgConfig::CRITERION)
+    add_test(NAME test_hls COMMAND test_hls)
 endif()
 
 install(TARGETS cdm cdm_native_host
