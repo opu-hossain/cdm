@@ -861,6 +861,19 @@ int db_insert_reserved_download_auto(uint32_t id, const char *url,
   return insert_download(id, url, dest_path, opts, true, true);
 }
 
+int db_update_media_output(uint32_t id, const char *path, uint64_t size) {
+  if (!db_ready() || !path || strlen(path) >= 1024 || size > INT64_MAX) return -1;
+  const char *sql = "UPDATE downloads SET dest_path=?, total_size=?, auto_filename=0, status='DONE' WHERE id=?";
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+  sqlite3_bind_text(stmt, 1, path, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 2, (sqlite3_int64)size);
+  sqlite3_bind_int64(stmt, 3, (sqlite3_int64)id);
+  int result = sqlite3_step(stmt), changed = sqlite3_changes(g_db);
+  sqlite3_finalize(stmt);
+  return result == SQLITE_DONE && changed == 1 ? 0 : -1;
+}
+
 int db_update_resolved_destination(uint32_t id, const char *dest_path) {
   if (!db_ready() || !dest_path)
     return -1;

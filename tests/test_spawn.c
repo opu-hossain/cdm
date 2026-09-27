@@ -43,3 +43,74 @@ Test(spawn, post_action_command_does_not_use_implicit_shell) {
   unlink(path);
   rmdir(directory);
 }
+
+#ifndef _WIN32
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <errno.h>
+
+static void ffmpeg_script(const char *path, const char *script) {
+  int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0700);
+  cr_assert_geq(fd, 0);
+  size_t length = strlen(script);
+  cr_assert_eq(write(fd, script, length), (ssize_t)length);
+  close(fd);
+}
+
+Test(spawn, ffmpeg_fixed_argv_cache_and_exit_status) {
+  char root[] = "/tmp/cdm-ffmpeg-test-XXXXXX";
+  cr_assert_not_null(mkdtemp(root));
+  char executable[128], input[128], output[128];
+  int n = snprintf(executable, sizeof(executable), "%s/ffmpeg", root);
+  cr_assert_gt(n, 0); cr_assert_lt((size_t)n, sizeof(executable));
+  n = snprintf(input, sizeof(input), "%s/input ; literal.ts", root);
+  cr_assert_gt(n, 0); cr_assert_lt((size_t)n, sizeof(input));
+  n = snprintf(output, sizeof(output), "%s/output ; literal.mp4", root);
+  cr_assert_gt(n, 0); cr_assert_lt((size_t)n, sizeof(output));
+  ffmpeg_script(input, "payload");
+  ffmpeg_script(executable, "#!/bin/sh\ninput=\nprevious=\nfor value do\n"
+      "  if [ \"$previous\" = -i ]; then input=$value; fi\n"
+      "  previous=$value\n  output=$value\ndone\n/bin/cp \"$input\" \"$output\"\n");
+  cr_assert_eq(setenv("PATH", root, 1), 0);
+  spawn_media_tools_init();
+  cr_assert(spawn_ffmpeg_available());
+  cr_assert_eq(setenv("PATH", "/nonexistent", 1), 0);
+  cr_assert(spawn_ffmpeg_available()); // resolved path is cached
+  _Atomic bool cancel = false, pause = false;
+  cr_assert_eq(spawn_ffmpeg_remux(input, output, &cancel, &pause, 2), 0);
+  int fd = open(output, O_RDONLY); char bytes[8] = {0};
+  cr_assert_geq(fd, 0); cr_assert_eq(read(fd, bytes, sizeof(bytes)), 7); close(fd);
+  cr_assert_str_eq(bytes, "payload");
+  unlink(executable);
+  ffmpeg_script(executable, "#!/bin/sh\nexit 7\n");
+  cr_assert_eq(spawn_ffmpeg_remux(input, output, &cancel, &pause, 2), 7);
+  unlink(executable); unlink(input); unlink(output); rmdir(root);
+}
+
+Test(spawn, ffmpeg_timeout_reaps_child_and_pause_prevents_spawn) {
+  char root[] = "/tmp/cdm-ffmpeg-timeout-XXXXXX";
+  cr_assert_not_null(mkdtemp(root));
+  char executable[128];
+  int n = snprintf(executable, sizeof(executable), "%s/ffmpeg", root);
+  cr_assert_gt(n, 0); cr_assert_lt((size_t)n, sizeof(executable));
+  ffmpeg_script(executable, "#!/bin/sh\nexec /bin/sleep 30\n");
+  cr_assert_eq(setenv("PATH", root, 1), 0);
+  _Atomic bool cancel = false, pause = true;
+  cr_assert_eq(spawn_ffmpeg_remux("/tmp/input.ts", "/tmp/output.mp4", &cancel, &pause, 1), -2);
+  atomic_store(&pause, false);
+  cr_assert_eq(spawn_ffmpeg_remux("/tmp/input.ts", "/tmp/output.mp4", &cancel, &pause, 1), 124);
+  int status;
+  cr_assert_eq(waitpid(-1, &status, WNOHANG), -1);
+  cr_assert_eq(errno, ECHILD);
+  unlink(executable); rmdir(root);
+}
+
+Test(spawn, ffmpeg_absence_is_cached) {
+  cr_assert_eq(setenv("PATH", "/nonexistent", 1), 0);
+  spawn_media_tools_init();
+  cr_assert(!spawn_ffmpeg_available());
+  cr_assert_eq(setenv("PATH", "/usr/bin:/bin", 1), 0);
+  cr_assert(!spawn_ffmpeg_available());
+}
+#endif

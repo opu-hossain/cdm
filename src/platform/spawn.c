@@ -59,6 +59,16 @@ int spawn_browser_popup_detached(const char *exe_path, unsigned int offer_id) {
   return 0;
 }
 
+void spawn_media_tools_init(void) {}
+bool spawn_ffmpeg_available(void) { return false; }
+int spawn_ffmpeg_remux(const char *input, const char *output,
+                       const _Atomic bool *cancel, const _Atomic bool *pause,
+                       int timeout_sec) {
+  (void)input; (void)output; (void)cancel; (void)pause; (void)timeout_sec;
+  /* TODO(platform): implement argv-safe ffmpeg spawning and cancellation. */
+  return -1;
+}
+
 int spawn_post_action(const char *action, const char *argument) {
   (void)action;
   (void)argument;
@@ -283,6 +293,100 @@ int spawn_browser_popup_detached(const char *exe_path, unsigned int offer_id) {
     ready = (int)read(ready_pipe[0], &marker, 1);
   close(ready_pipe[0]);
   return ready == 1 && marker == 'R' ? 0 : -1;
+}
+
+/* Presence is immutable after call_once; no mutable path lookup during jobs. */
+#include <spawn.h>
+#include <sys/stat.h>
+#include <signal.h>
+#include <time.h>
+#include <threads.h>
+#include <limits.h>
+#include <stdint.h>
+#include "thread.h"
+extern char **environ;
+static once_flag ffmpeg_once = ONCE_FLAG_INIT;
+static char ffmpeg_executable[1024];
+
+static void locate_ffmpeg(void) {
+  const char *path = getenv("PATH");
+  if (!path) return;
+  for (const char *start = path;;) {
+    const char *end = strchr(start, ':');
+    size_t length = end ? (size_t)(end - start) : strlen(start);
+    char candidate[1024], resolved[PATH_MAX];
+    int n = -1;
+    if (length < sizeof(candidate))
+      n = length ? snprintf(candidate, sizeof(candidate), "%.*s/ffmpeg", (int)length, start)
+                 : snprintf(candidate, sizeof(candidate), "./ffmpeg");
+    struct stat st;
+    if (length < sizeof(candidate) && n >= 0 && (size_t)n < sizeof(candidate) &&
+        realpath(candidate, resolved) && strlen(resolved) < sizeof(ffmpeg_executable) &&
+        stat(resolved, &st) == 0 && S_ISREG(st.st_mode) && access(resolved, X_OK) == 0) {
+      strcpy(ffmpeg_executable, resolved); return;
+    }
+    if (!end) break;
+    start = end + 1;
+  }
+}
+
+void spawn_media_tools_init(void) { call_once(&ffmpeg_once, locate_ffmpeg); }
+bool spawn_ffmpeg_available(void) {
+  spawn_media_tools_init(); return ffmpeg_executable[0] != '\0';
+}
+
+static bool remux_interrupted(const _Atomic bool *cancel, const _Atomic bool *pause) {
+  return (cancel && atomic_load(cancel)) || (pause && atomic_load(pause));
+}
+
+static uint64_t monotonic_ms(void) {
+  struct timespec time;
+  if (clock_gettime(CLOCK_MONOTONIC, &time) != 0) return 0;
+  return (uint64_t)time.tv_sec * 1000 + (uint64_t)time.tv_nsec / 1000000;
+}
+
+int spawn_ffmpeg_remux(const char *input, const char *output,
+                       const _Atomic bool *cancel, const _Atomic bool *pause,
+                       int timeout_sec) {
+  if (!input || !output || timeout_sec < 1 || !spawn_ffmpeg_available()) return -1;
+  if (remux_interrupted(cancel, pause)) return -2;
+  char *argv[] = {ffmpeg_executable, "-nostdin", "-hide_banner", "-v", "error", "-y",
+      "-protocol_whitelist", "file,pipe", "-format_whitelist", "mpegts,mov,aac,mp3",
+      "-i", (char *)input, "-c", "copy", "-bsf:a", "aac_adtstoasc", "-f", "mp4",
+      (char *)output, NULL};
+  posix_spawn_file_actions_t actions;
+  if (posix_spawn_file_actions_init(&actions) != 0) return -1;
+  int error = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+  if (!error) error = posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+  if (!error) error = posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+  pid_t pid = -1;
+  if (!error) error = posix_spawn(&pid, ffmpeg_executable, &actions, NULL, argv, environ);
+  posix_spawn_file_actions_destroy(&actions);
+  if (error) return -1;
+  uint64_t start = monotonic_ms();
+  int status = 0, result = 0;
+  for (;;) {
+    pid_t got = waitpid(pid, &status, WNOHANG);
+    if (got == pid) break;
+    if (got < 0 && errno == EINTR) continue;
+    if (got < 0) { result = -1; break; }
+    bool interrupted = remux_interrupted(cancel, pause);
+    if (interrupted || !start || monotonic_ms() - start >= (uint64_t)timeout_sec * 1000) {
+      result = interrupted ? -2 : 124;
+      kill(pid, SIGTERM);
+      for (int i = 0; i < 5; i++) {
+        dm_thread_sleep_ms(100);
+        got = waitpid(pid, &status, WNOHANG);
+        if (got == pid) return result;
+      }
+      kill(pid, SIGKILL);
+      do { got = waitpid(pid, &status, 0); } while (got < 0 && errno == EINTR);
+      return result;
+    }
+    dm_thread_sleep_ms(100);
+  }
+  if (result) return result;
+  return WIFEXITED(status) ? WEXITSTATUS(status) : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1;
 }
 
 #endif

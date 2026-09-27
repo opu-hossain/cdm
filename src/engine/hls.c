@@ -530,9 +530,11 @@ HlsResult hls_parse(const char *text, size_t length, const char *base_url,
 #include "../platform/bandwidth.h"
 #include "../platform/curl_client.h"
 #include "../platform/file_io.h"
+#include "../platform/spawn.h"
 #include "../platform/thread.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
+#include "../utils/path.h"
 #include "worker_pool.h"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -705,7 +707,7 @@ static bool safe_file(int fd) {
 }
 
 static int create_file(const char *path) {
-  int fd = open(path, O_WRONLY | O_CREAT | O_NOFOLLOW, 0600);
+  int fd = open(path, O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (!safe_file(fd) || ftruncate(fd, 0) != 0) {
     if (fd >= 0)
       close(fd);
@@ -715,7 +717,7 @@ static int create_file(const char *path) {
 }
 
 static bool digest_file(const char *path, char *hex, uint64_t *bytes) {
-  int fd = open(path, O_RDONLY | O_NOFOLLOW);
+  int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
   if (!safe_file(fd)) {
     if (fd >= 0)
       close(fd);
@@ -776,7 +778,7 @@ static bool decrypt_file(HlsJob *job, const unsigned char *key) {
   int n = snprintf(temporary, sizeof(temporary), "%s.dec", job->path);
   if (n < 0 || (size_t)n >= sizeof(temporary))
     return false;
-  int input = open(job->path, O_RDONLY | O_NOFOLLOW),
+  int input = open(job->path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC),
       output = create_file(temporary);
   EVP_CIPHER_CTX *cipher = EVP_CIPHER_CTX_new();
   bool ok = safe_file(input) && output >= 0 && cipher &&
@@ -937,7 +939,7 @@ static bool saved_string(cJSON *root, const char *name, char *out,
 
 static void load_state(const char *path, const char *fingerprint,
                        HlsSaved *saved, size_t count) {
-  int fd = open(path, O_RDONLY | O_NOFOLLOW);
+  int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
   struct stat st;
   if (!safe_file(fd) || fstat(fd, &st) != 0 || st.st_size <= 0 ||
       st.st_size > HLS_STATE_MAX) {
@@ -1033,7 +1035,7 @@ static bool item_path(const char *directory, size_t index, char *out,
 }
 
 static bool append_file(int output, const char *path, Download *d) {
-  int input = open(path, O_RDONLY | O_NOFOLLOW);
+  int input = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
   if (!safe_file(input)) {
     if (input >= 0)
       close(input);
@@ -1069,7 +1071,7 @@ void hls_discard_state(const char *destination) {
   n = snprintf(path, sizeof(path), "%s/lock", directory);
   if (n < 0 || (size_t)n >= sizeof(path))
     return;
-  int lock = open(path, O_RDWR | O_NOFOLLOW);
+  int lock = open(path, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
   if (!safe_file(lock) || flock(lock, LOCK_EX | LOCK_NB) != 0) {
     if (lock >= 0)
       close(lock);
@@ -1082,6 +1084,9 @@ void hls_discard_state(const char *destination) {
     if (n >= 0 && (size_t)n < sizeof(path))
       unlink(path);
   }
+  n = snprintf(path, sizeof(path), "%s/remux.mp4", directory);
+  if (n >= 0 && (size_t)n < sizeof(path))
+    unlink(path);
   n = snprintf(path, sizeof(path), "%s/concat", directory);
   if (n >= 0 && (size_t)n < sizeof(path))
     unlink(path);
@@ -1098,7 +1103,111 @@ void hls_discard_state(const char *destination) {
   close(lock);
 }
 
+static int remux_output(Download *d, const char *directory) {
+  if (!spawn_ffmpeg_available()) {
+    LOG_WARN("HLS download %u: ffmpeg unavailable; retained native output",
+             d->id);
+    return 0;
+  }
+  if (d->request && d->request->expected_sha256[0]) {
+    LOG_INFO("HLS download %u: retain checksum-verified native output", d->id);
+    return 0;
+  }
+  char temporary[HLS_PATH_MAX];
+  int n = snprintf(temporary, sizeof(temporary), "%s/remux.mp4", directory);
+  if (n < 0 || (size_t)n >= sizeof(temporary))
+    return 0;
+  int fd = create_file(temporary);
+  if (fd < 0)
+    return 0;
+  close(fd);
+  DownloadManagerConfig config;
+  config_get(&config);
+  int rc = spawn_ffmpeg_remux(d->dest_path, temporary, &d->cancel_requested,
+                              &d->pause_requested, config.transfer_timeout_sec);
+  if (rc != 0) {
+    unlink(temporary);
+    if (stopped(d))
+      return -1;
+    LOG_WARN("HLS download %u: ffmpeg failed (%d); retained native output",
+             d->id, rc);
+    return 0;
+  }
+  char hash[65];
+  uint64_t bytes = 0;
+  if (!digest_file(temporary, hash, &bytes) || !bytes) {
+    unlink(temporary);
+    LOG_WARN(
+        "HLS download %u: empty or unreadable remux; retained native output",
+        d->id);
+    return 0;
+  }
+  fd = open(temporary, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  bool durable = safe_file(fd) && fsync(fd) == 0;
+  if (fd >= 0)
+    close(fd);
+  if (!durable || stopped(d)) {
+    unlink(temporary);
+    return stopped(d) ? -1 : 0;
+  }
+  char requested[sizeof(d->dest_path)], published[sizeof(d->dest_path)];
+  size_t length = strlen(d->dest_path);
+  const char *slash = strrchr(d->dest_path, '/'),
+             *extension = strrchr(d->dest_path, '.');
+  if (extension && (!slash || extension > slash))
+    length = (size_t)(extension - d->dest_path);
+  if (length + sizeof(".mp4") > sizeof(requested)) {
+    unlink(temporary);
+    return 0;
+  }
+  memcpy(requested, d->dest_path, length);
+  memcpy(requested + length, ".mp4", sizeof(".mp4"));
+  bool linked = false;
+  for (int attempt = 0; attempt < 1000000; attempt++) {
+    if (!path_make_unique(requested, published, sizeof(published)))
+      break;
+    if (link(temporary, published) == 0) {
+      linked = true;
+      break;
+    }
+    if (errno != EEXIST)
+      break;
+  }
+  if (!linked) {
+    unlink(temporary);
+    LOG_WARN("HLS download %u: cannot publish MP4; retained native output",
+             d->id);
+    return 0;
+  }
+  char original[sizeof(d->dest_path)];
+  strcpy(original, d->dest_path);
+  dm_mutex_t *mutex = queue_manager_get_mutex();
+  dm_mutex_lock(mutex);
+  int saved = stopped(d) ? -1 : db_update_media_output(d->id, published, bytes);
+  if (saved == 0) {
+    strcpy(d->dest_path, published);
+    d->total_size = bytes;
+    atomic_store(&d->bytes_downloaded, bytes);
+    atomic_store(&d->auto_filename, false);
+  }
+  dm_mutex_unlock(mutex);
+  unlink(temporary);
+  if (saved != 0) {
+    unlink(published);
+    LOG_WARN("HLS download %u: cannot persist MP4 destination; retained native "
+             "output",
+             d->id);
+    return stopped(d) ? -1 : 0;
+  }
+  if (unlink(original) != 0)
+    LOG_WARN("HLS download %u: could not remove native output after remux",
+             d->id);
+  return 0;
+}
+
 int hls_run_download(Download *d) {
+  char original_destination[sizeof(d->dest_path)];
+  strcpy(original_destination, d->dest_path);
   const RequestOptions *r = d->request;
   RequestContext context = {
       .cookie = r && r->cookie[0] ? r->cookie : NULL,
@@ -1131,13 +1240,13 @@ int hls_run_download(Download *d) {
   if (lstat(directory, &st) != 0 || !S_ISDIR(st.st_mode) ||
       st.st_uid != getuid() || (st.st_mode & 077))
     return -1;
-  lock = open(lock_path, O_RDWR | O_CREAT | O_NOFOLLOW, 0600);
+  lock = open(lock_path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (!safe_file(lock) || flock(lock, LOCK_EX | LOCK_NB) != 0) {
     if (lock >= 0)
       close(lock);
     return -1;
   }
-  output = open(d->dest_path, O_RDONLY | O_NOFOLLOW);
+  output = open(d->dest_path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
   if (!d->reserved_file || !safe_file(output) || fstat(output, &st) != 0) {
     result = -3;
     goto finish;
@@ -1311,9 +1420,16 @@ int hls_run_download(Download *d) {
       db_update_total_size(d->id, bytes);
       dm_mutex_unlock(mutex);
       atomic_store(&d->bytes_downloaded, bytes);
-      result = 0;
+      result = remux_output(d, directory);
     }
     unlink(concat);
+  }
+  if (result == 0) {
+    dm_mutex_t *mutex = queue_manager_get_mutex();
+    dm_mutex_lock(mutex);
+    if (db_update_media_output(d->id, d->dest_path, d->total_size) != 0)
+      result = -1;
+    dm_mutex_unlock(mutex);
   }
   if (result == 0 || result == -2 || atomic_load(&d->cancel_requested)) {
     for (size_t i = 0; i < count; i++) {
@@ -1330,7 +1446,7 @@ finish:
     close(output);
   close(lock);
   if (result == 0 || result == -2 || atomic_load(&d->cancel_requested)) {
-    hls_discard_state(d->dest_path);
+    hls_discard_state(original_destination);
   }
   if (result == -2)
     unlink(d->dest_path);

@@ -5,6 +5,8 @@
 #define PLATFORM_SPAWN_H
 
 #include <stddef.h>
+#include <stdbool.h>
+#include <stdatomic.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,6 +29,15 @@ int spawn_daemon_detached(const char *exe_path);
 
 /** Launch a separate cdm SDL/Nuklear popup for a browser offer. */
 int spawn_browser_popup_detached(const char *exe_path, unsigned int offer_id);
+
+/* Cache the ffmpeg executable path once, before daemon workers start. */
+void spawn_media_tools_init(void);
+bool spawn_ffmpeg_available(void);
+/* Fixed argv, local input/output only; child is reaped on every path.
+ * 0 success; -2 interrupted; -1 spawn failure; positive exit/timeout status. */
+int spawn_ffmpeg_remux(const char *input, const char *output,
+                       const _Atomic bool *cancel, const _Atomic bool *pause,
+                       int timeout_sec);
 
 /* Launch an explicitly enabled queue action without an implicit shell. */
 int spawn_post_action(const char *action, const char *argument);

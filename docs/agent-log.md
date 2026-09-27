@@ -1011,3 +1011,10 @@ Completed: approved end-to-end scope; SQLite v11 media kind, HLS confirmation/di
 Verification: test-first local HTTP/process-restart fixtures cover truncation, retries, stale/corrupt parts, AES/maps, parallel jobs, pause/cancel, publication recovery, checksum failure and context privacy; full Debug build/CTest 35/35 pass, no new warnings.
 Open questions: POSIX VOD scope and Windows TODO recorded; live/ranges/discontinuities/separate audio unsupported; real browser visual smoke and existing phase gates remain open.
 Next: 4.2.3 optional ffmpeg remux. All task changes committed; no push.
+
+## 2026-09-28 — Codex, task 4.2.3
+Branch: `cdm`; commit: `feat(engine): optional remux of hls output via ffmpeg`.
+Completed: approved startup/spawn/persistence scope; cached ffmpeg, fixed argv, bounded cancellation/reaping, unique MP4 publication and atomic completed-path checkpoint; native output retained on failure or explicit checksum.
+Verification: test-first real TS-to-MP4 fixture plus mock executable/cache/timeout tests; full Debug build/CTest 35/35 pass, no new warnings.
+Open questions: Windows remux remains TODO(platform); existing TSan/browser phase gates remain open.
+Next: 4.3.1 DASH parser; asked permission for libxml2 and build/package scope. No push.

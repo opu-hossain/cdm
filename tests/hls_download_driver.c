@@ -40,6 +40,9 @@ int main(int argc, char **argv) {
   if (argc == 6 && strcmp(argv[5], "pause") == 0)
     atomic_store(&d->pause_requested, true);
   int rc = engine_run_download(d);
+  /* Exercise restart context recovery from an intentionally paused record. */
+  if (rc == 0 && argc == 6 && strcmp(argv[5], "context") == 0)
+    db_update_status(d->id, "PAUSED");
   printf("%d %llu %llu\n", rc, (unsigned long long)d->total_size,
          (unsigned long long)atomic_load(&d->bytes_downloaded));
   db_close();

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sqlite3
+import shutil
 import sys
 import tempfile
 import threading
@@ -183,6 +184,29 @@ def main(driver):
             before = counts.get("/b.ts", 0)
             rc, dest = run("/simple.m3u8", root / "retry")
             assert rc == 0 and counts["/b.ts"] == before + 2
+            ffmpeg = shutil.which("ffmpeg")
+            if ffmpeg:
+                source = root / "fixture.ts"
+                subprocess.run([ffmpeg, "-nostdin", "-v", "error", "-f", "lavfi",
+                    "-i", "sine=frequency=440:duration=0.25", "-c:a", "aac", "-f", "mpegts",
+                    str(source)], check=True, capture_output=True, timeout=10)
+                bodies["/fixture.ts"] = source.read_bytes()
+                bodies["/remux.m3u8"] = b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nfixture.ts\n#EXT-X-ENDLIST\n"
+                folder = root / "remux"
+                folder.mkdir()
+                (folder / "output.mp4").write_bytes(b"existing file")
+                rc, dest = run("/remux.m3u8", folder)
+                assert rc == 0
+                with sqlite3.connect(folder / "db.sqlite") as db:
+                    stored = Path(db.execute("select dest_path from downloads").fetchone()[0])
+                assert stored.suffix == ".mp4", stored
+                assert stored.read_bytes()[4:8] == b"ftyp", "not an MP4 container"
+                assert (folder / "output.mp4").read_bytes() == b"existing file"
+                assert not dest.exists(), "TS retained after successful remux"
+                assert not Path(str(dest) + ".hlsparts").exists()
+                assert not Path(str(dest) + ".hlsstate").exists()
+            else:
+                print("SKIP: real ffmpeg remux fixture (ffmpeg missing)")
             rc, dest = run("/live.m3u8", root / "live")
             assert rc != 0 and dest.read_bytes() == b""
     finally:

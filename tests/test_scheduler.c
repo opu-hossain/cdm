@@ -31,6 +31,9 @@ int spawn_post_action(const char *action, const char *argument) {
   return 0;
 }
 
+/* Scheduler tests replace the engine and never create HLS staging files. */
+void hls_discard_state(const char *destination) { (void)destination; }
+
 int engine_run_download(struct Download *d) {
   atomic_fetch_add(&engine_runs, 1);
   atomic_fetch_add(&active_workers, 1);

@@ -10,6 +10,7 @@
 #include "../platform/file_io.h"
 #include "../platform/ipc_socket.h"
 #include "../platform/thread.h"
+#include "../platform/spawn.h"
 #include "../platform/tray.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
@@ -208,6 +209,7 @@ int run_daemon(void) {
              "~/.local/share/cdm");
 
   config_init(NULL);
+  spawn_media_tools_init();
 
   /* Guard against multiple instances. */
   if (ipc_server_is_running()) {

@@ -167,4 +167,20 @@ Captured browser context is restricted to its original origin and does not
 follow redirects; cross-origin resources require a future context design.
 State JSON stores layout/key/file hashes and HTTP validators, never captured
 header values or AES key bytes. Missing validators force a segment re-download.
-Remux is the next task; current output is the concatenated native media bytes.
+Native output is concatenated media bytes; optional remux is task 4.2.3.
+
+## Task 4.2.3 — Remux startup and destination scope
+
+The brief lists hls.c/spawn.c but asks for startup presence caching and a new
+MP4 output. Asked to include spawn.h/daemon startup and queue/DB path updates,
+publish successful remuxes to a uniquely reserved .mp4 destination, and retain
+TS on missing/failed ffmpeg. Resolved: user approved the expanded scope and
+unique .mp4 publication policy on 2026-09-28.
+
+## Task 4.2.3 — Remux platform constraint
+
+TODO(platform): argv-safe ffmpeg spawning, waiting and cancellation on Windows
+are not implemented; remux falls back to native output there. POSIX runs fixed
+argv via posix_spawn, limits demuxers/protocols, reaps the child, and honors
+pause/cancel and the configured transfer timeout. Explicit checksum verification
+retains native bytes so remux cannot invalidate the requested checksum.
