@@ -927,3 +927,10 @@ Completed: site-scoped action toggle, optional cookie/webRequest grants, bounded
 Verification: test-first Node mocks cover off/denied/matched/unsafe/oversize/revoked paths; full build and CTest 33/33 passed.
 Open questions: browser UI/permission prompt smoke UNKNOWN without installed extensions; Phase 2 TSan blocker remains.
 Next: 3.1.3 native host context forwarding.
+
+## 2026-09-28 — Codex, task 3.1.3
+Branch: `cdm`; commit: `feat(native-host): accept and forward browser request context`.
+Completed: bounded UTF-8 context validation, serialized IPC frame cap, message 56 registration, and host buffer clearing; raw offer structs unchanged.
+Verification: test-first protocol fixture covers unsafe/oversize fields and exact-limit forwarding; URL-only flow smoke and full build/CTest 33/33 passed, no new warnings.
+Open questions: context requires daemon v8, implemented next in 3.1.4; older daemons reject contextual offers explicitly. Phase 2 TSan blocker remains.
+Next: 3.1.4 daemon applies ephemeral context without persistence or payload logging.

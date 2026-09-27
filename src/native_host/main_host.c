@@ -20,6 +20,12 @@
 #define HOST_MAX_OFFERS 64
 
 typedef struct {
+  char cookie[4097];
+  char user_agent[257];
+  char referer[2049];
+} HostRequestContext;
+
+typedef struct {
   IpcBrowserOffer offer;
   IpcBrowserOfferState reported_state;
   uint64_t reported_bytes;
@@ -105,11 +111,48 @@ static bool copy_field(const cJSON *root, const char *name, char *out,
   return true;
 }
 
-static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer) {
+static bool valid_utf8(const unsigned char *p) {
+  while (*p) {
+    if (*p < 0x80) p++;
+    else if (*p >= 0xC2 && *p <= 0xDF &&
+             p[1] >= 0x80 && p[1] <= 0xBF) p += 2;
+    else if (*p >= 0xE0 && *p <= 0xEF && p[1] && p[2] &&
+             p[1] >= (*p == 0xE0 ? 0xA0 : 0x80) &&
+             p[1] <= (*p == 0xED ? 0x9F : 0xBF) &&
+             p[2] >= 0x80 && p[2] <= 0xBF) p += 3;
+    else if (*p >= 0xF0 && *p <= 0xF4 && p[1] && p[2] && p[3] &&
+             p[1] >= (*p == 0xF0 ? 0x90 : 0x80) &&
+             p[1] <= (*p == 0xF4 ? 0x8F : 0xBF) &&
+             p[2] >= 0x80 && p[2] <= 0xBF &&
+             p[3] >= 0x80 && p[3] <= 0xBF) p += 4;
+    else return false;
+  }
+  return true;
+}
+
+static bool copy_context_field(const cJSON *root, const char *key, char *out,
+                               size_t capacity) {
+  const cJSON *field = cJSON_GetObjectItemCaseSensitive(root, key);
+  if (!field) {
+    out[0] = '\0';
+    return true;
+  }
+  if (!cJSON_IsString(field) || !field->valuestring ||
+      strlen(field->valuestring) >= capacity ||
+      strchr(field->valuestring, '\r') || strchr(field->valuestring, '\n') ||
+      !valid_utf8((const unsigned char *)field->valuestring))
+    return false;
+  strcpy(out, field->valuestring);
+  return true;
+}
+
+static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer,
+                        HostRequestContext *context) {
   const cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
   if (!cJSON_IsString(type) || strcmp(type->valuestring, "download_offer") != 0)
     return false;
   memset(offer, 0, sizeof(*offer));
+  memset(context, 0, sizeof(*context));
   if (!copy_field(root, "request_id", offer->request_id,
                   sizeof(offer->request_id), true) ||
       !copy_field(root, "url", offer->url, sizeof(offer->url), true) ||
@@ -117,7 +160,13 @@ static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer) {
                   sizeof(offer->filename), false) ||
       !copy_field(root, "mime", offer->mime, sizeof(offer->mime), false) ||
       !copy_field(root, "referrer", offer->referrer,
-                  sizeof(offer->referrer), false))
+                  sizeof(offer->referrer), false) ||
+      !copy_context_field(root, "cookie", context->cookie,
+                          sizeof(context->cookie)) ||
+      !copy_context_field(root, "user_agent", context->user_agent,
+                          sizeof(context->user_agent)) ||
+      !copy_context_field(root, "referer", context->referer,
+                          sizeof(context->referer)))
     return false;
   const cJSON *total = cJSON_GetObjectItemCaseSensitive(root, "total_bytes");
   if (total && (!cJSON_IsNumber(total) || total->valuedouble < 0 ||
@@ -125,7 +174,71 @@ static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer) {
     return false;
   if (total)
     offer->total_bytes = (uint64_t)total->valuedouble;
+  if (strncmp(offer->url, "https://", 8) != 0 &&
+      strncmp(offer->url, "http://", 7) != 0)
+    return false;
   return true;
+}
+
+static void clear_context(HostRequestContext *context) {
+  volatile unsigned char *bytes = (volatile unsigned char *)context;
+  for (size_t i = 0; i < sizeof(*context); i++) bytes[i] = 0;
+}
+
+static void clear_context_fields(cJSON *root) {
+  const char *keys[] = {"cookie", "user_agent", "referer"};
+  for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+    cJSON *field = cJSON_GetObjectItemCaseSensitive(root, keys[i]);
+    if (cJSON_IsString(field) && field->valuestring) {
+      size_t length = strlen(field->valuestring);
+      volatile unsigned char *bytes =
+          (volatile unsigned char *)field->valuestring;
+      for (size_t j = 0; j < length; j++) bytes[j] = 0;
+    }
+  }
+}
+
+static char *context_offer_json(const IpcBrowserOffer *offer,
+                                const HostRequestContext *context) {
+  cJSON *root = cJSON_CreateObject();
+  if (!root) return NULL;
+  bool ok = cJSON_AddStringToObject(root, "request_id", offer->request_id) &&
+            cJSON_AddStringToObject(root, "url", offer->url) &&
+            cJSON_AddStringToObject(root, "filename", offer->filename) &&
+            cJSON_AddStringToObject(root, "mime", offer->mime) &&
+            cJSON_AddStringToObject(root, "referrer", offer->referrer) &&
+            cJSON_AddNumberToObject(root, "total_bytes", (double)offer->total_bytes) &&
+            cJSON_AddStringToObject(root, "cookie", context->cookie) &&
+            cJSON_AddStringToObject(root, "user_agent", context->user_agent) &&
+            cJSON_AddStringToObject(root, "referer", context->referer);
+  char *json = ok ? cJSON_PrintUnformatted(root) : NULL;
+  clear_context_fields(root);
+  cJSON_Delete(root);
+  return json;
+}
+
+static void clear_json(char *json) {
+  if (!json) return;
+  size_t length = strlen(json);
+  volatile unsigned char *bytes = (volatile unsigned char *)json;
+  for (size_t i = 0; i < length; i++) bytes[i] = 0;
+  cJSON_free(json);
+}
+
+static int forward_context_offer(int daemon, const char *json,
+                                 IpcBrowserOffer *registered) {
+  size_t length = strlen(json);
+  int result = -1;
+  if (length <= IPC_MAX_FRAME_SIZE) {
+    MsgHeader header = {.length = (uint32_t)length,
+                        .type = MSG_BROWSER_OFFER_V2};
+    if (ipc_write_exact(daemon, &header, sizeof(header)) == 0 &&
+        ipc_write_exact(daemon, json, length) == 0 &&
+        ipc_read_exact(daemon, registered, sizeof(*registered)) == 0 &&
+        registered->offer_id)
+      result = 0;
+  }
+  return result;
 }
 
 static bool send_error(const char *request_id, const char *message) {
@@ -203,29 +316,67 @@ static HostOffer *find_offer_slot(const char *request_id) {
 }
 
 static bool handle_message(const char *json) {
+  /* cJSON string values have no separate length; reject escaped NUL first. */
+  for (const char *p = json; *p; p++) {
+    if (*p == '\\' && p[1]) {
+      if (p[1] == 'u' && strncmp(p + 2, "0000", 4) == 0)
+        return send_error(NULL, "invalid or unsupported download offer");
+      p++; // An escaped backslash does not start a Unicode escape.
+    }
+  }
   cJSON *root = cJSON_Parse(json);
   if (!root)
     return send_error(NULL, "invalid JSON");
   IpcBrowserOffer offered = {0};
-  if (!parse_offer(root, &offered)) {
+  HostRequestContext context = {0};
+  if (!parse_offer(root, &offered, &context)) {
     const cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "request_id");
     bool ok = send_error(cJSON_IsString(id) ? id->valuestring : NULL,
                          "invalid or unsupported download offer");
+    clear_context(&context);
+    clear_context_fields(root);
     cJSON_Delete(root);
     return ok;
   }
+  clear_context_fields(root);
   cJSON_Delete(root);
 
+  bool has_context = context.cookie[0] || context.user_agent[0] ||
+                     context.referer[0];
+  char *context_json = has_context ? context_offer_json(&offered, &context) : NULL;
+  clear_context(&context);
+  if (has_context) {
+    /* Check the 16 KiB daemon frame before starting or contacting it. */
+    if (!context_json || strlen(context_json) > IPC_MAX_FRAME_SIZE) {
+      clear_json(context_json);
+      return send_error(offered.request_id, "invalid or oversized download offer");
+    }
+  }
+
   HostOffer *slot = find_offer_slot(offered.request_id);
-  if (!slot)
+  if (!slot) {
+    clear_json(context_json);
     return send_error(offered.request_id, "too many pending downloads");
-  if (!ensure_daemon_running())
+  }
+  if (!ensure_daemon_running()) {
+    clear_json(context_json);
     return send_error(offered.request_id, "cdm daemon could not start");
-  int daemon = ipc_client_connect_compatible(1500, NULL);
-  if (daemon < 0)
+  }
+  uint16_t daemon_version = 1;
+  int daemon = ipc_client_connect_compatible(1500, &daemon_version);
+  if (daemon < 0) {
+    clear_json(context_json);
     return send_error(offered.request_id, "cdm daemon is unavailable");
+  }
+  if (has_context && daemon_version < 8) {
+    ipc_client_disconnect(daemon);
+    clear_json(context_json);
+    return send_error(offered.request_id, "daemon does not support browser context");
+  }
   IpcBrowserOffer registered = {0};
-  int result = ipc_browser_offer(daemon, &offered, &registered);
+  int result = has_context ? forward_context_offer(daemon, context_json, &registered)
+                           : ipc_browser_offer(daemon, &offered, &registered);
+  clear_json(context_json);
   ipc_client_disconnect(daemon);
   if (result != 0)
     return send_error(offered.request_id, "daemon rejected download offer");
@@ -336,6 +487,9 @@ int main(void) {
         return 1;
       }
       bool ok = handle_message(json);
+      size_t length = strlen(json);
+      volatile unsigned char *bytes = (volatile unsigned char *)json;
+      for (size_t i = 0; i < length; i++) bytes[i] = 0;
       free(json);
       if (!ok) return 1;
     }

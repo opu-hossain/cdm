@@ -52,6 +52,7 @@ typedef enum {
   MSG_CATEGORY_UPDATE_V1 = 53,
   MSG_CATEGORY_DELETE_V1 = 54,
   MSG_LIST_PAGE_WITH_CATEGORY_V1 = 55,
+  MSG_BROWSER_OFFER_V2 = 56, // JSON request context; legacy raw offer reply
 } MsgType;
 
 #define IPC_PROTOCOL_VERSION 7

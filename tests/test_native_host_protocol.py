@@ -2,9 +2,15 @@
 """Exercise the native host's actual stdin/stdout framing contract."""
 
 import json
+import ctypes
+import os
+from pathlib import Path
+import socket
 import struct
 import subprocess
 import sys
+import tempfile
+import threading
 
 
 def frame(payload: bytes) -> bytes:
@@ -43,6 +49,97 @@ def main(host: str) -> None:
     )
     assert result.returncode != 0
     assert result.stdout == b"", "diagnostics leaked to protocol stdout"
+
+    base = {"type": "download_offer", "request_id": "context-1",
+            "url": "https://example.invalid/file", "filename": "file"}
+    invalid_root = tempfile.TemporaryDirectory(prefix="cdm-host-invalid-")
+    invalid_env = os.environ.copy()
+    invalid_env.update({"HOME": invalid_root.name,
+                        "XDG_RUNTIME_DIR": invalid_root.name})
+    for field, value in (("cookie", "x\r\nY"), ("cookie", "x" * 4097),
+                         ("user_agent", "x" * 257), ("referer", "x" * 2049),
+                         ("cookie", 3), ("cookie", "x\x00y"),
+                         ("cookie", "\x01" * 4096)):
+        result = subprocess.run([host], input=frame(json.dumps({**base, field: value}).encode()),
+                                env=invalid_env, capture_output=True, timeout=5)
+        replies = decode_frames(result.stdout)
+        assert replies[0]["type"] == "error", (field, replies)
+        assert "invalid" in replies[0]["error"], (field, replies)
+    malformed = json.dumps({**base, "cookie": "REPLACE"}).encode().replace(
+        b"REPLACE", b"\xc0\x80")
+    result = subprocess.run([host], input=frame(malformed), env=invalid_env,
+                            capture_output=True, timeout=5)
+    assert "invalid" in decode_frames(result.stdout)[0]["error"]
+    invalid_root.cleanup()
+
+    class Offer(ctypes.Structure):
+        _fields_ = [("offer_id", ctypes.c_uint32), ("download_id", ctypes.c_uint32),
+                    ("total_bytes", ctypes.c_uint64), ("state", ctypes.c_int),
+                    ("request_id", ctypes.c_char * 128), ("url", ctypes.c_char * 2048),
+                    ("filename", ctypes.c_char * 512), ("mime", ctypes.c_char * 128),
+                    ("referrer", ctypes.c_char * 2048)]
+
+    with tempfile.TemporaryDirectory(prefix="cdm-host-context-") as root:
+        runtime = Path(root) / "runtime"
+        runtime.mkdir(mode=0o700)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(runtime / "cdm.sock"))
+        listener.listen(4)
+        listener.settimeout(5)
+        observed = []
+        failures = []
+
+        def exact(peer, length):
+            data = b""
+            while len(data) < length:
+                chunk = peer.recv(length - len(data))
+                assert chunk, "host disconnected during request"
+                data += chunk
+            return data
+
+        def serve():
+            with listener:
+                # One connection probes daemon liveness, one negotiates HELLO.
+                with listener.accept()[0]:
+                    pass
+                with listener.accept()[0] as peer:
+                    peer.settimeout(5)
+                    header = exact(peer, 8)
+                    assert struct.unpack("=II", header) == (0, 41), header
+                    peer.sendall(struct.pack("=H", 8))
+                    header = exact(peer, 8)
+                    size, kind = struct.unpack("=II", header)
+                    assert size <= 16384, size
+                    payload = exact(peer, size)
+                    observed.append((kind, json.loads(payload)))
+                    reply = Offer(offer_id=1, state=2, request_id=b"context-1",
+                                  url=b"https://example.invalid/file")
+                    peer.sendall(bytes(reply))
+
+        def fake_daemon():
+            try:
+                serve()
+            except Exception as error:
+                failures.append(error)
+
+        worker = threading.Thread(target=fake_daemon, daemon=True)
+        worker.start()
+        env = os.environ.copy()
+        env.update({"HOME": root, "XDG_RUNTIME_DIR": str(runtime)})
+        payload = {**base, "cookie": "x" * 4096, "user_agent": "u" * 256,
+                   "referer": "r" * 2048}
+        result = subprocess.run([host], input=frame(json.dumps(payload).encode()),
+                                env=env, capture_output=True, timeout=5)
+        worker.join(timeout=2)
+        assert not worker.is_alive(), "fake daemon did not finish"
+        assert not failures, failures
+        assert observed, result.stderr.decode(errors="replace")
+        assert observed[0][0] == 56, observed
+        assert all(observed[0][1][key] == payload[key]
+                   for key in ("cookie", "user_agent", "referer")), observed
+        replies = decode_frames(result.stdout)
+        assert replies[0]["type"] == "offer_registered", replies
+        assert payload["cookie"].encode() not in result.stderr
 
 
 if __name__ == "__main__":
