@@ -136,3 +136,13 @@ smoke was performed. Chrome, Edge, Brave, Opera and Vivaldi are unavailable.
 Run the local-fixture consent/menu/filter/exclusion/refresh smoke checklist in
 `docs/browser-integration.md` on all seven browsers before closing this gate.
 Phase 3 documentation is updated; task 3.5.1 stays unchecked for this gate.
+
+## Task 4.1.1 — Media detection offer policy
+
+The brief matches video/* responses, which includes individual streaming
+segments. Should the opt-in detector collect bounded candidates and send a
+media_offer after user selection, or automatically open confirmations for each
+matched response? Automatic offers can flood the desktop on segmented streams.
+Resolved: user chose collection and offer only after selection on 2026-09-28.
+The options page lists a bounded, expiring in-memory collection; detection alone
+does not open native offers. Browser-session context remains separately gated.

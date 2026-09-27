@@ -27,9 +27,24 @@
     <p>Use comma-separated ASCII/punycode hostnames, up to 64. A *. prefix
       matches the base hostname and its subdomains. Exclusions affect automatic
       interception only; explicit menu choices remain available.</p>
+    <p><label><input id="mediaDetection" type="checkbox"> Media detection</label></p>
+    <p>Off by default. Enabling requests permission to observe HTTP(S) response
+      headers on all sites. This collects up to 64 media candidates in extension
+      memory for ten minutes; it never opens download popups automatically.
+      Browser-session cookies still require the separate site-specific toggle.</p>
     <button id="save" type="submit">Save filters and exclusions</button>
     <p id="status" role="status" aria-live="polite"></p>
   </form>
+  <h2>Detected media</h2>
+  <p>Refresh after playing a video. Select a candidate to review in cdm.
+    Manifests are retained ahead of video segments. Detection excludes private
+    browsing and excluded sites; an explicit selection bypasses download filters.</p>
+  <button id="mediaRefresh" type="button">Refresh detected media</button>
+  <p><select id="mediaCandidates" size="8" aria-label="Detected media candidates"></select></p>
+  <button id="mediaOffer" type="button" disabled>Offer selected media to cdm</button>
+  <p id="mediaStatus" role="status" aria-live="polite"></p>
+  <p>Disabling detection clears candidates. Granted browser permissions remain
+    available for the site-specific session toggle; revoke them through your browser.</p>
   <h2>Browser session</h2>
   <p>Browser session sharing is off by default. Click the extension's toolbar
     button on a site to enable it for that site and grant optional permissions.

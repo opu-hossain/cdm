@@ -7,6 +7,12 @@ async function verify(file, globalName, expectedBrowser) {
   let downloadListener;
   let actionListener;
   let headerListener;
+  let mediaListener;
+  let runtimeListener;
+  let mediaDetection;
+  let mediaSequence = 0;
+  let clock = Date.now();
+  let storageListener;
   let headerOptions;
   let nativeListener;
   let disconnectListener;
@@ -35,15 +41,16 @@ async function verify(file, globalName, expectedBrowser) {
     onDisconnect: { addListener(listener) { disconnectListener = listener; } }
   };
   const api = {
-    storage: {sync: {get() {
+    storage: {onChanged: {addListener(listener) { storageListener = listener; }}, sync: {get() {
       return storageFails ? Promise.reject(new Error("fixture storage failure"))
-        : Promise.resolve({interceptionFilters: filterSettings, siteExclusions});
+        : Promise.resolve({interceptionFilters: filterSettings, siteExclusions, mediaDetection});
     }}},
     downloads: {
       onCreated: { addListener(listener) { downloadListener = listener; } },
       cancel(id) { canceled.push(id); return Promise.resolve(); }
     },
-    runtime: { onInstalled: {addListener(listener) { installListener = listener; }},
+    runtime: {getURL: name => `extension://cdm/${name}`,
+      onMessage: {addListener(listener) { runtimeListener = listener; }}, onInstalled: {addListener(listener) { installListener = listener; }},
       connectNative(name) {
       assert.equal(name, "org.cdm.browser");
       return port;
@@ -68,14 +75,18 @@ async function verify(file, globalName, expectedBrowser) {
     cookies: {
       getAll() { cookieReads++; return Promise.resolve(cookieRows); }
     },
-    webRequest: { onSendHeaders: { addListener(listener, _filter, options) {
+    webRequest: {onHeadersReceived: {addListener(listener, filter, options) {
+      mediaListener = listener;
+      assert.deepEqual(Array.from(options), ["responseHeaders"]);
+    }}, onSendHeaders: { addListener(listener, _filter, options) {
       headerListener = listener;
       headerOptions = options;
     } } }
   };
   const context = {
     [globalName]: api,
-    crypto: { randomUUID: () => "browser-test-request" },
+    crypto: { randomUUID: () => mediaDetection ? `media-${++mediaSequence}` : "browser-test-request" },
+    Date: {now: () => clock},
     console, URL, TextEncoder,
     importScripts(name) {
       vm.runInContext(fs.readFileSync(path.join(path.dirname(file), name), "utf8"), sandbox);
@@ -257,14 +268,93 @@ async function verify(file, globalName, expectedBrowser) {
   await automatic({url: "https://sub.example.invalid/file.zip"}, false);
   siteExclusions = [".*regex.invalid"];
   await automatic({}, false);
+  assert.equal(typeof mediaListener, "function");
+  assert.equal(typeof runtimeListener, "function");
+  siteExclusions = undefined;
+  filterSettings = undefined;
+  const response = {url: "https://example.invalid/master.M3U8?fixture=1", tabId: 7,
+    method: "GET", statusCode: 200, responseHeaders: []};
+  const beforeMedia = messages.length;
+  const beforeMediaCancel = canceled.length;
+  function callRuntime(message, url = "extension://cdm/options.html") {
+    return new Promise(resolve => {
+      const keep = runtimeListener(message, {url}, resolve);
+      if (keep !== true) resolve(undefined);
+    });
+  }
+  await mediaListener(response);
+  assert.equal((await callRuntime({type: "cdm_media_list"})).length, 0);
+  mediaDetection = true;
+  await mediaListener(response);
+  await mediaListener(response);
+  let candidates = await callRuntime({type: "cdm_media_list"});
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].kind, "hls");
+  assert.equal(messages.length, beforeMedia, "detection must not open native offers");
+  assert(!Object.hasOwn(candidates[0], "cookie"));
+  // Existing site-specific consent is on; turning it off clears cached context.
+  await actionListener({url: "https://example.invalid/page"});
+  assert.equal(await callRuntime({type: "cdm_media_list"}, "https://example.invalid/"), undefined);
+  const selected = await callRuntime({type: "cdm_media_offer", id: candidates[0].id});
+  assert.equal(selected.ok, true);
+  assert.equal(messages.at(-1).type, "media_offer");
+  assert.equal(messages.at(-1).kind, "hls");
+  assert.equal(messages.at(-1).automatic, false);
+  assert.equal(messages.at(-1).cookie, undefined);
+  assert.equal(canceled.length, beforeMediaCancel, "media selection must not cancel downloads");
+  assert.equal((await callRuntime({type: "cdm_media_list"})).length, 0);
+  await mediaListener({...response, url: "https://example.invalid/manifest",
+    responseHeaders: [{name: "Content-Type", value: "Application/Dash+XML; charset=utf-8"}]});
+  candidates = await callRuntime({type: "cdm_media_list"});
+  assert.equal(candidates[0].kind, "dash");
+  await mediaListener({...response, url: "https://example.invalid/movie.mp4"});
+  await mediaListener({...response, url: "https://example.invalid/stream",
+    responseHeaders: [{name: "content-type", value: "video/webm"}]});
+  assert.equal((await callRuntime({type: "cdm_media_list"})).length, 3);
+  for (const item of [{...response, incognito: true}, {...response, statusCode: 404},
+      {...response, method: "POST"}, {...response, tabId: -1},
+      {...response, url: "blob:https://example.invalid/fixture"}])
+    await mediaListener(item);
+  assert.equal((await callRuntime({type: "cdm_media_list"})).length, 3);
+  siteExclusions = ["*.example.invalid"];
+  await mediaListener({...response, url: "https://example.invalid/excluded.mpd"});
+  assert.equal((await callRuntime({type: "cdm_media_list"})).length, 3);
+  siteExclusions = undefined;
+  for (let i = 0; i < 80; i++)
+    await mediaListener({...response, url: `https://example.invalid/segment-${i}.mp4`});
+  candidates = await callRuntime({type: "cdm_media_list"});
+  assert.equal(candidates.length, 64);
+  assert(candidates.some(c => c.kind === "dash"), "segments must not crowd out manifests");
+  clock += 600001;
+  assert.equal((await callRuntime({type: "cdm_media_list"})).length, 0);
+  await mediaListener(response);
+  mediaDetection = false;
+  storageListener({mediaDetection: {newValue: false}}, "sync");
+  assert.equal((await callRuntime({type: "cdm_media_list"})).length, 0);
+  assert.equal((await callRuntime({type: "cdm_media_offer", id: candidates[0].id})).ok, false);
+
 }
 
 async function verifyOptions(file, globalName) {
   const directory = path.dirname(file);
   const elements = {};
   for (const id of ["filters", "status", "save", "minSizeBytes", "extensionsAllow",
-                    "extensionsDeny", "mimeAllow", "mimeDeny", "siteExclusions"])
-    elements[id] = {value: "", textContent: "", disabled: false};
+                    "extensionsDeny", "mimeAllow", "mimeDeny", "siteExclusions", "mediaDetection",
+                    "mediaCandidates", "mediaStatus", "mediaOffer", "mediaRefresh"])
+    elements[id] = {value: "", textContent: "", disabled: false, checked: false,
+      children: [], listeners: {}, addEventListener(name, listener) {this.listeners[name] = listener;}};
+  elements.mediaCandidates.replaceChildren = () => {
+    elements.mediaCandidates.children = []; elements.mediaCandidates.value = "";
+  };
+  elements.mediaCandidates.appendChild = option => {
+    elements.mediaCandidates.children.push(option);
+    elements.mediaCandidates.value ||= option.value;
+  };
+  let grantedMedia = true;
+  const mediaPermissionRequests = [];
+  let mediaRows = [{id: "media-option-fixture", kind: "hls", tabId: 7,
+    url: "https://example.invalid/video.m3u8"}];
+  let selectedMedia;
   let submit;
   let saved;
   let failSave = false;
@@ -272,8 +362,13 @@ async function verifyOptions(file, globalName) {
     assert.equal(name, "submit"); submit = listener;
   };
   const context = vm.createContext({TextEncoder, URL,
-    document: {getElementById(id) { assert(elements[id], id); return elements[id]; }},
-    [globalName]: {storage: {sync: {
+    document: {getElementById(id) { assert(elements[id], id); return elements[id]; },
+      createElement(tag) { assert.equal(tag, "option"); return {}; }},
+    [globalName]: {permissions: {request(value) { mediaPermissionRequests.push(value);
+      return Promise.resolve(grantedMedia); }}, runtime: {sendMessage(message) {
+        if (message.type === "cdm_media_list") return Promise.resolve(mediaRows);
+        selectedMedia = message.id; mediaRows = []; return Promise.resolve({ok: true});
+      }}, storage: {sync: {
       get() { return Promise.resolve({interceptionFilters: {minSizeBytes: 7,
           extensionsAllow: ["PDF"]}, siteExclusions: ["*.EXAMPLE.invalid"]}); },
       set(value) { if (failSave) return Promise.reject(new Error("fixture quota failure"));
@@ -312,7 +407,28 @@ async function verifyOptions(file, globalName) {
   await submit({preventDefault() {}});
   assert.match(elements.status.textContent, /quota failure/);
   assert.equal(elements.save.disabled, false);
+  failSave = false;
+  grantedMedia = false;
+  elements.mediaDetection.checked = true;
+  await submit({preventDefault() {}});
+  assert.equal(saved, previous);
+  assert.match(elements.status.textContent, /permissions/);
+  grantedMedia = true;
+  await submit({preventDefault() {}});
+  assert.equal(saved.mediaDetection, true);
+  assert.deepEqual(Array.from(mediaPermissionRequests.at(-1).permissions), ["webRequest"]);
+  assert(!mediaPermissionRequests.at(-1).permissions.includes("cookies"));
+  assert.equal(elements.mediaCandidates.children.length, 1);
+  assert.match(elements.mediaCandidates.children[0].textContent, /example.invalid/);
+  await elements.mediaOffer.listeners.click();
+  assert.equal(selectedMedia, "media-option-fixture");
+  assert.equal(elements.mediaCandidates.children.length, 0);
+  assert.equal(elements.mediaOffer.disabled, true);
   const filters = context.CdmFilters;
+  assert.equal(filters.mediaKind("https://example.invalid/file.MPD?q=1"), "dash");
+  assert.equal(filters.mediaKind("https://example.invalid/video", "Video/MP4; charset=x"), "video");
+  assert.equal(filters.mediaKind("https://example.invalid/page", "text/html"), "");
+  assert.equal(filters.mediaKind("data:video/mp4,fixture", "video/mp4"), "");
   assert.throws(() => filters.normalize({extensionsAllow: Array(65).fill("zip")}), /64/);
   assert.throws(() => filters.normalize({mimeAllow: [3]}), /text/);
   assert.throws(() => filters.normalize({extensionsDeny: ["*"]}), /extension/);

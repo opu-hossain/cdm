@@ -1,5 +1,19 @@
 // Pure validation/matching shared by each extension's background and options page.
 globalThis.CdmFilters = Object.freeze({
+  mediaKind(url, mime = "") {
+    let pathname;
+    try {
+      const parsed = new URL(url);
+      if (!["http:", "https:"].includes(parsed.protocol)) return "";
+      pathname = decodeURIComponent(parsed.pathname).toLowerCase();
+    } catch (_) { return ""; }
+    const type = mime.split(";", 1)[0].trim().toLowerCase();
+    if (pathname.endsWith(".m3u8") || type === "application/vnd.apple.mpegurl" ||
+        type === "application/x-mpegurl") return "hls";
+    if (pathname.endsWith(".mpd") || type === "application/dash+xml") return "dash";
+    return /\.(mp4|webm|ogv|ogg|mov|m4v|mkv|avi)$/.test(pathname) ||
+      /^video\/[a-z0-9.+-]+$/.test(type) ? "video" : "";
+  },
   normalizeSites(input = []) {
     if (!Array.isArray(input) || input.length > 64)
       throw new Error("Use at most 64 excluded hostnames");

@@ -37,6 +37,8 @@ browser.action.onClicked.addListener(async tab => {
   const pattern = `${origin}/*`;
   if (enabledOrigins.has(origin)) {
     enabledOrigins.delete(origin);
+    for (const candidate of mediaCandidates.values())
+      if (originFor(candidate.url) === origin) candidate.context = {};
     for (const url of observedHeaders)
       if (originFor(url) === origin) observedHeaders.delete(url);
     await browser.permissions.remove({origins: [pattern]}).catch(() => false);
@@ -171,7 +173,7 @@ async function automaticAllowed(item) {
   return false;
 }
 
-async function offerDownload(item, url, automatic = false) {
+async function offerDownload(item, url, automatic = false, media = null) {
   const requestId = crypto.randomUUID();
   const filename = (item.filename || "").split(/[\\/]/).pop() || "";
   pending.set(requestId, item.id);
@@ -184,13 +186,20 @@ async function offerDownload(item, url, automatic = false) {
       browser.action.setTitle({title: "cdm: left in browser (site is excluded)"});
       return false;
     }
-    const context = await offerContext(item, url);
+    let context = media ? media.context : await offerContext(item, url);
+    if (media && (!enabledOrigins.has(originFor(url)) ||
+        !await browser.permissions.contains({permissions: ["cookies", "webRequest"],
+            origins: [`${originFor(url)}/*`]}))) {
+      media.context = {};
+      context = {};
+    }
     const port = connectHost();
     // Configure each new native-host connection before its first offer;
     // refreshing per offer also picks up sync edits without cached policy.
     port.postMessage({type: "set_site_exclusions", sites});
     port.postMessage({
-      type: "download_offer",
+      type: media ? "media_offer" : "download_offer",
+      ...(media ? {kind: media.kind} : {}),
       automatic,
       request_id: requestId,
       url,
@@ -236,4 +245,77 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
     : info.menuItemId === "cdm-download-page" ? info.pageUrl || tab?.url : "";
   if (!originFor(url)) return;
   await offerDownload({referrer: info.pageUrl || "", incognito: !!tab?.incognito}, url);
+});
+
+// Background/service worker is the sole owner; URLs/context never enter storage.
+// Ten-minute TTL and 64 total entries bound memory; manifests survive video churn.
+const mediaCandidates = new Map();
+function pruneMedia() {
+  for (const [key, value] of mediaCandidates)
+    if (Date.now() - value.at > 600000) mediaCandidates.delete(key);
+}
+browser.webRequest.onHeadersReceived.addListener(async details => {
+  if (details.incognito || details.tabId < 0 || details.method !== "GET" ||
+      details.statusCode < 200 || details.statusCode >= 300 ||
+      !originFor(details.url) || new TextEncoder().encode(details.url).length > 2047)
+    return;
+  const mime = safeValue((details.responseHeaders || []).find(h =>
+      h.name.toLowerCase() === "content-type")?.value || "", 127);
+  const kind = CdmFilters.mediaKind(details.url, mime);
+  if (!kind) return;
+  try {
+    const stored = await browser.storage.sync.get(["mediaDetection", "siteExclusions"]);
+    if (stored.mediaDetection !== true) { mediaCandidates.clear(); return; }
+    if (CdmFilters.excluded(details.url, CdmFilters.normalizeSites(stored.siteExclusions)))
+      return;
+    if (!await browser.permissions.contains({permissions: ["webRequest"],
+        origins: ["http://*/*", "https://*/*"]})) return;
+    pruneMedia();
+    const key = `${details.tabId}\n${details.url}`;
+    if (mediaCandidates.has(key)) return;
+    const context = await offerContext({incognito: false}, details.url);
+    // Recheck enablement after asynchronous context capture/revocation.
+    const latest = await browser.storage.sync.get("mediaDetection");
+    if (latest.mediaDetection !== true) { mediaCandidates.clear(); return; }
+    if (mediaCandidates.has(key)) return;
+    if (mediaCandidates.size >= 64) {
+      const video = [...mediaCandidates].find(([, entry]) => entry.kind === "video");
+      if (!video && kind === "video") return;
+      mediaCandidates.delete(video ? video[0] : mediaCandidates.keys().next().value);
+    }
+    const filename = safeValue(new URL(details.url).pathname.split("/").pop() || "", 511);
+    mediaCandidates.set(key, {id: crypto.randomUUID(), url: details.url, kind, mime,
+      filename, tabId: details.tabId, context, at: Date.now()});
+  } catch (_) {
+    // Unavailable storage/permissions fail closed; no native offer was sent.
+  }
+}, {urls: ["http://*/*", "https://*/*"]}, ["responseHeaders"]);
+
+browser.runtime.onMessage.addListener((message, sender, reply) => {
+  if (sender.url !== browser.runtime.getURL("options.html") ||
+      !["cdm_media_list", "cdm_media_offer"].includes(message?.type)) return;
+  (async () => {
+    const stored = await browser.storage.sync.get("mediaDetection");
+    if (stored.mediaDetection !== true) mediaCandidates.clear();
+    pruneMedia();
+    if (message.type === "cdm_media_list") {
+      reply([...mediaCandidates.values()].map(({id, url, kind, mime, filename, tabId}) =>
+        ({id, url, kind, mime, filename, tabId})));
+      return;
+    }
+    const selected = [...mediaCandidates].find(([, value]) => value.id === message.id);
+    if (!selected) { reply({ok: false}); return; }
+    const [key, candidate] = selected;
+    if (!await browser.permissions.contains({permissions: ["webRequest"],
+        origins: ["http://*/*", "https://*/*"]})) { reply({ok: false}); return; }
+    const ok = await offerDownload(candidate, candidate.url, false, candidate);
+    if (ok) mediaCandidates.delete(key);
+    reply({ok});
+  })().catch(() => reply(message.type === "cdm_media_list" ? [] : {ok: false}));
+  return true; // Callback reply works in Firefox and older Chrome releases.
+});
+
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area === "sync" && changes.mediaDetection && changes.mediaDetection.newValue !== true)
+    mediaCandidates.clear();
 });

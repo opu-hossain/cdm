@@ -983,3 +983,10 @@ Completed: project context, release notes, and browser guide now describe IPC v9
 Verification: full Debug build/CTest 33/33 (including Node JS/options tests), no new warnings; checked available browser executables and reconciled critical interfaces against source.
 Open questions: all-browser installed handshake/visual smoke remains UNKNOWN; five browsers unavailable. Task 3.5.1 stays unchecked for that manual gate; Phase 2 TSan runner blocker remains.
 Next: 4.1.1 opt-in extension media detector, independent of the recorded manual gate. All task changes committed; no push.
+
+## 2026-09-28 — Codex, task 4.1.1
+Branch: `cdm`; commit: `feat(browser): detect hls, dash and video media requests`.
+Completed: user chose collection then explicit selection; opt-in response-header permissions, HLS/DASH/video classification, options list, 64-entry/10-minute session cap, manifest retention, and separate context consent/revocation.
+Verification: test-first Node mocks cover matching, private/excluded requests, dedup/caps/expiry, options permissions, privileged selection and no automatic native offers; bundle smoke and full build/CTest 33/33 pass.
+Open questions: real browser visual smoke UNKNOWN; native media acceptance is the next task. Existing Phase 2 TSan and Phase 3 manual gates remain open.
+Next: 4.1.2 native media offers; user approved popup scope and versioned kind lookup. All task code committed; no push.
