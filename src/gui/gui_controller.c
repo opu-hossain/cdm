@@ -17,6 +17,7 @@ typedef enum {
   GUI_CONTROLLER_COMMAND_ADD,
   GUI_CONTROLLER_COMMAND_PAUSE,
   GUI_CONTROLLER_COMMAND_RESUME,
+  GUI_CONTROLLER_COMMAND_REFRESH_URL,
   GUI_CONTROLLER_COMMAND_CANCEL,
   GUI_CONTROLLER_COMMAND_REMOVE,
   GUI_CONTROLLER_COMMAND_DETAILS,
@@ -220,6 +221,10 @@ static bool enqueue_id_command(GuiControllerCommandType type, uint32_t id) {
 
 bool gui_controller_enqueue_pause(uint32_t id) {
   return enqueue_id_command(GUI_CONTROLLER_COMMAND_PAUSE, id);
+}
+
+bool gui_controller_enqueue_refresh_url(uint32_t id) {
+  return enqueue_id_command(GUI_CONTROLLER_COMMAND_REFRESH_URL, id);
 }
 
 bool gui_controller_enqueue_resume(uint32_t id) {
@@ -450,6 +455,10 @@ static void process_command(const GuiControllerCommand *command) {
   case GUI_CONTROLLER_COMMAND_PAUSE:
     operation = GUI_CONTROLLER_OPERATION_PAUSE;
     succeeded = gui_client_pause(command->id);
+    break;
+  case GUI_CONTROLLER_COMMAND_REFRESH_URL:
+    operation = GUI_CONTROLLER_OPERATION_REFRESH_URL;
+    succeeded = gui_client_refresh_url(command->id);
     break;
   case GUI_CONTROLLER_COMMAND_RESUME:
     operation = GUI_CONTROLLER_OPERATION_RESUME;

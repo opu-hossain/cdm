@@ -853,7 +853,7 @@ static void draw_menu(struct nk_context *ctx, UiState *ui, GuiRow *rows,
   }
   bool done = is_status(row, "DONE");
   bool paused = is_status(row, "PAUSED");
-  float mh = 236;
+  float mh = 266;
   float x = ui->menu_pos.x, y = ui->menu_pos.y;
   if (x + 180 > width)
     x = width - 180;
@@ -920,6 +920,12 @@ static void draw_menu(struct nk_context *ctx, UiState *ui, GuiRow *rows,
     by += 30;
     if (button(ctx, 5, by, 170, 30, "Show details", true, false)) {
       show_details(ui, row->id);
+      close = true;
+    }
+    by += 30;
+    if (button(ctx, 5, by, 170, 30, "Refresh URL",
+               !is_status(row, "ACTIVE"), false)) {
+      report_enqueue(ui, gui_controller_enqueue_refresh_url(row->id));
       close = true;
     }
     by += 36;
@@ -1985,6 +1991,8 @@ static void consume_events(UiState *ui) {
           break;
         case GUI_CONTROLLER_OPERATION_CANCEL:
           gui_model_apply_optimistic(id, "CANCELED");
+          break;
+        case GUI_CONTROLLER_OPERATION_REFRESH_URL:
           break;
         case GUI_CONTROLLER_OPERATION_REMOVE:
           gui_model_remove_local_row(id);

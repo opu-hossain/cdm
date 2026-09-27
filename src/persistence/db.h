@@ -65,6 +65,9 @@ int db_update_resolved_destination(uint32_t id, const char *dest_path);
 bool db_destination_exists(const char *dest_path);
 int db_update_status(uint32_t id, const char *status);
 int db_update_total_size(uint32_t id, uint64_t total_size);
+/* One SQL statement; failure leaves all metadata unchanged. */
+int db_refresh_download(uint32_t id, const char *url, uint64_t total_size,
+                         const char *etag, const char *last_modified);
 int db_update_validators(uint32_t id, const char *etag,
                          const char *last_modified);
 

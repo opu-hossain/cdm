@@ -6,7 +6,7 @@ Source of truth: `src/platform/ipc_protocol.h`, `src/platform/ipc_socket.h`, and
 
 Every **request** and asynchronous **event** begins with the unchanged v1 `MsgHeader`: `uint32_t length` (payload bytes, excluding the header), then `MsgType type` (C enum; four bytes on the supported ABI). The current header is eight bytes. Integers, `float`, and raw structs use native byte order, size, alignment, and padding; this is a local, same-ABI protocol, not a portable network format. Strings in length-prefixed fields are byte sequences without a wire NUL: `uint32_t length`, then exactly that many bytes. Fixed `char[]` fields in raw structs are NUL-terminated when populated. Request payloads over `IPC_MAX_FRAME_SIZE = 16384` bytes or with an invalid type/length are rejected by closing the connection (`src/platform/ipc_socket.c:397`). **Command replies have no `MsgHeader`**; their layouts are listed below. Event frames do have a header.
 
-`MSG_HELLO` (41) is a v1-framed empty request. Its unframed reply is native `uint16_t IPC_PROTOCOL_VERSION`, currently **8**. `ipc_client_connect_compatible()` uses a bounded HELLO exchange; if an old daemon closes or fails the exchange, the client reconnects and treats it as v1. A version below 2 uses v1 messages. Clients must check for version 5 before sending queue commands or a nondefault `queue_id` in type 42; older daemons may ignore that JSON key. Existing message payloads must remain byte-compatible; add a new type/versioned payload for new fields, never append fields to an existing wire struct.
+`MSG_HELLO` (41) is a v1-framed empty request. Its unframed reply is native `uint16_t IPC_PROTOCOL_VERSION`, currently **9**. `ipc_client_connect_compatible()` uses a bounded HELLO exchange; if an old daemon closes or fails the exchange, the client reconnects and treats it as v1. A version below 2 uses v1 messages. Clients must check for version 5 before sending queue commands or a nondefault `queue_id` in type 42; older daemons may ignore that JSON key. Existing message payloads must remain byte-compatible; add a new type/versioned payload for new fields, never append fields to an existing wire struct.
 
 ## Message registry
 
@@ -37,6 +37,7 @@ Types 1–17 are legacy. Type 7 exists in the enum but has no producer or reques
 | 35 | `MSG_LIST_PAGE` | `uint32_t offset`, `uint32_t limit` → `uint32_t total`, `uint32_t returned`, then `returned` rows in the type 9 row layout. `limit` is capped at 500; `total` is the full database count before paging. |
 | 36 | `MSG_LIST_PAGE_WITH_SIZE` | Same request and page header as type 35; each row adds native `uint64_t total_size` (bytes; `0` means unknown) after `float progress`. Used by `cdm cli list`. |
 | 37 | `MSG_GET_DETAILS_V2` | Type 10 details plus length-prefixed auth user and `uint8_t has_password`; password is never returned. |
+| 40 | `MSG_REFRESH_URL` | `uint32_t download_id` → `uint8_t IpcResult`. Available since v9; probe the current URL and persist final URL, size (bytes), ETag, and Last-Modified atomically. |
 | 41 | `MSG_HELLO` | Empty → raw `uint16_t` daemon protocol version. |
 | 42 | `MSG_ADD_DOWNLOAD_V2` | Type 1 strings, with optional `auto_filename` boolean and `queue_id` JSON integer → raw `IpcAddResponse` (`uint32_t result`, `uint32_t id`). Queue 0/absent means default. |
 | 43 | `MSG_BROWSER_CONFIRM_V2` | Type 14 request → raw `IpcAddResponse`. |
@@ -88,3 +89,17 @@ restart, and cleanup rules.
 Type 12 JSON accepts `request_id` (required string, max 127 bytes), `url` (required HTTP(S) string, max 2047), `filename` (optional string, max 511), `mime` (optional string, max 127), `referrer` (optional string, max 2047), and `total_bytes` (optional nonnegative JSON number up to 2^53−1, bytes). The raw `IpcBrowserOffer` reply (`src/platform/ipc_socket.h:28`) has `uint32_t offer_id` (`0` means absent/failure), `uint32_t download_id` (`0` until confirmed), `uint64_t total_bytes` (bytes; `0` unknown), `IpcBrowserOfferState state` (`WAITING=0`, `CONFIRMED=1`, `DISMISSED=2`), and NUL-terminated arrays `request_id[128]`, `url[2048]`, `filename[512]`, `mime[128]`, `referrer[2048]`. Offers are held in 64 in-memory slots for 600 seconds; the same `request_id`/URL retrieves the same offer. Confirming a waiting offer queues once; repeat confirm returns its download ID. Dismiss is idempotent for a dismissed offer (`src/platform/ipc_socket.c:34`, `src/platform/ipc_socket.c:242`, `src/platform/ipc_socket.c:571`).
 
 The socket carries sensitive options and `MSG_GET_DETAILS` can return plaintext cookies and headers. Only connect trusted same-user processes; the protocol has no additional peer authentication or encryption. Raw structs and enum widths must match between client and daemon builds.
+
+## Link refresh (v9)
+
+Type 40 uses stored request options, without holding the queue mutex during
+HTTP probing. Only an unchanged, non-ACTIVE snapshot may commit. A missing
+in-memory entry yields NOT_FOUND; missing browser context, concurrent changes,
+or size/validator changes with existing resume chunks yield REJECTED. Probe or
+persistence failure yields ERROR and leaves the record unchanged. Partial
+resources with changed validators must be re-downloaded. Refresh leaves status,
+chunks, destination, and file contents unchanged; resume remains explicit.
+Captured browser context still cannot follow redirects. The row menu dispatches
+through the GUI controller worker; stopped browser popups expose the same action.
+Probing is synchronous in the daemon IPC handler and bounded by curl timeouts;
+other IPC commands wait for the probe. Existing messages remain compatible.

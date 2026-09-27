@@ -5,6 +5,7 @@
 #include "scheduler.h"
 #include "../persistence/db.h"
 #include "../platform/thread.h"
+#include "../platform/curl_client.h"
 #include "../utils/log.h"
 #include "../utils/path.h"
 
@@ -685,4 +686,76 @@ void queue_manager_reassign_queue_locked(uint32_t old_id) {
 void *queue_manager_get_mutex(void) {
   ensure_mutex();
   return &g_mutex;
+}
+
+int queue_manager_refresh_url(uint32_t id) {
+  ensure_mutex();
+  char url[2048], etag[256], modified[128];
+  RequestOptions options = {0};
+  DownloadStatus status;
+  uint64_t size, bytes;
+  int chunks;
+  volatile unsigned char *secret = (volatile unsigned char *)&options;
+  dm_mutex_lock(&g_mutex);
+  Download *d = g_head;
+  while (d && d->id != id) d = d->next;
+  if (!d) { dm_mutex_unlock(&g_mutex); return IPC_RESULT_NOT_FOUND; }
+  if (d->status == DOWNLOAD_ACTIVE ||
+      (d->requires_browser_context && !d->request)) {
+    dm_mutex_unlock(&g_mutex);
+    return IPC_RESULT_REJECTED;
+  }
+  memcpy(url, d->url, sizeof(url));
+  memcpy(etag, d->etag, sizeof(etag));
+  memcpy(modified, d->last_modified, sizeof(modified));
+  if (d->request) options = *d->request;
+  status = d->status;
+  size = d->total_size;
+  bytes = atomic_load(&d->bytes_downloaded);
+  chunks = d->chunk_count;
+  dm_mutex_unlock(&g_mutex);
+
+  RequestContext context = {
+      .cookie = options.cookie, .referrer = options.referrer,
+      .extra_headers = options.extra_headers, .auth_user = options.auth_user,
+      .auth_password = options.auth_password,
+      .user_agent = options.user_agent[0] ? options.user_agent : NULL,
+      .sensitive = options.browser_context};
+  FileInfo info = {0};
+  int result = IPC_RESULT_ERROR;
+  if (curl_client_head(url, &context, &info) != 0 ||
+      (strncmp(info.effective_url, "http://", 7) != 0 &&
+       strncmp(info.effective_url, "https://", 8) != 0))
+    goto clear;
+
+  dm_mutex_lock(&g_mutex);
+  d = g_head;
+  while (d && d->id != id) d = d->next;
+  if (!d) result = IPC_RESULT_NOT_FOUND;
+  else if (d->status != status || d->status == DOWNLOAD_ACTIVE ||
+           d->total_size != size || d->chunk_count != chunks ||
+           atomic_load(&d->bytes_downloaded) != bytes ||
+           strcmp(d->url, url) || strcmp(d->etag, etag) ||
+           strcmp(d->last_modified, modified) ||
+           (d->request && memcmp(d->request, &options, sizeof(options))) ||
+           (!d->request && options.browser_context))
+    result = IPC_RESULT_REJECTED;
+  /* Never replace the validators that protect existing resume chunks. A
+   * changed resource must be re-downloaded, not spliced into partial bytes. */
+  else if (chunks > 0 && (size != info.total_size ||
+           strcmp(etag, info.etag) || strcmp(modified, info.last_modified)))
+    result = IPC_RESULT_REJECTED;
+  else if (db_refresh_download(id, info.effective_url, info.total_size,
+                               info.etag, info.last_modified) == 0) {
+    memcpy(d->url, info.effective_url, sizeof(d->url));
+    memcpy(d->etag, info.etag, sizeof(d->etag));
+    memcpy(d->last_modified, info.last_modified, sizeof(d->last_modified));
+    d->total_size = info.total_size;
+    result = IPC_RESULT_OK;
+  }
+  dm_mutex_unlock(&g_mutex);
+clear:
+  /* The snapshot may contain browser cookies or authentication credentials. */
+  for (size_t i = 0; i < sizeof(options); i++) secret[i] = 0;
+  return result;
 }

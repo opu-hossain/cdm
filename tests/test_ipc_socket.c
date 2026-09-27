@@ -846,3 +846,38 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   rmdir(dir);
   unsetenv("DOWNLOADMGR_ROOT");
 }
+
+Test(ipc, refresh_url_refuses_active_and_missing_context_without_desync) {
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", "/tmp", 1), 0);
+  uint32_t id = queue_manager_add("https://example.invalid/refresh",
+                                  "/tmp/cdm-refresh-ipc-fixture", NULL);
+  cr_assert_neq(id, 0);
+  queue_manager_update_status(id, DOWNLOAD_ACTIVE);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  uint32_t ids[] = {id, UINT32_MAX, id};
+  uint8_t expected[] = {IPC_RESULT_REJECTED, IPC_RESULT_NOT_FOUND,
+                         IPC_RESULT_REJECTED};
+  for (int i = 0; i < 3; i++) {
+    if (i == 2) {
+      queue_manager_update_status(id, DOWNLOAD_PAUSED);
+      Download *d = queue_manager_find_by_id(id);
+      d->requires_browser_context = true;
+    }
+    MsgHeader header = {.type = MSG_REFRESH_URL, .length = sizeof(id)};
+    cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+    cr_assert_eq(ipc_write_exact(client, &ids[i], sizeof(id)), 0);
+    uint8_t result = IPC_RESULT_ERROR;
+    cr_assert_eq(ipc_read_exact(client, &result, sizeof(result)), 0);
+    cr_assert_eq(result, expected[i]);
+  }
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_client_disconnect(client);
+  queue_manager_remove(id);
+  unsetenv("DOWNLOADMGR_ROOT");
+}

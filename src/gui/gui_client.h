@@ -39,6 +39,7 @@ void gui_client_disconnect(void);
 
 bool gui_client_pause(uint32_t id);
 bool gui_client_resume(uint32_t id);
+bool gui_client_refresh_url(uint32_t id);
 bool gui_client_cancel(uint32_t id);
 bool gui_client_remove_download(uint32_t id, bool delete_file);
 

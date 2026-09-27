@@ -32,6 +32,7 @@ typedef struct {
   char content_disposition[512]; // Empty if no usable header was received.
   char etag[256]; // Raw ETag value, including quotes or W/ prefix.
   char last_modified[128]; // Raw Last-Modified date.
+  char effective_url[2048]; // Final probe URL, copied before curl cleanup.
 } FileInfo;
 
 /* Functions. */

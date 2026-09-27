@@ -962,3 +962,10 @@ Completed: validated sync-backed exact/wildcard host exclusions; user chose auto
 Verification: test-first JS/options mocks and native protocol tests cover boundary matching, canonicalization, invalid policy retention, and manual bypass; full build/CTest 33/33 pass with no new warnings.
 Open questions: installed-browser visual smoke UNKNOWN; Phase 2 TSan runner blocker remains. Pre-existing user files remain unstaged; no push.
 Next: 3.3.1 link refresh; resolve its protocol/persistence scope before implementation.
+
+## 2026-09-28 — Codex, task 3.3.1
+Branch: `cdm`; commit: `feat(ipc): refresh expired download urls`.
+Completed: user-approved expanded scope; IPC v9 type 40 resolves the existing URL, snapshots options outside the queue lock, atomically saves metadata, and exposes row/popup actions.
+Verification: test-first local redirect/header fixture plus IPC rejection tests cover active/missing context, stale partial validators, HTTP and persistence failure; full build/CTest 33/33 pass with no new warnings.
+Open questions: visual smoke UNKNOWN; changed partial content requires re-download; synchronous IPC probe is curl-timeout bounded. Existing Phase 2 TSan runner blocker remains.
+Next: 3.4.1 native-host installer support for Edge/Brave/Opera/Vivaldi. All task changes committed; no push.

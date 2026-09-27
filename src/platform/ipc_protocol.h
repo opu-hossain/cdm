@@ -37,6 +37,7 @@ typedef enum {
   MSG_LIST_PAGE = 35,
   MSG_LIST_PAGE_WITH_SIZE = 36,
   MSG_GET_DETAILS_V2 = 37,
+  MSG_REFRESH_URL = 40, // uint32 download ID -> uint8 IpcResult
   MSG_HELLO = 41, // v1 header, empty request; uint16_t version response.
   MSG_ADD_DOWNLOAD_V2 = 42,
   MSG_BROWSER_CONFIRM_V2 = 43,
@@ -56,7 +57,7 @@ typedef enum {
   MSG_BROWSER_CONTEXT_INFO_V1 = 57, // uint32 offer ID -> uint32 presence bits
 } MsgType;
 
-#define IPC_PROTOCOL_VERSION 8
+#define IPC_PROTOCOL_VERSION 9
 #define IPC_BROWSER_HAS_COOKIE 1u
 #define IPC_BROWSER_HAS_USER_AGENT 2u
 #define IPC_BROWSER_HAS_REFERER 4u

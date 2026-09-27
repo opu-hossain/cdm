@@ -1,4 +1,5 @@
 #include "../src/platform/curl_client.h"
+#include "../src/persistence/db.h"
 #include "../src/platform/thread.h"
 #include "../src/utils/config.h"
 #include <criterion/criterion.h>
@@ -63,6 +64,9 @@ static void setup_server(void) {
         "class H(http.server.BaseHTTPRequestHandler):\n"
         " def log_message(self,*args): pass\n"
         " def do_HEAD(self):\n"
+        "  if self.path=='/redirect':\n"
+        "   if self.headers.get('X-CDM-Refresh')!='fixture': self.send_error(403); return\n"
+        "   self.send_response(302); self.send_header('Location','/file.bin'); self.end_headers(); return\n"
         "  if self.path in ('/head-405','/range-ignored'):\n"
         "   self.send_error(405); return\n"
         "  if self.path!='/file.bin': self.send_error(404); return\n"
@@ -228,4 +232,56 @@ Test(curl_http, socks5_proxy_resolves_target_hostname) {
   config_init("/tmp/cdm-socks-no-config.toml");
   kill(proxy_pid, SIGTERM);
   waitpid(proxy_pid, NULL, 0);
+}
+
+Test(curl_http, refresh_resolves_redirect_atomically) {
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", "/tmp", 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  char url[128], expected[128];
+  int n = snprintf(url, sizeof(url), "http://127.0.0.1:%d/redirect", server_port);
+  cr_assert(n > 0 && (size_t)n < sizeof(url));
+  n = snprintf(expected, sizeof(expected), "http://127.0.0.1:%d/file.bin", server_port);
+  cr_assert(n > 0 && (size_t)n < sizeof(expected));
+  RequestOptions options = {0};
+  strcpy(options.extra_headers, "X-CDM-Refresh: fixture");
+  uint32_t id = queue_manager_add(url, "/tmp/cdm-refresh-fixture", &options);
+  cr_assert_neq(id, 0);
+  cr_assert_eq(db_insert_download(id, url, "/tmp/cdm-refresh-fixture", &options), 0);
+  queue_manager_update_status(id, DOWNLOAD_PAUSED);
+  cr_assert_eq(queue_manager_refresh_url(id), IPC_RESULT_OK);
+  Download *d = queue_manager_find_by_id(id);
+  cr_assert_str_eq(d->url, expected);
+  cr_assert_eq(d->total_size, 12);
+  cr_assert_str_eq(d->etag, "\"version-1\"");
+  cr_assert_str_eq(d->last_modified, "Wed, 21 Oct 2015 07:28:00 GMT");
+  DbDownloadRow details = {0};
+  cr_assert_eq(db_list_all_downloads(&details, 1), 1);
+  cr_assert_str_eq(details.url, expected);
+  cr_assert_eq(details.total_size, 12);
+  strcpy(d->etag, "\"old-content\"");
+  d->chunk_count = 1;
+  cr_assert_eq(queue_manager_refresh_url(id), IPC_RESULT_REJECTED);
+  cr_assert_str_eq(d->etag, "\"old-content\"");
+  d->chunk_count = 0;
+  strcpy(d->etag, "\"version-1\"");
+  queue_manager_update_status(id, DOWNLOAD_ACTIVE);
+  cr_assert_eq(queue_manager_refresh_url(id), IPC_RESULT_REJECTED);
+  queue_manager_update_status(id, DOWNLOAD_PAUSED);
+  char missing[128];
+  n = snprintf(missing, sizeof(missing), "http://127.0.0.1:%d/missing", server_port);
+  cr_assert(n > 0 && (size_t)n < sizeof(missing));
+  strcpy(d->url, missing);
+  cr_assert_eq(queue_manager_refresh_url(id), IPC_RESULT_ERROR);
+  cr_assert_str_eq(d->url, missing);
+  cr_assert_eq(d->total_size, 12);
+  cr_assert_eq(db_list_all_downloads(&details, 1), 1);
+  cr_assert_str_eq(details.url, expected);
+  cr_assert_eq(queue_manager_refresh_url(UINT32_MAX), IPC_RESULT_NOT_FOUND);
+  strcpy(d->url, url);
+  db_close();
+  cr_assert_eq(queue_manager_refresh_url(id), IPC_RESULT_ERROR);
+  cr_assert_str_eq(d->url, url);
+  cr_assert_eq(d->total_size, 12);
+  queue_manager_remove(id);
+  unsetenv("DOWNLOADMGR_ROOT");
 }

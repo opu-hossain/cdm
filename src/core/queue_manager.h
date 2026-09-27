@@ -195,6 +195,8 @@ bool queue_manager_pause(uint32_t id);
 
 /** Request resume. Returns true if found. */
 bool queue_manager_resume(uint32_t id);
+/* Returns IpcResult. Probe without queue lock; commit only an unchanged snapshot. */
+int queue_manager_refresh_url(uint32_t id);
 /* 1 = installed and resumed; 0 = not eligible; -1 = allocation/persistence error. */
 int queue_manager_refresh_browser_context(uint32_t id,
                                            const RequestOptions *options);

@@ -309,6 +309,13 @@ static bool send_with_retry(FireAndForgetFn fn, uint32_t id) {
 bool gui_client_pause(uint32_t id) {
   return send_with_retry(ipc_send_pause, id);
 }
+bool gui_client_refresh_url(uint32_t id) {
+  if (g_cmd_fd < 0)
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, &g_cmd_version);
+  if (g_cmd_fd < 0 || g_cmd_version < 9)
+    return false;
+  return send_with_retry(ipc_send_refresh_url, id);
+}
 bool gui_client_resume(uint32_t id) {
   return send_with_retry(ipc_send_resume, id);
 }

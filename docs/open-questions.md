@@ -116,3 +116,14 @@ requires a fresh browser offer? Root AGENTS.md restricts edits to listed files;
 The user approved this expansion and boolean marker on 2026-09-28; captured
 values remain memory-only. The implementation uses ephemeral `RequestOptions`
 and refuses resume after context loss until an explicit fresh offer confirms.
+
+## Task 3.3.1 — Link refresh scope
+
+The listed IPC/GUI files omit the protocol header, curl effective-URL output,
+and queue/persistence APIs needed for a safe, atomic metadata refresh. May this
+task extend those files and integration tests while retaining an ID-only request
+that resolves the existing URL through redirects? Contextual redirects still
+require a fresh browser offer under the agreed privacy policy. Awaiting user
+scope decision; proceed with independent task 3.4.1 meanwhile.
+Resolved: user approved the expanded scope and existing-URL redirect resolution
+on 2026-09-28. Contextual redirects retain the fresh-offer requirement.

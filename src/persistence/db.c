@@ -922,6 +922,26 @@ int db_update_total_size(uint32_t id, uint64_t total_size) {
   return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
+int db_refresh_download(uint32_t id, const char *url, uint64_t total_size,
+                         const char *etag, const char *last_modified) {
+  if (!db_ready() || !url || !etag || !last_modified || total_size > INT64_MAX)
+    return -1;
+  const char *sql = "UPDATE downloads SET url=?, total_size=?, etag=?, "
+                    "last_modified=? WHERE id=? AND status<>'ACTIVE'";
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 2, (sqlite3_int64)total_size);
+  sqlite3_bind_text(stmt, 3, etag, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 4, last_modified, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 5, id);
+  int rc = sqlite3_step(stmt);
+  int changed = sqlite3_changes(g_db);
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_DONE && changed == 1 ? 0 : -1;
+}
+
 int db_update_validators(uint32_t id, const char *etag,
                          const char *last_modified) {
   if (!db_ready() || !etag || !last_modified)

@@ -49,7 +49,7 @@ with the user; skip to Phase 2 in the meantime.
 - [x] **3.2.1** Context menu — **S** — JS, mechanical
 - [x] **3.2.2** Filters — **S** — JS, mechanical, test cases implied by the spec
 - [x] **3.2.3** Site exclusions — **S** — JS, mechanical
-- [ ] **3.3.1** Link refresh — **S** — new IPC message reusing the existing probe path
+- [x] **3.3.1** Link refresh — **S** — new IPC message reusing the existing probe path
 - [ ] **3.4.1** Installer support for Edge/Brave/Opera/Vivaldi — **L** — plan requires searching for current per-browser Linux config paths; research-heavy, mechanical once found
 - [ ] **3.5.1** Phase 3 wrap-up — **S**
 

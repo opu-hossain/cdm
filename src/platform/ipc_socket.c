@@ -473,6 +473,7 @@ static bool valid_message_header(const MsgHeader *header) {
     return header->length <= IPC_MAX_FRAME_SIZE;
   case MSG_PAUSE:
   case MSG_RESUME:
+  case MSG_REFRESH_URL:
   case MSG_CANCEL:
   case MSG_GET_DETAILS:
   case MSG_GET_DETAILS_V2:
@@ -935,6 +936,13 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     if (!was_active)
       db_update_status(id, "PAUSED");
     send_command_result(client_fd, IPC_RESULT_OK);
+    break;
+  }
+  case MSG_REFRESH_URL: {
+    uint32_t id;
+    if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0)
+      return;
+    send_command_result(client_fd, (IpcResult)queue_manager_refresh_url(id));
     break;
   }
   case MSG_RESUME: {
@@ -1700,6 +1708,17 @@ int ipc_send_pause(int sock, uint32_t id) {
   if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0)
     return -1;
   if (ipc_write_exact(sock, &id, sizeof(id)) != 0)
+    return -1;
+  uint8_t result = IPC_RESULT_ERROR;
+  if (ipc_read_exact(sock, &result, sizeof(result)) != 0)
+    return -1;
+  return result == IPC_RESULT_OK ? 0 : -1;
+}
+
+int ipc_send_refresh_url(int sock, uint32_t id) {
+  MsgHeader hdr = {.length = sizeof(id), .type = MSG_REFRESH_URL};
+  if (ipc_write_exact(sock, &hdr, sizeof(hdr)) != 0 ||
+      ipc_write_exact(sock, &id, sizeof(id)) != 0)
     return -1;
   uint8_t result = IPC_RESULT_ERROR;
   if (ipc_read_exact(sock, &result, sizeof(result)) != 0)

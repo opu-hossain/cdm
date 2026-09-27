@@ -113,6 +113,7 @@ int ipc_send_add_download_v3(int sock, const char *url, const char *dest_path,
                              bool auto_filename, IpcAddResponse *out);
 int ipc_send_pause(int sock, uint32_t id);
 int ipc_send_resume(int sock, uint32_t id);
+int ipc_send_refresh_url(int sock, uint32_t id);
 int ipc_send_cancel(int sock, uint32_t id);
 /* Transport 0 on success; out is OK, NOT_FOUND, REJECTED, or ERROR. */
 int ipc_send_remove_download(int sock, uint32_t id, bool delete_file,

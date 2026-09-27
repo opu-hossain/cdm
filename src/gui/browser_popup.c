@@ -403,6 +403,20 @@ static void draw_progress(struct nk_context *ctx, PopupState *state,
   else
     nk_label_colored(ctx, state->error, NK_TEXT_LEFT,
                      nk_rgb(224, 132, 136));
+  if (stopped && state->daemon_version >= 9) {
+    nk_layout_row_dynamic(ctx, 34, 1);
+    if (nk_button_label(ctx, "Refresh URL")) {
+      const char *message = ipc_send_refresh_url(daemon, state->download_id) == 0
+          ? "URL refreshed. Resume from the main window."
+          : "Refresh failed; re-offer or re-download if content changed.";
+      size_t length = strlen(message);
+      memcpy(state->error, message, length + 1);
+    }
+    if (state->error[0]) {
+      nk_layout_row_dynamic(ctx, 20, 1);
+      nk_label_colored(ctx, state->error, NK_TEXT_LEFT, MUTED);
+    }
+  }
   nk_layout_row_dynamic(ctx, 34, done ? 3 : 2);
   if (done) {
     if (primary_button(ctx, "Open file") &&

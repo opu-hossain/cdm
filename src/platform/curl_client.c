@@ -263,6 +263,14 @@ int curl_client_head(const char *url, const RequestContext *ctx,
                http_status, curl_easy_strerror(res));
   }
 
+  if (success) {
+    char *effective = NULL;
+    if (curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &effective) != CURLE_OK ||
+        !effective || strlen(effective) >= sizeof(out->effective_url))
+      success = false;
+    else
+      memcpy(out->effective_url, effective, strlen(effective) + 1);
+  }
   if (headers)
     curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
