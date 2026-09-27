@@ -969,3 +969,10 @@ Completed: user-approved expanded scope; IPC v9 type 40 resolves the existing UR
 Verification: test-first local redirect/header fixture plus IPC rejection tests cover active/missing context, stale partial validators, HTTP and persistence failure; full build/CTest 33/33 pass with no new warnings.
 Open questions: visual smoke UNKNOWN; changed partial content requires re-download; synchronous IPC probe is curl-timeout bounded. Existing Phase 2 TSan runner blocker remains.
 Next: 3.4.1 native-host installer support for Edge/Brave/Opera/Vivaldi. All task changes committed; no push.
+
+## 2026-09-28 — Codex, task 3.4.1
+Branch: `cdm`; commit: `feat(native-host): install for edge, brave, opera, vivaldi`.
+Completed: new stable Linux flags validate profile roots, reuse the supplied Chromium extension ID, and document researched registry paths; Opera shares Chrome registration and warns before replacement.
+Verification: test-first temp-HOME installer smoke covers seven flags, missing/non-directory profiles, IDs, manifest contents, and foreign-manifest removal refusal; full build/CTest 33/33 pass with no new warnings.
+Open questions: real installed-browser handshake UNKNOWN; custom/XDG profile roots and sandboxed browsers are not supported by these flags; Phase 2 TSan runner blocker remains.
+Next: 3.5.1 phase 3 documentation and verification gate. All task changes committed; no push.
