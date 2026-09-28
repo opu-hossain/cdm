@@ -5,6 +5,7 @@
 
 #include "../core/queue_manager.h"
 #include "../engine/site_grab.h"
+#include "../persistence/export.h"
 #include "../persistence/db.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
@@ -505,6 +506,8 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_BROWSER_CONFIRM_SITE_V1:
     return header->length >= sizeof(uint32_t) * 2 &&
            header->length <= sizeof(uint32_t) * 2 + IPC_MAX_PATH_LEN - 1;
+  case MSG_IMPORT_JSON_V1:
+    return header->length >= 2 && header->length <= IPC_MAX_PATH_LEN;
   case MSG_REMOVE_DOWNLOAD:
     return header->length == sizeof(uint32_t) + sizeof(uint8_t);
   case MSG_QUEUE_CREATE:
@@ -522,6 +525,7 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_LIST_PAGE:
   case MSG_LIST_PAGE_WITH_SIZE:
   case MSG_LIST_PAGE_WITH_CATEGORY_V1:
+  case MSG_EXPORT_PAGE_V1:
     return header->length == sizeof(uint32_t) * 2;
   case MSG_LIST:
   case MSG_LIST_ALL:
@@ -994,6 +998,26 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     config_init(NULL);
     send_command_result(client_fd, IPC_RESULT_OK);
     break;
+  case MSG_IMPORT_JSON_V1: {
+    char payload[IPC_MAX_PATH_LEN];
+    if (ipc_read_exact(client_fd, payload, hdr->length) != 0)
+      return;
+    size_t length = hdr->length - 1;
+    IpcResult result = IPC_RESULT_REJECTED;
+    if ((payload[0] == 1 || payload[0] == 2) &&
+        !memchr(payload + 1, 0, length)) {
+      char path[IPC_MAX_PATH_LEN];
+      memcpy(path, payload + 1, length);
+      path[length] = 0;
+      int imported = import_json_file(path, payload[0] == 2);
+      result = imported == 0 ? IPC_RESULT_OK
+               : imported == -3 ? IPC_RESULT_ERROR : IPC_RESULT_REJECTED;
+    }
+    send_command_result(client_fd, result);
+    if (result == IPC_RESULT_OK)
+      ipc_broadcast_status(0, "HISTORY_CHANGED", 0.0f);
+    break;
+  }
   case MSG_PAUSE: {
     uint32_t id;
     if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0)
@@ -1257,7 +1281,8 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
   }
   case MSG_LIST_PAGE:
   case MSG_LIST_PAGE_WITH_SIZE:
-  case MSG_LIST_PAGE_WITH_CATEGORY_V1: {
+  case MSG_LIST_PAGE_WITH_CATEGORY_V1:
+  case MSG_EXPORT_PAGE_V1: {
     uint32_t request[2];
     if (ipc_read_exact(client_fd, request, sizeof(request)) != 0)
       return;
@@ -1285,13 +1310,21 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
       if (send_download_row(&page.rows[i], &response) != 0)
         break;
       if ((hdr->type == MSG_LIST_PAGE_WITH_SIZE ||
-           hdr->type == MSG_LIST_PAGE_WITH_CATEGORY_V1) &&
+           hdr->type == MSG_LIST_PAGE_WITH_CATEGORY_V1 ||
+           hdr->type == MSG_EXPORT_PAGE_V1) &&
           ipc_write_exact(client_fd, &page.rows[i].total_size,
                           sizeof(page.rows[i].total_size)) != 0)
         break;
-      if (hdr->type == MSG_LIST_PAGE_WITH_CATEGORY_V1 &&
+      if ((hdr->type == MSG_LIST_PAGE_WITH_CATEGORY_V1 ||
+           hdr->type == MSG_EXPORT_PAGE_V1) &&
           ipc_write_exact(client_fd, &page.rows[i].category_id,
                           sizeof(page.rows[i].category_id)) != 0)
+        break;
+      if (hdr->type == MSG_EXPORT_PAGE_V1 &&
+          (ipc_write_exact(client_fd, &page.rows[i].media_kind, sizeof(uint32_t)) != 0 ||
+           ipc_write_exact(client_fd, &page.rows[i].site_grab, sizeof(uint32_t)) != 0 ||
+           ipc_write_exact(client_fd, &page.rows[i].requires_browser_context,
+                           sizeof(uint32_t)) != 0))
         break;
     }
     free(page.rows);
@@ -1945,7 +1978,8 @@ int ipc_send_category_delete_v1(int sock, uint32_t id) {
 
 static int read_download_rows(int sock, uint32_t count,
                               IpcDownloadRecord *out, int max,
-                              bool with_size, bool with_category) {
+                              bool with_size, bool with_category,
+                              bool with_export) {
   int n = 0;
   for (uint32_t i = 0; i < count; i++) {
     uint32_t id;
@@ -1955,6 +1989,7 @@ static int read_download_rows(int sock, uint32_t count,
     float progress;
     uint64_t total_size = 0;
     uint32_t category_id = 0;
+    uint32_t media_kind = 0, site_grab = 0, requires_browser_context = 0;
 
     if (ipc_read_exact(sock, &id, sizeof(id)) != 0 ||
         read_string(sock, url, sizeof(url)) != 0 ||
@@ -1964,7 +1999,12 @@ static int read_download_rows(int sock, uint32_t count,
         (with_size &&
          ipc_read_exact(sock, &total_size, sizeof(total_size)) != 0) ||
         (with_category &&
-         ipc_read_exact(sock, &category_id, sizeof(category_id)) != 0))
+         ipc_read_exact(sock, &category_id, sizeof(category_id)) != 0) ||
+        (with_export &&
+         (ipc_read_exact(sock, &media_kind, sizeof(media_kind)) != 0 ||
+          ipc_read_exact(sock, &site_grab, sizeof(site_grab)) != 0 ||
+          ipc_read_exact(sock, &requires_browser_context,
+                         sizeof(requires_browser_context)) != 0)))
       return -1;
 
     if (n < max) {
@@ -1978,6 +2018,9 @@ static int read_download_rows(int sock, uint32_t count,
       out[n].progress = progress;
       out[n].total_size = total_size;
       out[n].category_id = category_id;
+      out[n].media_kind = media_kind;
+      out[n].site_grab = site_grab;
+      out[n].requires_browser_context = requires_browser_context;
       n++;
     }
   }
@@ -1993,7 +2036,7 @@ int ipc_send_list_all(int sock, IpcDownloadRecord *out, int max) {
   uint32_t count = 0;
   if (ipc_read_exact(sock, &count, sizeof(count)) != 0)
     return -1;
-  return read_download_rows(sock, count, out, max, false, false);
+  return read_download_rows(sock, count, out, max, false, false, false);
 }
 
 static int send_list_page_type(int sock, MsgType type, uint32_t offset,
@@ -2013,7 +2056,9 @@ static int send_list_page_type(int sock, MsgType type, uint32_t offset,
     return -1;
   int count = read_download_rows(sock, returned, out, max,
                                  type != MSG_LIST_PAGE,
-                                 type == MSG_LIST_PAGE_WITH_CATEGORY_V1);
+                                 type == MSG_LIST_PAGE_WITH_CATEGORY_V1 ||
+                                     type == MSG_EXPORT_PAGE_V1,
+                                 type == MSG_EXPORT_PAGE_V1);
   if (count >= 0)
     *total_out = total;
   return count;
@@ -2037,6 +2082,13 @@ int ipc_send_list_page_with_category_v1(int sock, uint32_t offset,
                                          int max, uint32_t *total_out) {
   return send_list_page_type(sock, MSG_LIST_PAGE_WITH_CATEGORY_V1, offset,
                              limit, out, max, total_out);
+}
+
+int ipc_send_export_page_v1(int sock, uint32_t offset, uint32_t limit,
+                            IpcDownloadRecord *out, int max,
+                            uint32_t *total_out) {
+  return send_list_page_type(sock, MSG_EXPORT_PAGE_V1, offset, limit, out, max,
+                             total_out);
 }
 
 static int send_get_details_type(int sock, MsgType type, uint32_t id,
@@ -2102,6 +2154,25 @@ int ipc_send_reload_config(int sock) {
   if (ipc_read_exact(sock, &result, sizeof(result)) != 0)
     return -1;
   return result == IPC_RESULT_OK ? 0 : -1;
+}
+
+int ipc_send_import_json_v1(int sock, const char *path, bool replace,
+                            IpcResult *result) {
+  if (sock < 0 || !path || !result)
+    return -1;
+  size_t length = strlen(path);
+  if (length == 0 || length >= IPC_MAX_PATH_LEN)
+    return -1;
+  MsgHeader header = {.length = (uint32_t)(length + 1),
+                      .type = MSG_IMPORT_JSON_V1};
+  uint8_t mode = replace ? 2 : 1, reply = IPC_RESULT_ERROR;
+  if (ipc_write_exact(sock, &header, sizeof(header)) != 0 ||
+      ipc_write_exact(sock, &mode, sizeof(mode)) != 0 ||
+      ipc_write_exact(sock, path, length) != 0 ||
+      ipc_read_exact(sock, &reply, sizeof(reply)) != 0)
+    return -1;
+  *result = (IpcResult)reply;
+  return 0;
 }
 
 static int browser_write_request(int sock, MsgType type, const void *payload,

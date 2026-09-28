@@ -1053,3 +1053,10 @@ Completed: user-approved CLI/CMake/test scope; versioned JSON settings and optio
 Verification: test-first local daemon fixture covers 501 rows, 64-bit size, default redaction, opt-in stored secrets and file mode; full Debug build/CTest 40/40 pass, no new warnings.
 Open questions: Basic passwords are never exported, concurrent page changes and slow secret-detail IPC noted; 5.1.2 will cover import round-trip.
 Next: 5.1.2 JSON import. No push.
+
+## 2026-09-28 — Codex, task 5.1.2
+Branch: `cdm`; commit: `feat(import): validate and import JSON with SQLite backup`.
+Completed: user-approved daemon-owned IPC v12/v13; strict schema validation, merge missing IDs, paused imported work, interactive/`--yes` replace, private SQLite online backup and settings rollback attempt.
+Verification: test-first local daemon round-trip includes media dispatch/context markers, malformed/newer/unsafe rejection, merge preservation, replace backup/config checks and active-job refusal; full Debug CTest 40/40 pass.
+Open questions: imported paths/chunks and cross-home relocation limitations recorded; phase sanitizer/browser gates remain open.
+Next: 5.1.3 GUI import/export buttons. No push.

@@ -1,5 +1,25 @@
 # Open Questions
 
+## Task 5.1.2 — JSON import contract (resolved, with limitations)
+
+The user approved daemon-owned versioned IPC, SQLite online backup before
+replace, expanded DB/config/IPC/test scope, `--yes` or interactive replace
+confirmation, and normalization of imported QUEUED/ACTIVE jobs to PAUSED on
+2026-09-28. The daemon also refuses merge while any job is ACTIVE because its
+process-global SQLite connection would otherwise share a transaction with
+worker writes. Merge keeps existing IDs and current settings. Replace backs
+up `downloads.db` to a private adjacent file and replaces history/settings.
+Schema v1 carries visible history and media dispatch/context-presence fields,
+not chunk state, queue/category
+definitions, timestamps or Basic passwords. Imported nonterminal jobs are
+paused metadata records; their destination parent must currently exist under
+the daemon's allowed root, and resuming may require a fresh destination or
+context. Cross-home path relocation is not implemented. Configuration is
+validated before DB writes; replacing settings and SQLite cannot form one
+atomic transaction across the TOML file and database. A failed DB import
+attempts to restore the previous settings. `TODO(platform)` in `src/cli/cli.c`
+tracks Windows path resolution and confirmation prompting.
+
 ## Task 5.1.1 — JSON export scope and schema (resolved)
 
 The brief lists only `src/utils/config.c` and a new

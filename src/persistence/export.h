@@ -10,4 +10,7 @@
 int export_json_file(int daemon_socket, uint16_t daemon_version,
                      const char *destination, bool include_history,
                      bool include_secrets);
+/* Daemon-only import: 0 success, -1 invalid input, -2 active downloads,
+ * -3 backup/DB/configuration failure. Merge preserves existing IDs/settings. */
+int import_json_file(const char *source, bool replace);
 #endif

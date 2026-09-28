@@ -58,9 +58,11 @@ typedef enum {
   MSG_BROWSER_KIND_INFO_V1 = 58, // uint32 offer ID -> uint32 IpcBrowserMediaKind
   MSG_BROWSER_SITE_CAPABILITY_V1 = 59, // uint32 offer ID -> uint32 eligible
   MSG_BROWSER_CONFIRM_SITE_V1 = 60, // v2 confirm payload/reply; opt-in site tool
+  MSG_IMPORT_JSON_V1 = 61, // byte mode (1 merge, 2 replace) + path; uint8 result
+  MSG_EXPORT_PAGE_V1 = 62, // page plus size/category/media/context metadata
 } MsgType;
 
-#define IPC_PROTOCOL_VERSION 11
+#define IPC_PROTOCOL_VERSION 13
 #define IPC_BROWSER_HAS_COOKIE 1u
 #define IPC_BROWSER_HAS_USER_AGENT 2u
 #define IPC_BROWSER_HAS_REFERER 4u

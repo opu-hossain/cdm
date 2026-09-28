@@ -51,6 +51,11 @@ typedef struct {
 /* Data structures for list‑all responses */
 typedef DownloadListRecord IpcDownloadRecord;
 
+/* Version 13 export page carries media dispatch/context metadata. */
+int ipc_send_export_page_v1(int sock, uint32_t offset, uint32_t limit,
+                            IpcDownloadRecord *out, int max,
+                            uint32_t *total_out);
+
 typedef struct {
   char cookie[1024];
   char referrer[2048];
@@ -147,6 +152,8 @@ int ipc_send_get_details(int sock, uint32_t id, IpcDownloadDetails *out);
 /* v2 adds auth_user and has_password after the legacy details payload. */
 int ipc_send_get_details_v2(int sock, uint32_t id, IpcDownloadDetails *out);
 int ipc_send_reload_config(int sock);
+int ipc_send_import_json_v1(int sock, const char *path, bool replace,
+                            IpcResult *result);
 void ipc_send_subscribe(int sock);
 int ipc_send_subscribe_v2(int sock);
 int ipc_browser_offer(int sock, const IpcBrowserOffer *offer,

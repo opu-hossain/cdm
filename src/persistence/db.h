@@ -27,6 +27,21 @@ typedef struct {
 /* Lightweight list row; request details are fetched on demand. */
 typedef DownloadListRecord DbDownloadRow;
 
+/* Validated JSON import fields; strings are borrowed until the call returns. */
+typedef struct {
+  uint32_t id;
+  const char *url, *dest_path, *status;
+  const char *cookie, *referrer, *extra_headers, *auth_user;
+  uint64_t total_size;
+  uint32_t media_kind; // 0 ordinary, 1 HLS, 2 DASH, 3 video
+  bool site_grab;
+  bool requires_browser_context;
+} DbImportRow;
+
+/* The daemon owns this operation. 0 success, -2 active jobs, -1 DB/backup
+ * failure. Merge keeps existing IDs; replace creates a SQLite backup first. */
+int db_import_history(const DbImportRow *rows, size_t count, bool replace);
+
 typedef struct Category {
   uint32_t id;
   char name[128];

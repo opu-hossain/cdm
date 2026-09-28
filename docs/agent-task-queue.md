@@ -68,7 +68,7 @@ with the user; skip to Phase 2 in the meantime.
 ## Phase 5 — Polish and platforms
 
 - [x] **5.1.1** JSON export — **S** — schema given in the plan
-- [ ] **5.1.2** JSON import — **S** — validation rules given in the plan
+- [x] **5.1.2** JSON import — **S** — validation rules given in the plan
 - [ ] **5.1.3** GUI import/export buttons — **S** — `src/gui/AGENTS.md`
 - [ ] **5.2.1** Extract theme constants — **S**, but it's a large mechanical diff across `gui_nuklear.c`; verifier should screenshot-diff before/after per the plan's own test note
 - [ ] **5.2.2** Dark theme — **S** — `src/gui/AGENTS.md`, WCAG AA is a checkable constraint, not a judgment call

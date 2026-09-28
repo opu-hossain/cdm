@@ -6,6 +6,7 @@
 #include "../engine/dash.h"
 
 #include "../core/queue_manager.h"
+#include "../platform/thread.h"
 #include "../utils/log.h"
 #include "../utils/url.h"
 #include "sqlite3.h"
@@ -16,6 +17,8 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* Global state */
@@ -1190,7 +1193,8 @@ int db_visit_downloads_page(DbDownloadVisitor visitor, void *ctx,
   if (!db_ready() || !visitor || limit == 0)
     return -1;
 
-  const char *sql = "SELECT id, url, dest_path, status, total_size, category_id FROM downloads "
+  const char *sql = "SELECT id, url, dest_path, status, total_size, category_id, "
+                    "media_kind, site_grab, requires_browser_context FROM downloads "
                     "ORDER BY id DESC LIMIT ? OFFSET ?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK)
@@ -1211,6 +1215,9 @@ int db_visit_downloads_page(DbDownloadVisitor visitor, void *ctx,
     strncpy(row.status, status ? status : "", sizeof(row.status) - 1);
     row.total_size = (uint64_t)sqlite3_column_int64(stmt, 4);
     row.category_id = (uint32_t)sqlite3_column_int64(stmt, 5);
+    row.media_kind = (uint32_t)sqlite3_column_int(stmt, 6);
+    row.site_grab = (uint32_t)sqlite3_column_int(stmt, 7);
+    row.requires_browser_context = (uint32_t)sqlite3_column_int(stmt, 8);
 
     if (visitor(&row, ctx) != 0)
       break;
@@ -1327,6 +1334,8 @@ int db_restore_queue(void) {
 
   int restored = 0;
   while (sqlite3_step(stmt) == SQLITE_ROW) {
+    if (queue_manager_find_by_id((uint32_t)sqlite3_column_int(stmt, 0)))
+      continue;
     Download *d = calloc(1, sizeof(Download));
     if (!d)
       continue;
@@ -1426,4 +1435,138 @@ int db_restore_queue(void) {
   sqlite3_finalize(stmt);
   LOG_INFO("restored %d download(s) from database", restored);
   return 0;
+}
+
+static int create_import_backup(void) {
+  const char *source = sqlite3_db_filename(g_db, "main");
+  if (!source || !source[0])
+    return -1;
+  char path[1200];
+  int fd = -1;
+  for (unsigned attempt = 0; attempt < 100; attempt++) {
+    int n = snprintf(path, sizeof(path), "%s.backup.%lld.%u", source,
+                     (long long)time(NULL), attempt);
+    if (n < 0 || (size_t)n >= sizeof(path))
+      return -1;
+    fd = open(path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC,
+              0600);
+    if (fd >= 0)
+      break;
+    if (errno != EEXIST)
+      return -1;
+  }
+  if (fd < 0)
+    return -1;
+  close(fd);
+  sqlite3 *destination = NULL;
+  int rc = sqlite3_open_v2(path, &destination,
+                           SQLITE_OPEN_READWRITE, NULL);
+  sqlite3_backup *backup = rc == SQLITE_OK
+                               ? sqlite3_backup_init(destination, "main", g_db,
+                                                     "main")
+                               : NULL;
+  int copied = backup ? sqlite3_backup_step(backup, -1) : SQLITE_ERROR;
+  int finished = backup ? sqlite3_backup_finish(backup) : SQLITE_ERROR;
+  if (destination)
+    sqlite3_close(destination);
+  if (copied == SQLITE_DONE && finished == SQLITE_OK)
+    return 0;
+  unlink(path);
+  return -1;
+}
+
+int db_import_history(const DbImportRow *rows, size_t count, bool replace) {
+  if (!db_ready() || (!rows && count))
+    return -1;
+  dm_mutex_t *mutex = queue_manager_get_mutex();
+  dm_mutex_lock(mutex);
+  if (queue_manager_count_by_status_locked(DOWNLOAD_ACTIVE) > 0) {
+    dm_mutex_unlock(mutex);
+    return -2;
+  }
+  sqlite3_stmt *old = NULL;
+  uint32_t *old_ids = NULL;
+  size_t old_count = 0, old_capacity = 0;
+  int result = -1;
+  if (replace && sqlite3_prepare_v2(g_db, "SELECT id FROM downloads WHERE status!='DONE'",
+                                    -1, &old, NULL) != SQLITE_OK)
+    goto finish;
+  int step = SQLITE_DONE;
+  while (replace && (step = sqlite3_step(old)) == SQLITE_ROW) {
+    if (old_count == old_capacity) {
+      size_t next = old_capacity ? old_capacity * 2 : 64;
+      if (next < old_capacity || next > SIZE_MAX / sizeof(*old_ids))
+        goto finish;
+      uint32_t *grown = realloc(old_ids, next * sizeof(*old_ids));
+      if (!grown)
+        goto finish;
+      old_ids = grown;
+      old_capacity = next;
+    }
+    old_ids[old_count++] = (uint32_t)sqlite3_column_int64(old, 0);
+  }
+  if (replace && step != SQLITE_DONE)
+    goto finish;
+  sqlite3_finalize(old);
+  old = NULL;
+  if (replace && create_import_backup() != 0)
+    goto finish;
+  if (sqlite3_exec(g_db, "BEGIN IMMEDIATE", NULL, NULL, NULL) != SQLITE_OK)
+    goto finish;
+  if (replace &&
+      sqlite3_exec(g_db, "DELETE FROM downloads", NULL, NULL, NULL) !=
+          SQLITE_OK)
+    goto rollback;
+  sqlite3_stmt *insert = NULL;
+  const char *sql =
+      "INSERT OR IGNORE INTO downloads"
+      "(id,url,dest_path,status,total_size,created_at,cookie,referrer,"
+      "extra_headers,auth_user,media_kind,site_grab,requires_browser_context) "
+      "VALUES(?,?,?,?,?,strftime('%s','now'),?,?,?,?,?,?,?)";
+  if (sqlite3_prepare_v2(g_db, sql, -1, &insert, NULL) != SQLITE_OK)
+    goto rollback;
+  for (size_t i = 0; i < count; i++) {
+    sqlite3_bind_int64(insert, 1, (sqlite3_int64)rows[i].id);
+    sqlite3_bind_text(insert, 2, rows[i].url, -1, SQLITE_STATIC);
+    sqlite3_bind_text(insert, 3, rows[i].dest_path, -1, SQLITE_STATIC);
+    sqlite3_bind_text(insert, 4, rows[i].status, -1, SQLITE_STATIC);
+    sqlite3_bind_int64(insert, 5, (sqlite3_int64)rows[i].total_size);
+    sqlite3_bind_text(insert, 6, rows[i].cookie ? rows[i].cookie : "", -1,
+                      SQLITE_STATIC);
+    sqlite3_bind_text(insert, 7, rows[i].referrer ? rows[i].referrer : "", -1,
+                      SQLITE_STATIC);
+    sqlite3_bind_text(insert, 8,
+                      rows[i].extra_headers ? rows[i].extra_headers : "", -1,
+                      SQLITE_STATIC);
+    sqlite3_bind_text(insert, 9, rows[i].auth_user ? rows[i].auth_user : "", -1,
+                      SQLITE_STATIC);
+    sqlite3_bind_int(insert, 10, (int)rows[i].media_kind);
+    sqlite3_bind_int(insert, 11, rows[i].site_grab ? 1 : 0);
+    sqlite3_bind_int(insert, 12, rows[i].requires_browser_context ? 1 : 0);
+    if (sqlite3_step(insert) != SQLITE_DONE) {
+      sqlite3_finalize(insert);
+      goto rollback;
+    }
+    sqlite3_reset(insert);
+    sqlite3_clear_bindings(insert);
+  }
+  sqlite3_finalize(insert);
+  if (sqlite3_exec(g_db, "COMMIT", NULL, NULL, NULL) != SQLITE_OK)
+    goto rollback;
+  if (replace)
+    for (size_t i = 0; i < old_count; i++)
+      queue_manager_forget_locked(old_ids[i]);
+  result = 0;
+  goto finish;
+rollback:
+  sqlite3_exec(g_db, "ROLLBACK", NULL, NULL, NULL);
+finish:
+  sqlite3_finalize(old);
+  free(old_ids);
+  dm_mutex_unlock(mutex);
+  if (result == 0) {
+    db_restore_queue();
+    queue_manager_seed_next_id(db_get_max_id() + 1);
+  }
+  return result;
 }

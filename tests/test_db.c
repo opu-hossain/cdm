@@ -12,6 +12,18 @@ static void close_db(void) { db_close(); }
 
 TestSuite(db, .init = setup_db, .fini = close_db);
 
+Test(db, import_refuses_active_downloads) {
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", "/tmp", 1), 0);
+  uint32_t id = queue_manager_add("https://example.invalid/import",
+                                  "/tmp/cdm-import-active", NULL);
+  cr_assert_neq(id, 0);
+  queue_manager_update_status(id, DOWNLOAD_ACTIVE);
+  cr_assert_eq(db_import_history(NULL, 0, false), -2);
+  queue_manager_update_status(id, DOWNLOAD_PAUSED);
+  queue_manager_remove(id);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
 static int find_category_row(const DbDownloadRow *row, void *ctx) {
   if (row->id == 901)
     *(uint32_t *)ctx = row->category_id;

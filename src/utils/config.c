@@ -404,9 +404,11 @@ void config_get(DownloadManagerConfig *out) {
   dm_mutex_unlock(&g_network_mutex);
 }
 
-bool config_save(const DownloadManagerConfig *config) {
-  if (!config || !config->default_download_dir ||
-      config->max_concurrent_downloads < 1 || config->retry_max_attempts < 0 ||
+bool config_validate(const DownloadManagerConfig *config) {
+  if (!config || !config->default_download_dir)
+    return false;
+  return !(config->max_concurrent_downloads < 1 ||
+      config->retry_max_attempts < 0 ||
       config->retry_base_delay_sec < 1 ||
       config->retry_max_delay_sec < config->retry_base_delay_sec ||
       config->default_download_dir[0] == '\0' ||
@@ -427,7 +429,11 @@ bool config_save(const DownloadManagerConfig *config) {
       !config->yt_dlp_format[0] || config->connect_timeout_sec < 1 ||
       config->connect_timeout_sec > 600 ||
       config->transfer_timeout_sec < 1 ||
-      config->transfer_timeout_sec > 3600)
+      config->transfer_timeout_sec > 3600);
+}
+
+bool config_save(const DownloadManagerConfig *config) {
+  if (!config_validate(config))
     return false;
 
   char path[1024];

@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* Helpers */
 
@@ -239,6 +240,62 @@ static int run_export(int sock, uint16_t daemon_version, int argc,
   return 0;
 }
 
+static int run_import(int sock, uint16_t daemon_version, int argc,
+                      char **argv) {
+  const char *source = NULL;
+  bool replace = false, mode_set = false, yes = false;
+  for (int i = 2; i < argc; i++) {
+    if (strcmp(argv[i], "--in") == 0 && i + 1 < argc && !source)
+      source = argv[++i];
+    else if (strcmp(argv[i], "--merge") == 0 && !mode_set)
+      mode_set = true;
+    else if (strcmp(argv[i], "--replace") == 0 && !mode_set) {
+      mode_set = true;
+      replace = true;
+    } else if (strcmp(argv[i], "--yes") == 0 && !yes)
+      yes = true;
+    else {
+      fprintf(stderr, "Usage: cdm cli import --in FILE [--merge|--replace] [--yes]\n");
+      return 1;
+    }
+  }
+  if (!source || !source[0] || (yes && !replace)) {
+    fprintf(stderr, "Usage: cdm cli import --in FILE [--merge|--replace] [--yes]\n");
+    return 1;
+  }
+  if (daemon_version < 12) {
+    fprintf(stderr, "Daemon does not support JSON import\n");
+    return 1;
+  }
+  if (replace && !yes) {
+    if (!isatty(STDIN_FILENO)) {
+      fprintf(stderr, "Replace requires --yes outside an interactive terminal\n");
+      return 1;
+    }
+    char answer[16];
+    fprintf(stderr, "Replace local history and settings after backup? [y/N] ");
+    if (!fgets(answer, sizeof(answer), stdin) ||
+        (strcmp(answer, "y\n") != 0 && strcmp(answer, "yes\n") != 0))
+      return 1;
+  }
+  /* TODO(platform): choose the native path canonicalization/console prompt. */
+  char resolved[PATH_MAX];
+  if (!realpath(source, resolved)) {
+    fprintf(stderr, "Could not resolve import file: %s\n", strerror(errno));
+    return 1;
+  }
+  IpcResult result = IPC_RESULT_ERROR;
+  if (ipc_send_import_json_v1(sock, resolved, replace, &result) != 0 ||
+      result != IPC_RESULT_OK) {
+    fprintf(stderr, "Import failed (%s)\n",
+            result == IPC_RESULT_REJECTED ? "invalid file or active download"
+                                          : "daemon or backup error");
+    return 1;
+  }
+  puts(replace ? "Replaced history and settings" : "Merged missing history");
+  return 0;
+}
+
 static int submit_add(int sock, uint16_t daemon_version, const char *url,
                       const char *dest_dir, const IpcDownloadOptions *opts) {
   IpcDownloadOptions selected_opts = opts ? *opts : (IpcDownloadOptions){0};
@@ -357,6 +414,7 @@ int run_cli(int argc, char **argv) {
     printf("  cancel <id>          Cancel a download\n");
     printf("  list [--offset N] [--limit N] [--status S]\n");
     printf("  export --out FILE [--include-history] [--include-secrets]\n");
+    printf("  import --in FILE [--merge|--replace] [--yes]\n");
     return 1;
   }
 
@@ -389,6 +447,9 @@ int run_cli(int argc, char **argv) {
 
   } else if (strcmp(cmd, "export") == 0) {
     ret = run_export(sock, daemon_version, argc, argv);
+
+  } else if (strcmp(cmd, "import") == 0) {
+    ret = run_import(sock, daemon_version, argc, argv);
 
   } else if (strcmp(cmd, "add") == 0 && argc >= 3 &&
              strcmp(argv[2], "--file") == 0) {

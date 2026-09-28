@@ -58,6 +58,7 @@ typedef struct {
 bool config_post_action_enabled(const char *action);
 
 void config_get(DownloadManagerConfig *out);
+bool config_validate(const DownloadManagerConfig *config);
 bool config_save(const DownloadManagerConfig *config);
 
 #ifdef __cplusplus
