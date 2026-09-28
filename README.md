@@ -4,7 +4,7 @@ cdm is a Linux download manager with a CLI, a background daemon, an SDL2/Nuklear
 
 ## Status
 
-The current source builds Linux DEB and RPM packages and includes an Arch PKGBUILD. The release metadata is `0.2.0-rc1`; package availability depends on a release being published. The browser extensions are installed manually as unpacked or temporary extensions.
+The current source builds Linux DEB and RPM packages and includes an Arch PKGBUILD. The release metadata is `0.3.0-rc1`; package availability depends on a release being published. The browser extensions are installed manually as unpacked or temporary extensions.
 
 ## Features
 
@@ -24,7 +24,7 @@ Run these commands from the repository root after installing the build dependenc
 ```sh
 cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_TESTING=OFF
 cmake --build build && cpack --config build/CPackConfig.cmake -G DEB
-sudo apt install ./cdm-0.2.0-rc1-Linux.deb
+sudo apt install ./cdm-0.3.0-rc1-Linux.deb
 ```
 
 ### Fedora or RHEL
@@ -32,7 +32,7 @@ sudo apt install ./cdm-0.2.0-rc1-Linux.deb
 ```sh
 cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_TESTING=OFF
 cmake --build build && cpack --config build/CPackConfig.cmake -G RPM
-sudo dnf install ./cdm-0.2.0-rc1-Linux.rpm
+sudo dnf install ./cdm-0.3.0-rc1-Linux.rpm
 ```
 
 ### Arch Linux

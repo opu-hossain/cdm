@@ -1163,3 +1163,9 @@ Branch: `cdm`; task 5.6.1 remains unchecked.
 Completed: isolated Criterion/BoxFort startup failure with a one-assertion TSan repro; GCC and Clang fail before cdm code. A non-PIE trial was intermittent and reverted.
 Verification: 13/13 non-Criterion TSan integration targets and 41/41 Debug targets pass; findings recorded in `docs/open-questions.md`.
 Next: use a reliable Criterion/TSan runner or alternate unit-test harness, then repeat the full TSan gate. No push.
+
+## 2026-09-28 — Codex, release version audit
+Branch: `cdm`; phase wrap-up gates remain under review.
+Completed: synchronized README install examples, release checklist and Arch PKGBUILD to `.release.toml` version `0.3.0-rc1`.
+Verification: Release build and CTest 41/41 pass; DEB and RPM artifacts build in `/tmp`. Target-distro installation is still unverified.
+Next: finish runtime/package smoke and update phase gate records. No push.
