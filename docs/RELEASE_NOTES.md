@@ -2,6 +2,14 @@
 
 These notes describe the current source and packaging configuration. This draft does not state that a tag or downloadable package has been published.
 
+## Unreleased — phase 5 polish (implementation complete; release gates open)
+
+- Added versioned JSON export/import for settings and optional download history. Secrets are excluded from ordinary export; `--include-secrets` is explicit. Import validates records, backs up SQLite before replace, refuses replace while a download is active, and restores nonterminal imported jobs PAUSED. CLI and GUI expose the backup flow.
+- Added System/Light/Dark GUI palettes and a settings selector. On Linux, System reads the XDG Settings portal; unavailable preference falls back to light. Added stable `tr()` keys with built-in English and an installed Spanish catalog. `[ui] locale` takes effect after restart.
+- Added disabled-by-default `[security] scanner_command` and quoted `scanner_args`. Every published HTTP, HLS, DASH and site-tool output is scanned before scheduler completion, including DASH companion audio. A nonzero exit, launch failure or 120-second timeout attempts a private `.quarantine` move and records nonretryable `Blocked by scanner`; a failed move can leave the original path under ERROR. Scanner command/args are included in JSON only with `--include-secrets`.
+- Added a [Windows/macOS port plan](platform-port.md) covering local IPC, daemon/process/file primitives, desktop integration, browser registration and packaging. Neither platform is supported yet.
+- On 2026-09-28, full Debug and ASan builds each passed 41/41 CTest targets. The TSan build succeeded, but 24/41 targets aborted in the Criterion runner before assertions; 17/41 passed. An isolated daemon-status smoke passed outside the sandbox. GUI visual/theme screenshots, installed-browser handoff and real media streams remain unverified. Phase 5 release gate 5.6.1 remains open.
+
 ## Unreleased — phase 4 media (implementation complete; release gates open)
 
 - Browser extensions collect media candidates and offer them only after user selection. The popup identifies HLS, DASH and video offers; detection alone does not open a popup.

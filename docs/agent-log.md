@@ -1151,3 +1151,9 @@ Completed: mapped every `PROJECT_CONTEXT.md` §6 blocker to Windows/macOS adapte
 Verification: source/path review and Markdown diff check; full Debug CTest 41/41 pass. Native builds remain UNKNOWN.
 Open questions: installer format, GUI/daemon desktop ownership, macOS signing, and IPC endianness remain design decisions.
 Next: 5.6.1 phase 5 wrap-up. No push.
+
+## 2026-09-28 — Codex, task 5.6.1 gate audit (incomplete)
+Branch: `cdm`; commit: `docs(release): record phase 5 verification limits`.
+Completed: refreshed project context/file inventory and draft release notes; Debug 41/41 and ASan 41/41 pass. Isolated daemon-status smoke passes outside sandbox.
+Blocked gate: TSan builds but 24/41 Criterion targets fail before assertions; an isolated target also fails outside sandbox. GUI visual, installed-browser and real-stream smoke remain unverified.
+Next: resolve Criterion/TSan runner and manual gates before checking 5.6.1 or earlier phase wrap-ups. No push.

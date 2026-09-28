@@ -1,16 +1,16 @@
 # cdm Project Context
 
-Audit refreshed 2026-09-28 after phase 4 task 4.4.1. This document is self-contained for an assistant without repository access. Older line references in inherited sections are approximate where subsequent work moved code; the phase 4 supplement below cites current paths. Literal user data and absolute home paths are omitted or shown as `[REDACTED]`.
+Audit refreshed 2026-09-28 after phase 5 task 5.5.1. This document is self-contained for an assistant without repository access. Older line references in inherited sections are approximate where subsequent work moved code; the phase 5 supplement below cites current paths. Literal user data and absolute home paths are omitted or shown as `[REDACTED]`.
 
 ## 0. Metadata
 
 | Item | Current value |
 |---|---|
-| Audit refresh | 2026-09-28, after phase 4 task 4.4.1; phase 4 manual/TSan gates still open. |
+| Audit refresh | 2026-09-28, after phase 5 task 5.5.1; phase 2–5 TSan/manual gates still open. |
 | Repository root | `[REDACTED]` (this checkout's root; `git rev-parse --show-toplevel`) |
-| Pre-document commit | `5b65086db049259a0af8b6db698e35883b188b74` (`git rev-parse HEAD`) |
+| Pre-document commit | `9e8999b3c66274acc810c02e21132fba61dad964` (`git rev-parse HEAD`) |
 | Branch | `cdm` (`git branch --show-current`; user requested work on this branch) |
-| Last commit before refresh | `5b65086db049259a0af8b6db698e35883b188b74 feat(engine): optional yt-dlp integration for site downloads` |
+| Last commit before refresh | `9e8999b docs: add windows and macos platform port plan` |
 | Working tree before refresh | `.gitignore` modified by pre-existing local work; `PLAN.md` is ignored locally. Pre-existing local AGENTS files and the brief template are untracked; this task edits phase 4 documentation. |
 | Host/toolchain | Linux x86_64, Arch Linux, GCC 16.2.1, CMake 4.4.3; system libcurl 8.22.0, SQLite 3.53.4, SDL2 2.32.72, libnotify 0.8.8, libepoxy 1.5.10, Criterion 2.4.3. |
 | UI library | Vendored Nuklear v4.13.3 (`src/vendor/nuklear.h`); runtime SDL/OpenGL version UNKNOWN, verify with package manager or linked binaries. |
@@ -20,7 +20,7 @@ This is a source and local-test snapshot, not a claim that every runtime path wo
 
 ## 1. Executive Summary
 
-`cdm` is a Linux C11 HTTP(S) download manager. One executable dispatches daemon, CLI, GUI, browser popup, browser host installation, and daemon autostart commands (`src/main.c`). The daemon owns an in-memory queue, SQLite `downloads`/`chunks`/`queues`/`categories`, a per-user Unix-domain IPC socket, scheduler threads, and libcurl segment workers (`src/daemon/daemon.c`, `src/core/scheduler.c`). `cdm_native_host` bridges Chromium/Firefox native messaging to daemon offers and starts the confirmation popup (`src/native_host/main_host.c`). Phase 0 added safe probing/naming/resume validators, daemon speed/ETA events, paginated history and `cdm cli list`. Phase 1 added proxy configuration, per-download HTTP Basic credentials, connection/User-Agent/timeout knobs, normalized active-URL duplicate rejection, and history removal with optional file deletion. Phase 2 added persistent named queues, schedules, gated post-actions, an optional Linux tray, clipboard review, batch add, category routing, and editable categories. Phase 3 added ephemeral browser context with consent, context menus, automatic filters/site exclusions, URL refresh, and four more installer flags. Phase 4 implemented bounded HLS and DASH VOD downloads, optional ffmpeg remux/merge, and disabled-by-default opt-in yt-dlp site jobs. Debug/ASan 39/39 pass; Criterion/TSan and real-stream browser gates remain open. GUI history loads a 256-row window in 64-row increments (`src/gui/gui_controller.c`).
+`cdm` is a Linux C11 HTTP(S) download manager. One executable dispatches daemon, CLI, GUI, browser popup, browser host installation, and daemon autostart commands (`src/main.c`). The daemon owns an in-memory queue, SQLite `downloads`/`chunks`/`queues`/`categories`, a per-user Unix-domain IPC socket, scheduler threads, and libcurl segment workers (`src/daemon/daemon.c`, `src/core/scheduler.c`). `cdm_native_host` bridges Chromium/Firefox native messaging to daemon offers and starts the confirmation popup (`src/native_host/main_host.c`). Phase 0 added safe probing/naming/resume validators, daemon speed/ETA events, paginated history and `cdm cli list`. Phase 1 added proxy configuration, per-download HTTP Basic credentials, connection/User-Agent/timeout knobs, normalized active-URL duplicate rejection, and history removal with optional file deletion. Phase 2 added persistent named queues, schedules, gated post-actions, an optional Linux tray, clipboard review, batch add, category routing, and editable categories. Phase 3 added ephemeral browser context with consent, context menus, automatic filters/site exclusions, URL refresh, and four more installer flags. Phase 4 implemented bounded HLS and DASH VOD downloads, optional ffmpeg remux/merge, and disabled-by-default opt-in yt-dlp site jobs. Phase 5 added JSON backup/restore, light/dark GUI themes, English/Spanish UI text, a disabled-by-default antivirus scanner, and a Windows/macOS port plan. Debug/ASan 41/41 pass; Criterion/TSan and real-browser/stream/GUI visual gates remain open. GUI history loads a 256-row window in 64-row increments (`src/gui/gui_controller.c`).
 
 ## 2. Current Feature Inventory
 
@@ -35,6 +35,7 @@ This is a source and local-test snapshot, not a claim that every runtime path wo
 | GUI/browser | SDL/Nuklear GUI with database-backed editable categories, queue tab, opt-in clipboard review, batch add, search, add/details/settings, remove-from-list/delete-file row actions; popup confirms offered downloads and shows speed/ETA or duplicate notice. Chrome/Chromium/Firefox handoff plus Edge/Brave/Opera/Vivaldi registration (`src/gui/gui_nuklear.c`, `src/gui/browser_popup.c`, `browser/`). |
 | Media | Extension candidate collection and explicit popup confirmation; HLS finite VOD, static single-period DASH, optional ffmpeg copy remux/merge, and disabled-by-default opt-in yt-dlp site extraction. See `docs/media.md`, `src/engine/hls.c`, `src/engine/dash.c`, `src/engine/site_grab.c`. |
 | Notifications/autostart | libnotify completion/failure, XDG autostart (`src/utils/notify.c`, `src/platform/daemon_autostart.c`). |
+| Phase 5 polish | `cdm cli export`/`import` use versioned JSON and daemon-owned transactional history import; GUI has backup controls. Theme is System/Light/Dark and locale is English/Spanish, with restart for locale. Optional configured scanner checks every published HTTP/HLS/DASH/site output, including DASH companion audio; nonzero/launch/timeout blocks completion and moves outputs to private `.quarantine` (`src/persistence/export.c`, `src/gui/theme.c`, `src/utils/i18n.c`, `src/engine/engine_runner.c:173`, `src/core/scheduler.c:131`). |
 | Missing or partial | Browser-session cookies/headers, site filters/exclusions, media detection and bounded VOD download engines exist; installed-browser and real-stream smoke remain UNKNOWN. Live/DRM/byte-range media layouts are unsupported. GUI search/category filters and category counts apply only to the loaded history window. Clipboard review requires explicit opt-in; tray backend is Linux optional. Cookies, HTTP Basic password and proxy password remain plaintext in local persistence. |
 
 ## 3. Architecture Overview
@@ -92,6 +93,16 @@ flowchart LR
 
 See `docs/media.md` for user flow, supported layouts, recovery behavior, and focused tests. Phase 4 test targets are `test_hls`, `test_hls_download`, `test_dash`, `test_dash_download`, `test_site_grab`, `test_site_grab_download`, `test_spawn`, `test_db`, and `test_ipc_socket` (`CMakeLists.txt:314`, `tests/`).
 
+### Phase 5 architecture supplement
+
+| Path and interface | Current contract |
+|---|---|
+| `src/persistence/export.c`, `src/cli/cli.c` | Versioned JSON export of non-secret settings and optional paged daemon history; `--include-secrets` explicitly includes credentials and scanner command/arguments. Import validates JSON, backs up SQLite before replace, refuses active-download replace, and restores nonterminal rows PAUSED. GUI uses the same CLI/export surface through its controls. |
+| `src/gui/theme.c`, `src/gui/theme.h`, `src/gui/gui_nuklear.c` | UI-thread-owned palette selection. `[ui] theme=system|light|dark`; Linux System probes XDG Settings portal via GIO and falls back to light. Contrast-aware ink preserves button/chip readability. Other desktop preference APIs are TODO(platform). |
+| `src/utils/i18n.c`, `resources/i18n/es.toml`, `src/utils/config.h` | `tr()` stable keys with built-in English fallback; flat TOML Spanish catalog loaded at startup. `[ui] locale=en|es`, default `en`; GUI selection needs restart. Installed catalog location is Linux-specific. |
+| `src/platform/spawn.c:381`, `src/engine/engine_runner.c:173`, `src/engine/finalize.c:110`, `src/core/scheduler.c:131` | `[security] scanner_command=""` disables scanning by default; `scanner_args` accepts quoted argv without a shell and file path is last argument. Child has 120-second timeout, cancel/pause termination, and no stdout/stderr capture. Every successful engine dispatch scans its primary and optional DASH companion before scheduler DONE. Failed scan attempts a private `.quarantine` move, persists resulting paths and nonretryable `Blocked by scanner` ERROR (`-6`). A failed quarantine operation leaves the original path and logs an error; inspect it manually. |
+| `docs/platform-port.md` | Ordered Windows/macOS adapter plan covering IPC, daemon lifecycle, file/media/process primitives, desktop integration, browser host and native verification gates. No native port is implemented. |
+
 ## 4. Repository File Map
 
 Full tracked inventory with one-line purposes appears below. Tree (source and supporting files; no build/cache outputs):
@@ -130,11 +141,17 @@ Full tracked inventory with one-line purposes appears below. Tree (source and su
 | `assets/fonts/LiberationSans-Regular.ttf` | Embedded GUI font asset or its license/notes. |
 | `assets/fonts/README.md` | Embedded GUI font asset or its license/notes. |
 | `browser/chromium/README.md` | Browser-specific installation notes. |
+| `browser/chromium/filters.js` | Automatic interception filter and site-exclusion policy. |
 | `browser/chromium/manifest.json` | Extension manifest/permissions. |
+| `browser/chromium/options.html` | Extension filter/exclusion settings UI. |
+| `browser/chromium/options.js` | Extension settings persistence and validation. |
 | `browser/chromium/service_worker.js` | Download interception/native host messaging logic. |
 | `browser/firefox/README.md` | Browser-specific installation notes. |
 | `browser/firefox/background.js` | Download interception/native host messaging logic. |
+| `browser/firefox/filters.js` | Firefox automatic interception filter and exclusion policy. |
 | `browser/firefox/manifest.json` | Extension manifest/permissions. |
+| `browser/firefox/options.html` | Firefox extension settings UI. |
+| `browser/firefox/options.js` | Firefox extension settings persistence. |
 | `cmake/BundleBrowserExtension.py` | CMake helper for bundlebrowserextension. |
 | `cmake/EmbedFont.cmake` | CMake helper for embedfont. |
 | `cmake/ValidateBrowserExtensions.cmake` | CMake helper for validatebrowserextensions. |
@@ -147,6 +164,7 @@ Full tracked inventory with one-line purposes appears below. Tree (source and su
 | `docs/daemon-autostart.md` | User/release documentation. |
 | `docs/ipc.md` | Current v1/v2 Unix socket wire protocol and compatibility reference. |
 | `docs/open-questions.md` | Resolved and pending design choices. |
+| `docs/platform-port.md` | Windows/macOS blocker map, ordered implementation and native acceptance gates. |
 | `docs/tray.md` | Linux StatusNotifier backend design and manual verification notes. |
 | `docs/ui/browser-integration/confirm.html` | Static UI design mockup, not runtime application. |
 | `docs/ui/browser-integration/progress.html` | Static UI design mockup, not runtime application. |
@@ -158,6 +176,7 @@ Full tracked inventory with one-line purposes appears below. Tree (source and su
 | `packaging/deps/rpm.sh` | Dependency installation helper; may modify system if run. |
 | `resources/autostart/cdm-daemon.desktop.in` | Installed desktop/autostart/native-host template. |
 | `resources/cdm.desktop` | Installed desktop/autostart/native-host template. |
+| `resources/i18n/es.toml` | Spanish translation catalog for UI, CLI and host copy. |
 | `resources/native-messaging/chromium.json.in` | Installed desktop/autostart/native-host template. |
 | `resources/native-messaging/firefox.json.in` | Installed desktop/autostart/native-host template. |
 | `scripts/cdm-release` | Release/build artifact helper; may write outside build directory if run. |
@@ -174,10 +193,16 @@ Full tracked inventory with one-line purposes appears below. Tree (source and su
 | `src/daemon/daemon.h` | daemon daemon public declarations/interface. |
 | `src/engine/engine_runner.c` | engine engine runner implementation. |
 | `src/engine/engine_runner.h` | engine engine runner public declarations/interface. |
+| `src/engine/dash.c` | Static DASH MPD parser, downloader, merge and companion publication. |
+| `src/engine/dash.h` | DASH parse limits and download interface. |
 | `src/engine/finalize.c` | engine finalize implementation. |
 | `src/engine/finalize.h` | engine finalize public declarations/interface. |
+| `src/engine/hls.c` | Bounded HLS playlist parser, AES-128 VOD download and resume. |
+| `src/engine/hls.h` | HLS parser/downloader interfaces and limits. |
 | `src/engine/segmenter.c` | engine segmenter implementation. |
 | `src/engine/segmenter.h` | engine segmenter public declarations/interface. |
+| `src/engine/site_grab.c` | Optional yt-dlp site-job staging, progress and publication. |
+| `src/engine/site_grab.h` | Site-tool eligibility and engine dispatch interface. |
 | `src/engine/worker_pool.c` | engine worker pool implementation. |
 | `src/engine/worker_pool.h` | engine worker pool public declarations/interface. |
 | `src/gui/browser_popup.c` | gui browser popup implementation. |
@@ -191,12 +216,16 @@ Full tracked inventory with one-line purposes appears below. Tree (source and su
 | `src/gui/gui_model.c` | gui gui model implementation. |
 | `src/gui/gui_model.h` | gui gui model public declarations/interface. |
 | `src/gui/gui_nuklear.c` | gui gui nuklear implementation. |
+| `src/gui/theme.c` | Light/dark palette and Linux portal appearance detection. |
+| `src/gui/theme.h` | Theme IDs, palette names and application interface. |
 | `src/main.c` | main.c main implementation. |
 | `src/native_host/browser_install.c` | native_host browser install implementation. |
 | `src/native_host/browser_install.h` | native_host browser install public declarations/interface. |
 | `src/native_host/main_host.c` | native_host main host implementation. |
 | `src/persistence/db.c` | persistence db implementation. |
 | `src/persistence/db.h` | persistence db public declarations/interface. |
+| `src/persistence/export.c` | Versioned JSON backup and validated settings/history import. |
+| `src/persistence/export.h` | JSON export/import interface. |
 | `src/platform/bandwidth.c` | platform bandwidth implementation. |
 | `src/platform/bandwidth.h` | platform bandwidth public declarations/interface. |
 | `src/platform/curl_client.c` | platform curl client implementation. |
@@ -222,6 +251,8 @@ Full tracked inventory with one-line purposes appears below. Tree (source and su
 | `src/platform/tray.h` | Tray initialization, menu and progress interface. |
 | `src/utils/config.c` | utils config implementation. |
 | `src/utils/config.h` | utils config public declarations/interface. |
+| `src/utils/i18n.c` | Built-in English strings, TOML catalog loader and tr() lookup. |
+| `src/utils/i18n.h` | Translation lookup and locale loading interface. |
 | `src/utils/log.c` | utils log implementation. |
 | `src/utils/log.h` | utils log public declarations/interface. |
 | `src/utils/notify.c` | utils notify implementation. |
@@ -247,6 +278,7 @@ Full tracked inventory with one-line purposes appears below. Tree (source and su
 | `tests/test_cli_headers.py` | Loopback CLI add/header lifetime and destination integration. |
 | `tests/test_cli_batch.py` | Loopback CLI batch add parsing, per-line result and exit-code integration. |
 | `tests/test_cli_duplicates.py` | Loopback daemon/CLI duplicate URL and existing-ID integration. |
+| `tests/test_cli_export.py` | CLI JSON export/import, history and secret-policy integration. |
 | `tests/test_cli_list.py` | 600-row paginated CLI list/size/status integration. |
 | `tests/test_cli_rejected_add.py` | Daemon rejection must produce nonzero CLI exit. |
 | `tests/test_config.c` | Criterion tests for TOML/defaults, proxy and network settings. |
@@ -254,10 +286,16 @@ Full tracked inventory with one-line purposes appears below. Tree (source and su
 | `tests/test_curl_http_integration.c` | Criterion C test for curl http integration. |
 | `tests/test_daemon_lifecycle.py` | Python/JavaScript integration, protocol, browser, or GUI smoke test for test_daemon_lifecycle.py. |
 | `tests/test_db.c` | Criterion C test for db. |
+| `tests/test_dash.c` | Criterion fixtures for DASH MPD parsing. |
+| `tests/test_dash_download.py` | Loopback DASH download and companion/merge integration. |
 | `tests/test_engine_http_integration.c` | Criterion C test for engine http integration. |
 | `tests/test_engine_runner.c` | Criterion C test for engine runner. |
 | `tests/test_file_io.c` | Criterion C test for file io. |
 | `tests/test_finalize.c` | Criterion C test for finalize. |
+| `tests/hls_download_driver.c` | Local test driver for media and site download integration. |
+| `tests/test_hls.c` | Criterion fixtures for HLS playlist parsing. |
+| `tests/test_hls_download.py` | Loopback HLS VOD transfer and resume integration. |
+| `tests/test_i18n.c` | Built-in fallback and TOML catalog lookup tests. |
 | `tests/test_gui_controller.c` | Criterion C test for gui controller. |
 | `tests/test_url.c` | Criterion tests for normalized URL equality and invalid URLs. |
 | `tests/test_ipc.c` | Criterion C test for ipc. |
@@ -270,6 +308,8 @@ Full tracked inventory with one-line purposes appears below. Tree (source and su
 | `tests/test_scheduler.c` | Criterion C test for scheduler. |
 | `tests/test_segmenter.c` | Criterion C test for segmenter. |
 | `tests/test_spawn.c` | Criterion C test for spawn. |
+| `tests/test_site_grab.c` | Site-tool eligibility and parsing tests. |
+| `tests/test_site_grab_download.py` | Mock yt-dlp process and output integration. |
 | `tests/test_thread.c` | Criterion C test for thread. |
 | `tests/test_tray.c` | Criterion tests for tray request/progress behavior. |
 | `tests/fixtures/old_schema_v4.sql` | SQLite version-4 fixture for migration tests. |
@@ -335,7 +375,7 @@ build/cdm browser uninstall --chrome  # chromium/firefox likewise
 
 ## 6. Dependencies and Platform Support
 
-Required: C11 compiler, CMake >=3.20, pkg-config, Python 3, libnotify, SDL2, libepoxy, OpenGL, SQLite >=3.24, libcurl >=7.60 (system default), libxml2 >=2.9, OpenSSL Crypto, pthreads on Unix; Criterion if `BUILD_TESTING=ON` (`CMakeLists.txt:1`, `:61`, `:65`, `:190`). `DOWNLOADMGR_USE_SYSTEM_CURL=OFF` fetches pinned curl `curl-8_21_0` via Git; needs network and curl build dependencies (`CMakeLists.txt:77`). Node is optional for JS tests (`tests/CMakeLists.txt:77`). ffmpeg and yt-dlp are optional runtime executables, never bundled; yt-dlp is disabled by default. Warnings default on (`-Wall -Wextra -Wpedantic`); sanitizer cache option accepts `address`, `undefined`, `thread` (`CMakeLists.txt:11`). Vendored cJSON, tinyfiledialogs, tomlc17, Nuklear (`CMakeLists.txt:121`, `src/vendor/nuklear.h:1`). Distro package dependency names: `packaging/deps/{deb,rpm,arch}.sh`; DEB declares GUI libs and shlibdeps, RPM declares GUI libs/autoreq (`CMakeLists.txt:355`). DEB CI builds/tests; RPM release workflow builds/packages (`.github/workflows/release-deb.yml:95`, `release-rpm.yml:93`). README explicitly supports Linux; Windows/macOS are roadmap only (`README.md:1`, `:68`). POSIX `fork`, `flock`, Unix sockets, `pwrite`, `unistd`, XDG paths and libnotify block Windows/macOS despite partial `_WIN32` wrappers (`src/daemon/daemon.c:70`, `src/platform/ipc_socket.c:19`, `src/platform/thread.c:7`).
+Required: C11 compiler, CMake >=3.20, pkg-config, Python 3, libnotify, SDL2, libepoxy, OpenGL, SQLite >=3.24, libcurl >=7.60 (system default), libxml2 >=2.9, OpenSSL Crypto, pthreads on Unix; Criterion if `BUILD_TESTING=ON` (`CMakeLists.txt:1`, `:60-76`, `:111-119`). `DOWNLOADMGR_USE_SYSTEM_CURL=OFF` fetches pinned curl `curl-8_21_0` via Git; needs network and curl build dependencies (`CMakeLists.txt:77`). Node is optional for JS tests (`tests/CMakeLists.txt:77`). ffmpeg and yt-dlp are optional runtime executables, never bundled; yt-dlp is disabled by default. A configured antivirus scanner is also optional (`src/utils/config.h:58`, `src/platform/spawn.c:381`). Warnings default on (`-Wall -Wextra -Wpedantic`); sanitizer cache option accepts `address`, `undefined`, `thread` (`CMakeLists.txt:11`). Vendored cJSON, tinyfiledialogs, tomlc17, Nuklear (`CMakeLists.txt:121`, `src/vendor/nuklear.h:1`). Distro package dependency names: `packaging/deps/{deb,rpm,arch}.sh`; DEB declares GUI libs and shlibdeps, RPM declares GUI libs/autoreq (`CMakeLists.txt:355`). DEB CI builds/tests; RPM release workflow builds/packages (`.github/workflows/release-deb.yml:95`, `release-rpm.yml:93`). README explicitly supports Linux; Windows/macOS are roadmap only (`README.md:1`, `:68`). POSIX `fork`, `flock`, Unix sockets, `pwrite`, `unistd`, XDG paths and libnotify block Windows/macOS despite partial `_WIN32` wrappers (`src/daemon/daemon.c:125`, `src/platform/ipc_socket.c:19`, `src/platform/thread.c:7`). `docs/platform-port.md` maps each blocker and native acceptance gate.
 
 ## 7. IPC Protocol Reference
 
@@ -515,11 +555,11 @@ Legacy user-supplied plaintext `cookie`, `referrer`, `extra_headers` (including 
 
 ## 15. Tests and Quality
 
-Configure/build/run: `cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug`, `cmake --build build -j`, `ctest --test-dir build --output-on-failure`. At this snapshot all **39/39 CTest targets passed** (2026-09-28). They include Criterion unit/integration targets, Python native/browser/daemon/CLI integration, and optional Node extension mocks (`tests/CMakeLists.txt`). Phase 0 coverage exercises HEAD→GET fallback and headers, filename decoding, validators/If-Range/stale restart, unknown-size transfer, chunk fallback, IPC HELLO/v2 progress/600-row paging, GUI window transitions, CLI rejected add/header lifetime and 600-row list/status filtering. Phase 1 added proxy HTTP/SOCKS5 loopback tests, HTTP Basic and redirect tests, connection/UA/timeout tests, normalized URL/DB lookup tests, IPC/CLI duplicate tests, DB/IPC removal tests and GUI model removal tests (`tests/test_curl_http_integration.c`, `tests/test_engine_http_integration.c`, `tests/test_url.c`, `tests/test_db.c`, `tests/test_ipc_socket.c`, `tests/test_cli_duplicates.py`, `tests/test_gui_controller.c`). Phase 4 added HLS/DASH bounded parser fixtures, loopback download/ffmpeg fixtures, a mock yt-dlp fixture and IPC/DB persistence checks. Integration test HTTP servers bind `127.0.0.1`; no external site is required. The prior offscreen GUI startup smoke stayed active for three seconds after remove UI work; phase 2 graphical category editing was not visually exercised. Phase 2 tests cover named queue/schema, schedule/post-action, tray, clipboard, batch add and category DB/IPC/GUI behavior. Static analysis gate UNKNOWN; no configured analyzer found in release CI. CMake supports address/undefined/thread sanitizer options and enables warnings. Criterion/nanomsg and IPC tests need permission to bind local sockets; restricted sandbox runs may fail before assertions.
+Configure/build/run: `cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug`, `cmake --build build -j`, `ctest --test-dir build --output-on-failure`. At this snapshot all **41/41 Debug CTest targets passed** (2026-09-28). They include Criterion unit/integration targets, Python native/browser/daemon/CLI integration, and optional Node extension mocks (`tests/CMakeLists.txt`). Phase 0 coverage exercises HEAD→GET fallback and headers, filename decoding, validators/If-Range/stale restart, unknown-size transfer, chunk fallback, IPC HELLO/v2 progress/600-row paging, GUI window transitions, CLI rejected add/header lifetime and 600-row list/status filtering. Phase 1 added proxy HTTP/SOCKS5 loopback tests, HTTP Basic and redirect tests, connection/UA/timeout tests, normalized URL/DB lookup tests, IPC/CLI duplicate tests, DB/IPC removal tests and GUI model removal tests (`tests/test_curl_http_integration.c`, `tests/test_engine_http_integration.c`, `tests/test_url.c`, `tests/test_db.c`, `tests/test_ipc_socket.c`, `tests/test_cli_duplicates.py`, `tests/test_gui_controller.c`). Phase 4 added HLS/DASH bounded parser fixtures, loopback download/ffmpeg fixtures, a mock yt-dlp fixture and IPC/DB persistence checks. Phase 5 tests cover JSON backup/import, theme/config round trips, translation fallback/Spanish catalog, scanner argv/timeout, quarantine collisions, companion-output scanning and terminal scheduler status (`tests/test_cli_export.py`, `tests/test_i18n.c`, `tests/test_spawn.c`, `tests/test_finalize.c`, `tests/test_engine_runner.c`, `tests/test_scheduler.c`). Integration test HTTP servers bind `127.0.0.1`; no external site is required. Phase 2 tests cover named queue/schema, schedule/post-action, tray, clipboard, batch add and category DB/IPC/GUI behavior. Static analysis gate UNKNOWN; no configured analyzer found in release CI. CMake supports address/undefined/thread sanitizer options and enables warnings. Criterion/nanomsg and IPC tests need permission to bind local sockets; restricted sandbox runs may fail before assertions.
 
 ## 16. Known Bugs, Risks, and TODOs
 
-Phase 4 gate (2026-09-28): Debug and ASan builds each passed all 39 CTest targets. The separate TSan build succeeded, but only 16/39 tests passed: 23 Criterion targets aborted before assertions with `Could not initialize test context: Invalid argument` or a fault inside `libcriterion.so.3`. The non-Criterion integration tests completed. This repeats the earlier phase-2 **unresolved TSan verification blocker**, not evidence of a cdm race; repeat on a Criterion/TSan-compatible host. Real HLS/DASH streams and a real site extractor/browser selection were not manually exercised; local fixtures cover parser, transfer, merge, spawn, IPC and persistence. GUI category interaction was not visually exercised because no graphical desktop or Xvfb was present. Category DB/IPC round-trip and GUI model behavior are covered by `tests/test_db.c`, `tests/test_ipc_socket.c`, and `tests/test_gui_controller.c`.
+Phase 5 gate (2026-09-28): Debug and ASan builds each passed all 41 CTest targets. The separate TSan build succeeded, but only 17/41 tests passed: 24 Criterion targets aborted before assertions with inheritable-arena initialization errors or a fault inside `libcriterion.so.3`. This repeats the earlier phase-2/4 **unresolved TSan verification blocker**, not evidence of a cdm race; repeat on a Criterion/TSan-compatible host. An isolated `cdm daemon status` smoke under a temporary HOME/runtime directory passed outside the sandbox; the same probe inside the restricted sandbox failed on Unix socket access. Real HLS/DASH streams and a real site extractor/browser selection were not manually exercised; local fixtures cover parser, transfer, merge, spawn, IPC and persistence. GUI visual interaction and before/after theme screenshots were not exercised because no usable display server or Xvfb was available. Category DB/IPC round-trip and GUI model behavior are covered by `tests/test_db.c`, `tests/test_ipc_socket.c`, and `tests/test_gui_controller.c`.
 
 | Status | Finding and evidence |
 |---|---|
@@ -533,6 +573,7 @@ Phase 4 gate (2026-09-28): Debug and ASan builds each passed all 39 CTest target
 | Open concurrency risk | DB uses one global SQLite connection without explicit application mutex; serialized SQLite mode/runtime and cross-thread behavior need verification (`src/persistence/db.c:17`). `Download *` lifetime after queue lock release and writes near a rebalance boundary need stress review (`src/core/queue_manager.c`, `src/engine/worker_pool.c`). |
 | Open compatibility risk | HELLO reports protocol v11, but type 35/36 were introduced during v2; an older v2 daemon may close on an unknown type. GUI reconnects and falls back to type 9; CLI sized list reports unsupported. Types 42/43 require v3 and remove type 44 requires v4; media/site types 58–60 require current negotiation. Existing wire structs remain unchanged. Raw native structs remain ABI-bound (`src/platform/ipc_protocol.h`, `src/gui/gui_client.c`, `src/cli/cli.c`). |
 | Open product gap | GUI search/categories cover only the loaded history window; no CLI remove command or HTTP Basic entry, or browser Authorization/POST support. GUI file deletion does not provide an independently recoverable trash operation (`src/gui/gui_nuklear.c`, `src/cli/cli.c`). |
+| Scanner limitations | Scanner is disabled by default. Nonzero exit, launch failure or 120-second timeout yields `Blocked by scanner`; file movement can fail (for example an unusable quarantine directory) and then the original output path remains recorded under ERROR. Windows scanner spawning is a stub. Scanner command/args can contain secrets, so ordinary JSON export clears them and `--include-secrets` is explicit (`src/engine/engine_runner.c:173`, `src/engine/finalize.c:110`, `src/platform/spawn.c:86`, `src/persistence/export.c:75`). |
 | Open behavior risk | `db_delete_download()` commits the row deletion before `unlink`; unlink failure leaves the file but no row, by design. GUI remove requires v4 and returns a generic failure with an older daemon (`src/persistence/db.c`, `src/gui/gui_client.c`). |
 | TODO | Windows disk-space API (`src/platform/diskspace.c:25`). The earlier GUI history-removal TODO was resolved. Re-run `rg -n 'TODO|FIXME|HACK' src --glob '!vendor/**'` to verify later additions. |
 | Release drift | `.release.toml` is 0.3.0-rc1 while README/package examples still mention 0.2.0-rc1. |
@@ -543,7 +584,7 @@ XDM reference version/features are UNKNOWN: no XDM baseline or Claude report tex
 
 ## 18. Suggested Phase Order from Claude Report
 
-The Claude report is unavailable (Appendix B), so its actual phase order is UNKNOWN. Local `PLAN.md` (ignored/untracked at this snapshot) orders work as: phase 0 foundations, phase 1 transfer parity, phase 2 queues/automation, phase 3 browser integration, phase 4 media, and phase 5 polish/platforms. Phase 4 implementation through task 4.4.1 is committed; its real-stream/sanitizer gate and earlier installed-browser/TSan gates remain open. Formal phase merges remain deferred because the user directed work on `cdm` and no push until the full plan. This summary is from the local plan, not a quote from Claude.
+The Claude report is unavailable (Appendix B), so its actual phase order is UNKNOWN. Local `PLAN.md` (ignored/untracked at this snapshot) orders work as: phase 0 foundations, phase 1 transfer parity, phase 2 queues/automation, phase 3 browser integration, phase 4 media, and phase 5 polish/platforms. Phase 5 implementation through task 5.5.1 is committed; phase 2–5 TSan and real-browser/stream/GUI visual gates remain open. Formal phase merges remain deferred because the user directed work on `cdm` and no push until the full plan. This summary is from the local plan, not a quote from Claude.
 
 ## 19. Open Design Questions
 
