@@ -1,4 +1,5 @@
 #include "gui_controller.h"
+#include "../utils/i18n.h"
 
 #include "../platform/thread.h"
 #include "../utils/log.h"
@@ -345,7 +346,7 @@ static void publish_queues(void) {
   int count = gui_client_queue_list(event.data.queues.queues,
                                      GUI_CONTROLLER_MAX_QUEUES);
   if (count < 0 || count > GUI_CONTROLLER_MAX_QUEUES) {
-    publish_error("Queues could not be loaded");
+    publish_error(tr("gui.queues_could_not_be_loaded"));
     return;
   }
   event.data.queues.count = count;
@@ -357,7 +358,7 @@ static void publish_categories(void) {
   int count = gui_client_category_list(event.data.categories.categories,
                                        GUI_CONTROLLER_MAX_CATEGORIES);
   if (count < 0 || count > GUI_CONTROLLER_MAX_CATEGORIES) {
-    publish_error("Categories could not be loaded");
+    publish_error(tr("gui.categories_could_not_be_loaded"));
     return;
   }
   event.data.categories.count = count;
@@ -370,7 +371,7 @@ static void publish_snapshot(GuiHistoryWindow *window) {
   uint32_t total = 0;
   uint32_t limit = window->count ? window->count : GUI_HISTORY_PAGE_ROWS;
   if (!gui_client_list_page(window->offset, limit, &records, &count, &total)) {
-    publish_error("History could not be loaded");
+    publish_error(tr("gui.history_could_not_be_loaded"));
     return;
   }
 
@@ -390,7 +391,7 @@ static void publish_snapshot(GuiHistoryWindow *window) {
 static void publish_error(const char *message) {
   GuiControllerEvent event = {.type = GUI_CONTROLLER_EVENT_ERROR};
   snprintf(event.data.error.message, sizeof(event.data.error.message), "%s",
-           message ? message : "GUI operation failed");
+           message ? message : tr("gui.gui_operation_failed"));
   gui_controller_publish(&event);
 }
 
@@ -449,7 +450,7 @@ static void process_command(const GuiControllerCommand *command) {
     publish_operation(GUI_CONTROLLER_OPERATION_ADD, id, command->url,
                       command->dest_path, succeeded, duplicate);
     if (!succeeded)
-      publish_error("Download could not be added");
+      publish_error(tr("gui.download_could_not_be_added"));
     return;
   }
   case GUI_CONTROLLER_COMMAND_PAUSE:
@@ -479,7 +480,7 @@ static void process_command(const GuiControllerCommand *command) {
         gui_client_get_details(command->id, &event.data.details.details);
     gui_controller_publish(&event);
     if (!event.data.details.found)
-      publish_error("Download details are unavailable");
+      publish_error(tr("gui.download_details_are_unavailable"));
     return;
   }
   case GUI_CONTROLLER_COMMAND_PAGE:
@@ -520,19 +521,19 @@ static void process_command(const GuiControllerCommand *command) {
   }
   if (command->type >= GUI_CONTROLLER_COMMAND_CATEGORY_LIST) {
     if (!succeeded)
-      publish_error("Category operation failed");
+      publish_error(tr("gui.category_operation_failed"));
     publish_categories();
     return;
   }
   if (command->type >= GUI_CONTROLLER_COMMAND_QUEUE_LIST) {
     if (!succeeded)
-      publish_error("Queue operation failed");
+      publish_error(tr("gui.queue_operation_failed"));
     publish_queues();
     return;
   }
   publish_operation(operation, command->id, NULL, NULL, succeeded, false);
   if (!succeeded)
-    publish_error("Download operation failed");
+    publish_error(tr("gui.download_operation_failed"));
 }
 
 static int controller_thread_fn(void *arg) {

@@ -9,6 +9,7 @@
 #include "../platform/ipc_socket.h"
 #include "../platform/open_path.h"
 #include "../utils/config.h"
+#include "../utils/i18n.h"
 #include "../utils/path.h"
 #include "../vendor/tinyfiledialogs.h"
 
@@ -37,6 +38,12 @@ static const struct nk_color TEXT = {232, 236, 241, 255};
 static const struct nk_color MUTED = {124, 138, 157, 255};
 static const struct nk_color ACCENT = {61, 157, 207, 255};
 static const struct nk_color GREEN = {63, 143, 95, 255};
+
+static void copy_label(char *dst, size_t capacity, const char *value) {
+  int written = snprintf(dst, capacity, "%s", value);
+  if (written < 0 || (size_t)written >= capacity)
+    dst[0] = '\0';
+}
 
 static void report_popup_ready(void) {
   const char *value = getenv("CDM_BROWSER_READY_FD");
@@ -136,67 +143,71 @@ static bool filename_valid(const char *filename) {
 static void draw_confirmation(struct nk_context *ctx, PopupState *state,
                               int daemon) {
   nk_layout_row_dynamic(ctx, 28, 1);
-  nk_label(ctx, "Review download", NK_TEXT_LEFT);
+  nk_label(ctx, tr("gui.browser.review"), NK_TEXT_LEFT);
   if (state->media_kind) {
     nk_layout_row_dynamic(ctx, 18, 1);
-    nk_label_colored(ctx, state->media_kind == IPC_BROWSER_MEDIA_HLS ? "Media: HLS" :
-                         state->media_kind == IPC_BROWSER_MEDIA_DASH ? "Media: DASH" :
-                         "Media: direct video", NK_TEXT_LEFT, MUTED);
+    nk_label_colored(ctx, state->media_kind == IPC_BROWSER_MEDIA_HLS ? tr("gui.media_hls") :
+                         state->media_kind == IPC_BROWSER_MEDIA_DASH ? tr("gui.media_dash") :
+                         tr("gui.media_direct_video"), NK_TEXT_LEFT, MUTED);
   }
   nk_layout_row_dynamic(ctx, 18, 1);
-  nk_label_colored(ctx, "Download URL", NK_TEXT_LEFT, MUTED);
+  nk_label_colored(ctx, tr("gui.download_url"), NK_TEXT_LEFT, MUTED);
   nk_layout_row_dynamic(ctx, 43, 1);
   nk_label_wrap(ctx, state->offer.url);
   nk_layout_row_dynamic(ctx, 18, 1);
-  nk_label_colored(ctx, "Save as", NK_TEXT_LEFT, MUTED);
+  nk_label_colored(ctx, tr("gui.save_as"), NK_TEXT_LEFT, MUTED);
   nk_layout_row_dynamic(ctx, 34, 1);
   nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, state->filename,
                                   sizeof(state->filename), NULL);
   nk_layout_row_dynamic(ctx, 18, 1);
-  nk_label_colored(ctx, "Destination folder", NK_TEXT_LEFT, MUTED);
+  nk_label_colored(ctx, tr("gui.destination_folder"), NK_TEXT_LEFT, MUTED);
   nk_layout_row_begin(ctx, NK_STATIC, 34, 2);
   nk_layout_row_push(ctx, 325);
   nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, state->folder,
                                   sizeof(state->folder), NULL);
   nk_layout_row_push(ctx, 90);
-  if (nk_button_label(ctx, "Browse...")) {
-    char *chosen = tinyfd_selectFolderDialog("Choose download folder",
+  if (nk_button_label(ctx, tr("gui.browse_ellipsis"))) {
+    char *chosen = tinyfd_selectFolderDialog(tr("gui.choose_download_folder"),
                                               state->folder);
     if (chosen)
       snprintf(state->folder, sizeof(state->folder), "%s", chosen);
   }
   nk_layout_row_end(ctx);
   char size_label[80];
-  if (state->offer.total_bytes)
-    snprintf(size_label, sizeof(size_label), "File size: %.1f MB",
-             (double)state->offer.total_bytes / 1000000.0);
+  if (state->offer.total_bytes) {
+    int written = snprintf(size_label, sizeof(size_label), "%s: %.1f MB",
+                           tr("gui.file_size"),
+                           (double)state->offer.total_bytes / 1000000.0);
+    if (written < 0 || (size_t)written >= sizeof(size_label))
+      size_label[0] = '\0';
+  }
   else
-    snprintf(size_label, sizeof(size_label), "File size: unknown");
+    copy_label(size_label, sizeof(size_label), tr("gui.file_size_unknown"));
   nk_layout_row_dynamic(ctx, 18, 1);
   nk_label_colored(ctx, size_label, NK_TEXT_LEFT, MUTED);
   if (state->context_flags) {
     nk_layout_row_dynamic(ctx, 18, 1);
     nk_label_colored(ctx,
-        state->use_site_tool ? "Site tool uses the page URL; browser headers are ignored"
+        state->use_site_tool ? tr("gui.site_tool_uses_the_page_url_browser_headers_are_ignored")
         : state->context_flags & IPC_BROWSER_HAS_COOKIE
-            ? "Includes browser cookies" : "Includes browser request headers",
+            ? tr("gui.includes_browser_cookies") : tr("gui.includes_browser_request_headers"),
         NK_TEXT_LEFT, MUTED);
     nk_layout_row_dynamic(ctx, 18, 1);
     nk_label_colored(ctx,
-        state->use_site_tool ? "Only the page URL is sent to yt-dlp"
+        state->use_site_tool ? tr("gui.only_the_page_url_is_sent_to_yt_dlp")
         : (state->context_flags & (IPC_BROWSER_HAS_USER_AGENT | IPC_BROWSER_HAS_REFERER)) ==
             (IPC_BROWSER_HAS_USER_AGENT | IPC_BROWSER_HAS_REFERER)
-            ? "User-Agent and Referer available"
+            ? tr("gui.user_agent_and_referer_available")
             : state->context_flags & IPC_BROWSER_HAS_USER_AGENT
-                ? "User-Agent available"
+                ? tr("gui.user_agent_available")
                 : state->context_flags & IPC_BROWSER_HAS_REFERER
-                    ? "Referer available" : "Confirm to use this browser session",
+                    ? tr("gui.referer_available") : tr("gui.confirm_to_use_this_browser_session"),
         NK_TEXT_LEFT, MUTED);
   }
   if (state->site_available) {
     nk_bool checked = state->use_site_tool;
     nk_layout_row_dynamic(ctx, 28, 1);
-    nk_checkbox_label(ctx, "Use yt-dlp for this site", &checked);
+    nk_checkbox_label(ctx, tr("gui.use_yt_dlp_for_this_site"), &checked);
     state->use_site_tool = checked != 0;
   }
   nk_layout_row_dynamic(ctx, 20, 1);
@@ -206,17 +217,17 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
   nk_layout_row_push(ctx, 230);
   nk_spacing(ctx, 1);
   nk_layout_row_push(ctx, 88);
-  if (nk_button_label(ctx, "Cancel")) {
+  if (nk_button_label(ctx, tr("gui.cancel"))) {
     ipc_browser_dismiss(daemon, state->offer.offer_id);
     state->close = true;
   }
   nk_layout_row_push(ctx, 97);
-  if (primary_button(ctx, "Download")) {
+  if (primary_button(ctx, tr("gui.download"))) {
     if (!filename_valid(state->filename) || !state->folder[0] ||
         !path_join(state->folder, state->filename, state->full_path,
                    sizeof(state->full_path))) {
       snprintf(state->error, sizeof(state->error),
-               "Choose a valid folder and filename.");
+               tr("gui.choose_a_valid_folder_and_filename"));
     } else {
       IpcAddResponse response = {0};
       int result = state->use_site_tool
@@ -231,7 +242,7 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
       state->duplicate = response.result == IPC_RESULT_REJECTED;
       if (result != 0)
       snprintf(state->error, sizeof(state->error),
-               "Could not start download. Check the destination.");
+               tr("gui.could_not_start_download_check_the_destination"));
       else
         state->error[0] = '\0';
     }
@@ -290,7 +301,7 @@ retry:
   state->progress_sock = -1;
   state->next_retry_tick = SDL_GetTicks() + 1000;
   snprintf(state->error, sizeof(state->error),
-           "Progress connection lost; retrying...");
+           tr("gui.progress_connection_lost_retrying"));
 }
 
 static void poll_progress(PopupState *state) {
@@ -351,7 +362,7 @@ static void poll_progress(PopupState *state) {
   state->progress_sock = -1;
   state->next_retry_tick = SDL_GetTicks() + 1000;
   snprintf(state->error, sizeof(state->error),
-           "Progress connection lost; retrying...");
+           tr("gui.progress_connection_lost_retrying"));
 }
 
 static void draw_progress(struct nk_context *ctx, PopupState *state,
@@ -360,24 +371,32 @@ static void draw_progress(struct nk_context *ctx, PopupState *state,
   bool stopped = strcmp(state->progress.status, "ERROR") == 0 ||
                  strcmp(state->progress.status, "CANCELED") == 0;
   nk_layout_row_dynamic(ctx, 30, 1);
-  nk_label(ctx, done ? "Download complete" : "Downloading", NK_TEXT_LEFT);
+  nk_label(ctx, done ? tr("gui.download_complete") : tr("gui.downloading"), NK_TEXT_LEFT);
   if (state->duplicate) {
     nk_layout_row_dynamic(ctx, 22, 1);
-    nk_labelf_colored(ctx, NK_TEXT_LEFT, ACCENT,
-                      "Already downloading (ID %u)", state->download_id);
+    nk_labelf_colored(ctx, NK_TEXT_LEFT, ACCENT, "%s (ID %u)",
+                      tr("gui.already_downloading"), state->download_id);
   }
   nk_layout_row_dynamic(ctx, 24, 1);
   nk_label(ctx, state->filename, NK_TEXT_LEFT);
   nk_layout_row_dynamic(ctx, 30, 1);
   char amount[128];
-  if (state->progress.total_bytes)
-    snprintf(amount, sizeof(amount), "%.1f MB of %.1f MB (%.0f%%)",
-             (double)state->progress.bytes_received / 1000000.0,
-             (double)state->progress.total_bytes / 1000000.0,
-             state->progress.progress * 100.0);
-  else
-    snprintf(amount, sizeof(amount), "%.1f MB downloaded",
-             (double)state->progress.bytes_received / 1000000.0);
+  if (state->progress.total_bytes) {
+    int written = snprintf(amount, sizeof(amount),
+                           "%.1f MB %s %.1f MB (%.0f%%)",
+                           (double)state->progress.bytes_received / 1000000.0,
+                           tr("gui.of"),
+                           (double)state->progress.total_bytes / 1000000.0,
+                           state->progress.progress * 100.0);
+    if (written < 0 || (size_t)written >= sizeof(amount))
+      amount[0] = '\0';
+  } else {
+    int written = snprintf(amount, sizeof(amount), "%.1f MB %s",
+                           (double)state->progress.bytes_received / 1000000.0,
+                           tr("gui.downloaded"));
+    if (written < 0 || (size_t)written >= sizeof(amount))
+      amount[0] = '\0';
+  }
   nk_label(ctx, amount, NK_TEXT_LEFT);
   nk_size amount_progress =
       (nk_size)(state->progress.progress * 1000.0f);
@@ -389,24 +408,35 @@ static void draw_progress(struct nk_context *ctx, PopupState *state,
     char amount_per_second[32], formatted_eta[32];
     gui_format_bytes(state->rich_progress.speed_bps, amount_per_second,
                      sizeof(amount_per_second));
-    snprintf(speed, sizeof(speed), "Speed: %s/s", amount_per_second);
+    int written = snprintf(speed, sizeof(speed), "%s: %s/s",
+                           tr("gui.speed"), amount_per_second);
+    if (written < 0 || (size_t)written >= sizeof(speed))
+      speed[0] = '\0';
     gui_format_eta(state->rich_progress.eta_seconds, formatted_eta,
                    sizeof(formatted_eta));
-    snprintf(eta, sizeof(eta), "Time remaining: %s",
-             state->rich_progress.eta_seconds == UINT64_MAX
-                 ? "unknown"
-                 : formatted_eta);
+    written = snprintf(eta, sizeof(eta), "%s: %s",
+                       tr("gui.time_remaining"),
+                       state->rich_progress.eta_seconds == UINT64_MAX
+                           ? tr("gui.unknown") : formatted_eta);
+    if (written < 0 || (size_t)written >= sizeof(eta))
+      eta[0] = '\0';
   } else {
-    snprintf(speed, sizeof(speed), "Speed: %.1f MB/s",
-             state->speed_bps / 1000000.0);
+    int written = snprintf(speed, sizeof(speed), "%s: %.1f MB/s",
+                           tr("gui.speed"), state->speed_bps / 1000000.0);
+    if (written < 0 || (size_t)written >= sizeof(speed))
+      speed[0] = '\0';
     if (!done && state->speed_bps > 0 && state->progress.total_bytes >
                                                 state->progress.bytes_received) {
       double seconds = (double)(state->progress.total_bytes -
                                 state->progress.bytes_received) /
                        state->speed_bps;
-      snprintf(eta, sizeof(eta), "Time remaining: %.0f sec", seconds);
+      written = snprintf(eta, sizeof(eta), "%s: %.0f %s",
+                         tr("gui.time_remaining"), seconds,
+                         tr("gui.seconds_short"));
+      if (written < 0 || (size_t)written >= sizeof(eta))
+        eta[0] = '\0';
     } else {
-      snprintf(eta, sizeof(eta), "Time remaining: unknown");
+      copy_label(eta, sizeof(eta), tr("gui.time_remaining_unknown"));
     }
   }
   nk_layout_row_dynamic(ctx, 20, 2);
@@ -414,7 +444,7 @@ static void draw_progress(struct nk_context *ctx, PopupState *state,
   nk_label_colored(ctx, eta, NK_TEXT_LEFT, MUTED);
   nk_layout_row_dynamic(ctx, 24, 1);
   if (done)
-    nk_label_colored(ctx, "Download complete", NK_TEXT_LEFT, GREEN);
+    nk_label_colored(ctx, tr("gui.download_complete"), NK_TEXT_LEFT, GREEN);
   else if (stopped)
     nk_label_colored(ctx, state->progress.error[0]
                              ? state->progress.error
@@ -425,10 +455,10 @@ static void draw_progress(struct nk_context *ctx, PopupState *state,
                      nk_rgb(224, 132, 136));
   if (stopped && state->daemon_version >= 9) {
     nk_layout_row_dynamic(ctx, 34, 1);
-    if (nk_button_label(ctx, "Refresh URL")) {
+    if (nk_button_label(ctx, tr("gui.refresh_url"))) {
       const char *message = ipc_send_refresh_url(daemon, state->download_id) == 0
-          ? "URL refreshed. Resume from the main window."
-          : "Refresh failed; re-offer or re-download if content changed.";
+          ? tr("gui.url_refreshed_resume_from_the_main_window")
+          : tr("gui.refresh_failed_re_offer_or_re_download_if_content_changed");
       size_t length = strlen(message);
       memcpy(state->error, message, length + 1);
     }
@@ -439,10 +469,11 @@ static void draw_progress(struct nk_context *ctx, PopupState *state,
   }
   nk_layout_row_dynamic(ctx, 34, done ? 3 : 2);
   if (done) {
-    if (primary_button(ctx, "Open file") &&
+    if (primary_button(ctx, tr("gui.open_file")) &&
         platform_open_path(state->full_path) != 0)
-      snprintf(state->error, sizeof(state->error), "Could not open file.");
-    if (nk_button_label(ctx, "Open folder")) {
+      copy_label(state->error, sizeof(state->error),
+                 tr("gui.could_not_open_file"));
+    if (nk_button_label(ctx, tr("gui.open_folder"))) {
       char folder[IPC_MAX_PATH_LEN];
       snprintf(folder, sizeof(folder), "%s", state->full_path);
       char *slash = strrchr(folder, '/');
@@ -451,13 +482,14 @@ static void draw_progress(struct nk_context *ctx, PopupState *state,
       else
         *slash = '\0';
       if (platform_open_path(folder) != 0)
-        snprintf(state->error, sizeof(state->error), "Could not open folder.");
+        copy_label(state->error, sizeof(state->error),
+                   tr("gui.could_not_open_folder"));
     }
-    if (nk_button_label(ctx, "Close")) state->close = true;
+    if (nk_button_label(ctx, tr("gui.close"))) state->close = true;
   } else {
-    if (!stopped && nk_button_label(ctx, "Cancel download"))
+    if (!stopped && nk_button_label(ctx, tr("gui.cancel_download")))
       ipc_send_cancel(daemon, state->download_id);
-    if (nk_button_label(ctx, "Close")) state->close = true;
+    if (nk_button_label(ctx, tr("gui.close"))) state->close = true;
   }
   if (state->error[0] && done) {
     nk_layout_row_dynamic(ctx, 20, 1);
@@ -515,7 +547,7 @@ int run_browser_popup(uint32_t offer_id) {
   if (state.media_kind) height += 24;
   if (state.site_available) height += 28;
   GuiSdlBackendConfig settings = {.width = 480, .height = height,
-                                  .title = "cdm — Browser download",
+                                  .title = tr("gui.cdm_browser_download"),
                                   .font_size = 13};
   GuiSdlBackend *backend = gui_sdl_backend_create(&settings);
   if (!backend) {

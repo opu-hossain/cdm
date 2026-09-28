@@ -1,4 +1,5 @@
 #include "../utils/config.h"
+#include "../utils/i18n.h"
 #include "../utils/log.h"
 #include "../utils/path.h"
 #include "../persistence/export.h"
@@ -297,7 +298,7 @@ static bool button(struct nk_context *ctx, float x, float y, float w, float h,
 static void report_enqueue(UiState *ui, bool ok) {
   if (!ok)
     copy_text(ui->error, sizeof(ui->error),
-              "Command queue is full. Please try again.");
+              tr("gui.command_queue_is_full_please_try_again"));
 }
 
 static bool add_download(const char *url, const char *folder,
@@ -346,7 +347,7 @@ static void open_path(UiState *ui, const char *path, bool folder) {
     const char *slash = last_separator(local);
     if (!slash) {
       copy_text(ui->error, sizeof(ui->error),
-                "Cannot open a relative destination folder.");
+                tr("gui.cannot_open_a_relative_destination_folder"));
       return;
     }
     size_t end = (size_t)(slash - local);
@@ -369,7 +370,7 @@ static void open_path(UiState *ui, const char *path, bool folder) {
 #endif
       if (local[0] != '/') {
     copy_text(ui->error, sizeof(ui->error),
-              "Opening files requires an absolute destination path.");
+              tr("gui.opening_files_requires_an_absolute_destination_path"));
     return;
   }
   char uri[IPC_MAX_PATH_LEN * 3 + 16];
@@ -385,8 +386,10 @@ static void open_path(UiState *ui, const char *path, bool folder) {
   }
   uri[n] = '\0';
   if (SDL_OpenURL(uri) != 0) {
-    snprintf(ui->error, sizeof(ui->error), "Could not open destination: %.190s",
-             SDL_GetError());
+    int written = snprintf(ui->error, sizeof(ui->error), "%s: %.190s",
+                           tr("gui.could_not_open_destination"), SDL_GetError());
+    if (written < 0 || (size_t)written >= sizeof(ui->error))
+      ui->error[0] = '\0';
     LOG_ERROR("gui: %s", ui->error);
   }
 }
@@ -492,7 +495,7 @@ static void draw_chrome(struct nk_context *ctx, UiState *ui,
   fill(ctx, screen_rect(ctx, 0, 51, width, 1), 0, BORDER);
   fill(ctx, screen_rect(ctx, 219, 52, 1, height - 52), 0, BORDER);
   bold_at(ctx, 18, 0, 142, 52, "CDM", 15, TEXT, SURFACE);
-  const char *tabs[] = {"All", "Downloading", "Completed", "Queues"};
+  const char *tabs[] = {tr("gui.all"), tr("gui.downloading"), tr("gui.completed"), tr("gui.queues")};
   float tx = 173;
   const float tw[] = {43, 109, 100, 72};
   for (int i = 0; i < 4; ++i) {
@@ -513,16 +516,16 @@ static void draw_chrome(struct nk_context *ctx, UiState *ui,
                                    GUI_SEARCH_CAP, nk_filter_default);
     if (!ui->search[0])
       text_at(ctx, width - 110 - search_width, 10, search_width - 24, 32,
-              "Search downloads...", 13, DISABLED, BG);
+              tr("gui.search_downloads"), 13, DISABLED, BG);
   }
   struct nk_color connection = ui->connected ? GREEN : RED;
   nk_fill_circle(nk_window_get_canvas(ctx),
                  screen_rect(ctx, width - 98, 23, 7, 7), connection);
   text_at(ctx, width - 84, 0, 80, 52,
-          ui->connected ? "Connected" : "Disconnected", 13, connection,
+          ui->connected ? tr("gui.connected") : tr("gui.disconnected"), 13, connection,
           SURFACE);
   if (button(ctx, 14, 66, 192, 40,
-             ui->tab == TAB_QUEUES ? "+ Add queue" : "+ New Download", true,
+             ui->tab == TAB_QUEUES ? tr("gui.add_queue") : tr("gui.new_download"), true,
              true)) {
     if (ui->tab == TAB_QUEUES) {
       memset(&ui->queue_draft, 0, sizeof(ui->queue_draft));
@@ -535,12 +538,12 @@ static void draw_chrome(struct nk_context *ctx, UiState *ui,
       ui->add_open = true;
   }
   if (ui->tab != TAB_QUEUES) {
-    text_at(ctx, 16, 115, 140, 28, "CATEGORIES", 11, MUTED, SURFACE);
+    text_at(ctx, 16, 115, 140, 28, tr("gui.categories"), 11, MUTED, SURFACE);
     if (button(ctx, 174, 115, 30, 28, "+", true, false)) {
       memset(&ui->category_draft, 0, sizeof(ui->category_draft));
       ui->category_edit_open = true;
     }
-    if (nav_button(ctx, 14, 148, 192, 33, "All categories",
+    if (nav_button(ctx, 14, 148, 192, 33, tr("gui.all_categories"),
                    ui->category == 0))
       ui->category = 0;
     int slots = (int)((height - 342) / 36);
@@ -571,16 +574,16 @@ static void draw_chrome(struct nk_context *ctx, UiState *ui,
       }
     }
     if (category_count > slots) {
-      if (button(ctx, 14, height - 145, 92, 27, "Previous",
+      if (button(ctx, 14, height - 145, 92, 27, tr("gui.previous"),
                  ui->category_scroll > 0, false))
         ui->category_scroll--;
-      if (button(ctx, 114, height - 145, 92, 27, "Next",
+      if (button(ctx, 114, height - 145, 92, 27, tr("gui.next"),
                  ui->category_scroll + slots < category_count, false))
         ui->category_scroll++;
     }
   }
   fill(ctx, screen_rect(ctx, 14, height - 83, 192, 1), 0, BORDER);
-  text_at(ctx, 14, height - 69, 192, 14, "LOCAL STORAGE", 11, DISABLED,
+  text_at(ctx, 14, height - 69, 192, 14, tr("gui.local_storage"), 11, DISABLED,
           SURFACE);
   fill(ctx, screen_rect(ctx, 14, height - 49, 192, 5), 2, BG);
   if (ui->disk_available) {
@@ -591,26 +594,37 @@ static void draw_chrome(struct nk_context *ctx, UiState *ui,
     if (bar_width > 0)
       fill(ctx, screen_rect(ctx, 14, height - 49, bar_width, 5), 2, ACCENT);
     char storage[80];
-    snprintf(storage, sizeof(storage), "%.1f%% used  /  %.1f GB free",
-             used * 100.0, (double)ui->disk.free_bytes / 1000000000.0);
+    int written = snprintf(storage, sizeof(storage), "%.1f%% %s  /  %.1f GB %s",
+                           used * 100.0, tr("gui.used"),
+                           (double)ui->disk.free_bytes / 1000000000.0,
+                           tr("gui.free"));
+    if (written < 0 || (size_t)written >= sizeof(storage))
+      storage[0] = '\0';
     text_at(ctx, 14, height - 38, 192, 16, storage, 11, MUTED, SURFACE);
   } else {
-    text_at(ctx, 14, height - 38, 192, 16, "Storage usage unavailable", 11,
+    text_at(ctx, 14, height - 38, 192, 16, tr("gui.storage_usage_unavailable"), 11,
             DISABLED, SURFACE);
   }
   char total[64];
   if (ui->tab == TAB_QUEUES) {
     Queue queues[GUI_MODEL_MAX_QUEUES];
     int count = gui_model_snapshot_queues(queues, GUI_MODEL_MAX_QUEUES);
-    int written = snprintf(total, sizeof(total), "%d queues", count);
+    int written = snprintf(total, sizeof(total), "%d %s", count,
+                           tr("gui.queues_lower"));
     if (written < 0 || (size_t)written >= sizeof(total))
       total[0] = '\0';
   } else if (ui->category == 0 && ui->tab == TAB_ALL &&
-             !ui->search[0])
-    snprintf(total, sizeof(total), "%d of %u downloads", visible_count,
-             ui->history_total);
-  else
-    snprintf(total, sizeof(total), "%d downloads", visible_count);
+             !ui->search[0]) {
+    int written = snprintf(total, sizeof(total), "%d %s %u %s", visible_count,
+                           tr("gui.of"), ui->history_total,
+                           tr("gui.downloads_lower"));
+    if (written < 0 || (size_t)written >= sizeof(total))
+      total[0] = '\0';
+  } else {
+    int written = snprintf(total, sizeof(total), "%d %s", visible_count,
+                           tr("gui.downloads_lower"));
+    if (written < 0 || (size_t)written >= sizeof(total)) total[0] = '\0';
+  }
   text_at(ctx, width - 183, 60, 170, 32, total, 12, MUTED, BG);
   fill(ctx, screen_rect(ctx, 220, 100, width - 220, 1), 0, BORDER);
 }
@@ -618,20 +632,20 @@ static void draw_chrome(struct nk_context *ctx, UiState *ui,
 static void draw_toolbar(struct nk_context *ctx, UiState *ui, GuiRow *rows,
                          int count) {
   GuiRow *selected = find_row(rows, count, ui->selected_id);
-  if (tool_button(ctx, 236, "add", "Add download", true))
+  if (tool_button(ctx, 236, "add", tr("gui.add_download"), true))
     ui->add_open = true;
-  if (tool_button(ctx, 272, "cancel", "Cancel selected download",
+  if (tool_button(ctx, 272, "cancel", tr("gui.cancel_selected_download"),
                   can_pause(selected) || is_status(selected, "PAUSED")))
     report_enqueue(ui, gui_controller_enqueue_cancel(selected->id));
   fill(ctx, screen_rect(ctx, 314, 66, 1, 20), 0, BORDER);
-  if (tool_button(ctx, 325, "pause", "Pause selected download",
+  if (tool_button(ctx, 325, "pause", tr("gui.pause_selected_download"),
                   can_pause(selected)))
     report_enqueue(ui, gui_controller_enqueue_pause(selected->id));
-  if (tool_button(ctx, 361, "resume", "Resume selected download",
+  if (tool_button(ctx, 361, "resume", tr("gui.resume_selected_download"),
                   is_status(selected, "PAUSED")))
     report_enqueue(ui, gui_controller_enqueue_resume(selected->id));
   fill(ctx, screen_rect(ctx, 403, 66, 1, 20), 0, BORDER);
-  if (tool_button(ctx, 414, "settings", "Settings", true))
+  if (tool_button(ctx, 414, "settings", tr("gui.settings.title"), true))
     open_settings(ui);
 }
 
@@ -666,7 +680,7 @@ static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
   nk_label(ctx, "", NK_TEXT_LEFT);
   if (!count && !ui->history_loading) {
     nk_layout_row_dynamic(ctx, THEME_ROW_PREVIEW, 1);
-    nk_label_colored(ctx, "Your download queue is empty", NK_TEXT_CENTERED,
+    nk_label_colored(ctx, tr("gui.your_download_queue_is_empty"), NK_TEXT_CENTERED,
                      MUTED);
   }
   float content_height = 8;
@@ -695,10 +709,11 @@ static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
     label(ctx, nk_rect(r.x + 64, r.y + 10, name_width, 16),
           filename_for_row(row), 13, TEXT, bg);
     char meta[IPC_MAX_PATH_LEN + 32];
+    int written = 0;
     if (is_status(row, "ERROR") && row->error[0])
       copy_text(meta, sizeof(meta), row->error);
     else if (is_status(row, "DONE"))
-      copy_text(meta, sizeof(meta), "Completed");
+      copy_text(meta, sizeof(meta), tr("gui.completed"));
     else if (progress && row->has_v2) {
       char received[32], total[32], speed[32], eta[32];
       gui_format_bytes(row->bytes_received, received, sizeof(received));
@@ -709,15 +724,21 @@ static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
       gui_format_bytes(row->speed_bps, speed, sizeof(speed));
       gui_format_eta(row->eta_seconds, eta, sizeof(eta));
       if (is_status(row, "PAUSED"))
-        snprintf(meta, sizeof(meta), "%s / %s  ·  Paused", received, total);
+        written = snprintf(meta, sizeof(meta), "%s / %s  ·  %s", received,
+                           total, tr("gui.paused"));
       else
-        snprintf(meta, sizeof(meta), "%s / %s  ·  %s/s  ·  ETA %s",
-                 received, total, speed, eta);
+        written = snprintf(meta, sizeof(meta), "%s / %s  ·  %s/s  ·  %s %s",
+                           received, total, speed, tr("gui.eta"), eta);
     } else if (progress)
-      snprintf(meta, sizeof(meta), "%.0f%%  /  %s", row->progress * 100,
-               is_status(row, "PAUSED") ? "Paused" : row->dest_path);
+      written = snprintf(meta, sizeof(meta), "%.0f%%  /  %s",
+                         row->progress * 100,
+                         is_status(row, "PAUSED") ? tr("gui.paused")
+                                                  : row->dest_path);
     else
-      snprintf(meta, sizeof(meta), "%s  /  %s", row->status, row->dest_path);
+      written = snprintf(meta, sizeof(meta), "%s  /  %s", row->status,
+                         row->dest_path);
+    if (written < 0 || (size_t)written >= sizeof(meta))
+      meta[0] = '\0';
     label(ctx, nk_rect(r.x + 64, r.y + 29, name_width, 14), meta, 11, MUTED,
           bg);
     if (progress) {
@@ -781,7 +802,7 @@ static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
                      ui->search[0] == '\0';
   if (all_history && ui->history_loading) {
     nk_layout_row_dynamic(ctx, THEME_ROW_SECTION, 1);
-    nk_label_colored(ctx, "Loading more downloads...", NK_TEXT_CENTERED,
+    nk_label_colored(ctx, tr("gui.loading_more_downloads"), NK_TEXT_CENTERED,
                      MUTED);
     content_height += 28;
   }
@@ -839,55 +860,58 @@ static void draw_menu(struct nk_context *ctx, UiState *ui, GuiRow *rows,
     float by = 5;
     bool close = false;
     if (done) {
-      if (button(ctx, 5, by, 170, 30, "Open", true, false)) {
+      if (button(ctx, 5, by, 170, 30, tr("gui.open"), true, false)) {
         open_path(ui, row->dest_path, false);
         close = true;
       }
     } else if (can_pause(row)) {
-      if (button(ctx, 5, by, 170, 30, "Pause", true, false)) {
+      if (button(ctx, 5, by, 170, 30, tr("gui.pause"), true, false)) {
         report_enqueue(ui, gui_controller_enqueue_pause(row->id));
         close = true;
       }
     } else if (paused) {
-      if (button(ctx, 5, by, 170, 30, "Resume", true, false)) {
+      if (button(ctx, 5, by, 170, 30, tr("gui.resume"), true, false)) {
         report_enqueue(ui, gui_controller_enqueue_resume(row->id));
         close = true;
       }
     } else {
       /* ERROR rows cannot prove their partial file is still valid from GuiRow. */
-      if (button(ctx, 5, by, 170, 30, "Re-download", true, false)) {
+      if (button(ctx, 5, by, 170, 30, tr("gui.re_download"), true, false)) {
         report_enqueue(
             ui, gui_controller_enqueue_add(row->url, row->dest_path, NULL));
         close = true;
       }
     }
     by += 30;
-    if (button(ctx, 5, by, 170, 30, "Open folder", true, false)) {
+    if (button(ctx, 5, by, 170, 30, tr("gui.open_folder"), true, false)) {
       open_path(ui, row->dest_path, true);
       close = true;
     }
     by += 30;
     if (done) {
-      if (button(ctx, 5, by, 170, 30, "Re-download", true, false)) {
+      if (button(ctx, 5, by, 170, 30, tr("gui.re_download"), true, false)) {
         report_enqueue(
             ui, gui_controller_enqueue_add(row->url, row->dest_path, NULL));
         close = true;
       }
     } else {
-      if (button(ctx, 5, by, 170, 30, "Copy URL", true, false)) {
-        if (SDL_SetClipboardText(row->url) != 0)
-          snprintf(ui->error, sizeof(ui->error), "Could not copy URL: %.200s",
-                   SDL_GetError());
+      if (button(ctx, 5, by, 170, 30, tr("gui.copy_url"), true, false)) {
+        if (SDL_SetClipboardText(row->url) != 0) {
+          int written = snprintf(ui->error, sizeof(ui->error), "%s: %.200s",
+                                 tr("gui.could_not_copy_url"), SDL_GetError());
+          if (written < 0 || (size_t)written >= sizeof(ui->error))
+            ui->error[0] = '\0';
+        }
         close = true;
       }
     }
     by += 30;
-    if (button(ctx, 5, by, 170, 30, "Show details", true, false)) {
+    if (button(ctx, 5, by, 170, 30, tr("gui.show_details"), true, false)) {
       show_details(ui, row->id);
       close = true;
     }
     by += 30;
-    if (button(ctx, 5, by, 170, 30, "Refresh URL",
+    if (button(ctx, 5, by, 170, 30, tr("gui.refresh_url"),
                !is_status(row, "ACTIVE"), false)) {
       report_enqueue(ui, gui_controller_enqueue_refresh_url(row->id));
       close = true;
@@ -895,19 +919,19 @@ static void draw_menu(struct nk_context *ctx, UiState *ui, GuiRow *rows,
     by += 36;
     fill(ctx, screen_rect(ctx, 7, by - 3, 166, 1), 0, BORDER);
     if (can_pause(row) || paused) {
-      if (button(ctx, 5, by, 170, 30, "Cancel", true, false)) {
+      if (button(ctx, 5, by, 170, 30, tr("gui.cancel"), true, false)) {
         report_enqueue(ui, gui_controller_enqueue_cancel(row->id));
         close = true;
       }
     }
     by += 32;
     bool removable = !is_status(row, "ACTIVE");
-    if (button(ctx, 5, by, 170, 30, "Remove from list", removable, false)) {
+    if (button(ctx, 5, by, 170, 30, tr("gui.remove_from_list"), removable, false)) {
       report_enqueue(ui, gui_controller_enqueue_remove(row->id, false));
       close = true;
     }
     by += 30;
-    if (button(ctx, 5, by, 170, 30, "Delete file", removable, false)) {
+    if (button(ctx, 5, by, 170, 30, tr("gui.delete_file"), removable, false)) {
       ui->delete_confirm_id = row->id;
       copy_text(ui->delete_confirm_path, sizeof(ui->delete_confirm_path),
                 row->dest_path);
@@ -994,21 +1018,21 @@ static void modal_end(struct nk_context *ctx) {
 static void settings_transfer(UiState *ui, bool importing, bool replace) {
   const char *filters[] = {"*.json"};
   char *chosen = importing
-      ? tinyfd_openFileDialog("Import cdm JSON", NULL, 1, filters,
-                              "JSON files", 0)
-      : tinyfd_saveFileDialog("Export cdm JSON", "cdm-export.json", 1,
-                              filters, "JSON files");
+      ? tinyfd_openFileDialog(tr("gui.import_cdm_json"), NULL, 1, filters,
+                              tr("gui.json_files"), 0)
+      : tinyfd_saveFileDialog(tr("gui.export_cdm_json"), "cdm-export.json", 1,
+                              filters, tr("gui.json_files"));
   if (!chosen)
     return;
   char *source = importing ? realpath(chosen, NULL) : NULL;
   if (importing && !source) {
     copy_text(ui->settings_message, sizeof(ui->settings_message),
-              "Could not open the selected import file");
+              tr("gui.could_not_open_the_selected_import_file"));
     tinyfd_notifyPopup("cdm import", ui->settings_message, "error");
     return;
   }
-  if (replace && !tinyfd_messageBox("Replace cdm data",
-          "Replace local history and settings? A database backup will be made.",
+  if (replace && !tinyfd_messageBox(tr("gui.replace_cdm_data"),
+          tr("gui.replace_local_history_and_settings_a_database_backup_will_be_made"),
           "yesno", "warning", 0)) {
     free(source);
     return;
@@ -1031,8 +1055,8 @@ static void settings_transfer(UiState *ui, bool importing, bool replace) {
     config_init(NULL);
     open_settings(ui);
   }
-  const char *message = ok ? (importing ? "Import completed" : "Export completed")
-                           : (importing ? "Import failed" : "Export failed");
+  const char *message = ok ? (importing ? tr("gui.import_completed") : tr("gui.export_completed"))
+                           : (importing ? tr("gui.import_failed") : tr("gui.export_failed"));
   copy_text(ui->settings_message, sizeof(ui->settings_message), message);
   tinyfd_notifyPopup("cdm", message, ok ? "info" : "error");
 }
@@ -1047,30 +1071,30 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
   if (h > 650)
     h = 650;
   float w = 460, x = (width - w) / 2, y = (height - h) / 2;
-  if (!modal_start(ctx, "settings", "Settings", x, y, w, h,
+  if (!modal_start(ctx, "settings", tr("gui.settings.title"), x, y, w, h,
                    &ui->settings_open)) {
     nk_end(ctx);
     return;
   }
   text_at(ctx, 20, 70, w - 40, 20,
-          "Saved to config.toml and applied immediately.", 11, MUTED, SURFACE);
+          tr("gui.saved_to_config_toml_and_applied_immediately"), 11, MUTED, SURFACE);
   bool proxy_url_ok = true;
   nk_layout_space_push(ctx, nk_rect(20, 108, w - 40, h - 188));
   nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
                            nk_style_item_color(SURFACE));
   if (nk_group_begin(ctx, "settings-fields", 0)) {
-    section(ctx, "GENERAL");
+    section(ctx, tr("gui.general"));
     nk_bool monitor = ui->clipboard_monitor;
     nk_layout_row_dynamic(ctx, THEME_ROW_SECTION, 1);
-    nk_checkbox_label(ctx, "Monitor clipboard for URLs", &monitor);
+    nk_checkbox_label(ctx, tr("gui.monitor_clipboard_for_urls"), &monitor);
     ui->clipboard_monitor = monitor;
     nk_layout_row_dynamic(ctx, THEME_ROW_CAPTION, 1);
-    nk_label_colored(ctx, "Ask before adding a copied URL.", NK_TEXT_LEFT,
+    nk_label_colored(ctx, tr("gui.ask_before_adding_a_copied_url"), NK_TEXT_LEFT,
                      MUTED);
     nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
-    nk_label(ctx, "Theme", NK_TEXT_LEFT);
+    nk_label(ctx, tr("gui.theme"), NK_TEXT_LEFT);
     nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
-    const char *themes[] = {"System", "Light", "Dark"};
+    const char *themes[] = {tr("gui.system"), tr("gui.light"), tr("gui.dark")};
     ThemeId selection = (ThemeId)nk_combo(ctx, themes, 3, ui->theme_preview,
                                           30, nk_vec2(400, 110));
     if (selection != ui->theme_preview) {
@@ -1078,7 +1102,7 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
       theme_apply(ctx, selection);
     }
     nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
-    nk_label(ctx, "Default download directory", NK_TEXT_LEFT);
+    nk_label(ctx, tr("gui.default_download_directory"), NK_TEXT_LEFT);
     nk_layout_row_begin(ctx, NK_STATIC, THEME_ROW_INPUT, 3);
     nk_layout_row_push(ctx, 312);
     nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->directory,
@@ -1086,8 +1110,8 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     nk_layout_row_push(ctx, THEME_COLUMN_GAP);
     nk_spacing(ctx, 1);
     nk_layout_row_push(ctx, 90);
-    if (nk_button_label(ctx, "Browse")) {
-      char *chosen = tinyfd_selectFolderDialog("Default download directory",
+    if (nk_button_label(ctx, tr("gui.browse"))) {
+      char *chosen = tinyfd_selectFolderDialog(tr("gui.default_download_directory"),
                                                ui->directory);
       if (chosen)
         copy_text(ui->directory, sizeof(ui->directory), chosen);
@@ -1095,13 +1119,13 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     nk_layout_row_end(ctx);
     nk_layout_row_dynamic(ctx, THEME_ROW_WIDE_SPACER, 1);
     nk_label(ctx, "", NK_TEXT_LEFT);
-    number_field(ctx, "Maximum concurrent downloads", ui->numbers[0]);
-    section(ctx, "CONNECTIONS");
-    number_field(ctx, "Connections per download (1-16)", ui->numbers[6]);
-    number_field(ctx, "Connect timeout (seconds)", ui->numbers[7]);
-    number_field(ctx, "Transfer timeout (seconds)", ui->numbers[8]);
+    number_field(ctx, tr("gui.maximum_concurrent_downloads"), ui->numbers[0]);
+    section(ctx, tr("gui.connections"));
+    number_field(ctx, tr("gui.connections_per_download_1_16"), ui->numbers[6]);
+    number_field(ctx, tr("gui.connect_timeout_seconds"), ui->numbers[7]);
+    number_field(ctx, tr("gui.transfer_timeout_seconds"), ui->numbers[8]);
     nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
-    nk_label(ctx, "User-Agent", NK_TEXT_LEFT);
+    nk_label(ctx, tr("gui.user_agent"), NK_TEXT_LEFT);
     nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
     nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->user_agent,
                                    sizeof(ui->user_agent), NULL);
@@ -1109,28 +1133,28 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
       DownloadManagerConfig current;
       config_get(&current);
       nk_layout_row_dynamic(ctx, THEME_ROW_CAPTION, 1);
-      nk_labelf_colored(ctx, NK_TEXT_LEFT, MUTED, "Current: %s",
+      nk_labelf_colored(ctx, NK_TEXT_LEFT, MUTED, "%s: %s", tr("gui.current"),
                         current.user_agent);
     }
-    section(ctx, "RETRIES");
-    number_field(ctx, "Maximum retry attempts", ui->numbers[1]);
-    number_field(ctx, "Retry base delay (seconds)", ui->numbers[2]);
-    number_field(ctx, "Retry maximum delay (seconds)", ui->numbers[3]);
-    section(ctx, "BANDWIDTH");
-    number_field(ctx, "Global speed limit (bytes/sec, 0 = unlimited)",
+    section(ctx, tr("gui.retries"));
+    number_field(ctx, tr("gui.maximum_retry_attempts"), ui->numbers[1]);
+    number_field(ctx, tr("gui.retry_base_delay_seconds"), ui->numbers[2]);
+    number_field(ctx, tr("gui.retry_maximum_delay_seconds"), ui->numbers[3]);
+    section(ctx, tr("gui.bandwidth"));
+    number_field(ctx, tr("gui.global_speed_limit_bytes_sec_0_unlimited"),
                  ui->numbers[4]);
     nk_layout_row_dynamic(ctx, THEME_ROW_CAPTION, 1);
     nk_label_colored(ctx, "0 disables the limit entirely.", NK_TEXT_LEFT,
                      MUTED);
-    section(ctx, "PROXY");
+    section(ctx, tr("gui.proxy"));
     nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
-    nk_label(ctx, "Mode", NK_TEXT_LEFT);
+    nk_label(ctx, tr("gui.mode"), NK_TEXT_LEFT);
     nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
-    const char *modes[] = {"None", "HTTP", "SOCKS5"};
+    const char *modes[] = {tr("gui.none"), "HTTP", "SOCKS5"};
     ui->proxy_mode = (ProxyMode)nk_combo(ctx, modes, 3, ui->proxy_mode, 30,
                                          nk_vec2(400, 110));
     nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
-    nk_label(ctx, "Proxy URL", NK_TEXT_LEFT);
+    nk_label(ctx, tr("gui.proxy_url"), NK_TEXT_LEFT);
     nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
     nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->proxy_url,
                                    sizeof(ui->proxy_url), NULL);
@@ -1140,35 +1164,35 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
                     scheme[3] != ':' && scheme[3] != '/');
     if (!proxy_url_ok) {
       nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
-      nk_label_colored(ctx, "Enter a proxy URL with scheme and host.",
+      nk_label_colored(ctx, tr("gui.enter_a_proxy_url_with_scheme_and_host"),
                        NK_TEXT_LEFT, RED);
     }
     nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
-    nk_label(ctx, "Username", NK_TEXT_LEFT);
+    nk_label(ctx, tr("gui.username"), NK_TEXT_LEFT);
     nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
     nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->proxy_username,
                                    sizeof(ui->proxy_username), NULL);
     nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
-    nk_label(ctx, "Password", NK_TEXT_LEFT);
+    nk_label(ctx, tr("gui.password"), NK_TEXT_LEFT);
     nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 2);
-    if (nk_button_label(ctx, ui->proxy_password[0] ? "Change password..."
-                                                  : "Set password...")) {
-      char *value = tinyfd_inputBox("Proxy password", "Enter proxy password",
+    if (nk_button_label(ctx, ui->proxy_password[0] ? tr("gui.change_password")
+                                                  : tr("gui.set_password"))) {
+      char *value = tinyfd_inputBox(tr("gui.proxy_password"), tr("gui.enter_proxy_password"),
                                    NULL); /* NULL requests a masked input box. */
       if (value)
         copy_text(ui->proxy_password, sizeof(ui->proxy_password), value);
     }
-    if (nk_button_label(ctx, "Clear password"))
+    if (nk_button_label(ctx, tr("gui.clear_password")))
       ui->proxy_password[0] = '\0';
-    section(ctx, "IMPORT / EXPORT");
+    section(ctx, tr("gui.import_export"));
     nk_layout_space_begin(ctx, NK_STATIC, THEME_ROW_INPUT, 1);
-    if (button(ctx, 0, 0, 390, 32, "Export settings and history...", true, false))
+    if (button(ctx, 0, 0, 390, 32, tr("gui.export_settings_and_history"), true, false))
       settings_transfer(ui, false, false);
     nk_layout_space_end(ctx);
     nk_layout_space_begin(ctx, NK_STATIC, THEME_ROW_INPUT, 2);
-    if (button(ctx, 0, 0, 190, 32, "Import missing...", true, false))
+    if (button(ctx, 0, 0, 190, 32, tr("gui.import_missing"), true, false))
       settings_transfer(ui, true, false);
-    if (button(ctx, 200, 0, 190, 32, "Replace from file...", true, false))
+    if (button(ctx, 200, 0, 190, 32, tr("gui.replace_from_file"), true, false))
       settings_transfer(ui, true, true);
     nk_layout_space_end(ctx);
     nk_group_end(ctx);
@@ -1177,9 +1201,9 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
   text_at(ctx, 20, h - 80, w - 40, 24, ui->settings_message, 11,
           STATUS_ERROR, SURFACE);
   fill(ctx, screen_rect(ctx, 0, h - 60, w, 1), 0, BORDER);
-  if (button(ctx, w - 232, h - 46, 80, 32, "Cancel", true, false))
+  if (button(ctx, w - 232, h - 46, 80, 32, tr("gui.cancel"), true, false))
     ui->settings_open = false;
-  if (button(ctx, w - 144, h - 46, 124, 32, "Save settings", true, true)) {
+  if (button(ctx, w - 144, h - 46, 124, 32, tr("gui.save_settings"), true, true)) {
     bool valid = parse_number(ui->numbers[0], 1, 64, &ui->concurrent) &&
                  parse_number(ui->numbers[1], 0, 100, &ui->attempts) &&
                  parse_number(ui->numbers[2], 1, 3600, &ui->base_delay) &&
@@ -1212,15 +1236,15 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
               ui->proxy_password);
     if (!valid)
       copy_text(ui->settings_message, sizeof(ui->settings_message),
-                "Invalid number. Check the allowed range in each field.");
+                tr("gui.invalid_number_check_the_allowed_range_in_each_field"));
     else if (!proxy_url_ok)
       copy_text(ui->settings_message, sizeof(ui->settings_message),
-                "Proxy URL needs a scheme and host.");
+                tr("gui.proxy_url_needs_a_scheme_and_host"));
     else if (config_save(&config)) {
       ui->theme_saved = ui->theme_preview;
       if (!gui_client_reload_config()) {
         copy_text(ui->settings_message, sizeof(ui->settings_message),
-                  "Settings saved, but the daemon did not reload them");
+                  tr("gui.settings_saved_but_the_daemon_did_not_reload_them"));
       } else {
         ui->clipboard_monitor_enabled = config.clipboard_monitor;
         clipboard_baseline(ui);
@@ -1232,7 +1256,7 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
       }
     } else
       copy_text(ui->settings_message, sizeof(ui->settings_message),
-                "Could not save or apply settings");
+                tr("gui.could_not_save_or_apply_settings"));
   }
   modal_end(ctx);
 }
@@ -1252,7 +1276,7 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
   float w = 520, h = ui->advanced ? height * .85f : 350;
   if (h > 700)
     h = 700;
-  if (!modal_start(ctx, "add-download", "New Download", (width - w) / 2,
+  if (!modal_start(ctx, "add-download", tr("gui.new_download_title"), (width - w) / 2,
                    (height - h) / 2, w, h, &ui->add_open)) {
     nk_end(ctx);
     return;
@@ -1261,9 +1285,9 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
   nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
                            nk_style_item_color(SURFACE));
   if (nk_group_begin(ctx, "add-fields", 0)) {
-    input_field(ctx, "URL", ui->url, sizeof(ui->url));
+    input_field(ctx, tr("gui.url"), ui->url, sizeof(ui->url));
     nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
-    nk_label(ctx, "Save to", NK_TEXT_LEFT);
+    nk_label(ctx, tr("gui.save_to"), NK_TEXT_LEFT);
     nk_layout_row_begin(ctx, NK_STATIC, THEME_ROW_INPUT, 3);
     nk_layout_row_push(ctx, 342);
     if (nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->folder,
@@ -1272,9 +1296,9 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
     nk_layout_row_push(ctx, THEME_COLUMN_GAP);
     nk_spacing(ctx, 1);
     nk_layout_row_push(ctx, 120);
-    if (nk_button_label(ctx, "Choose folder")) {
+    if (nk_button_label(ctx, tr("gui.choose_folder"))) {
       char *chosen =
-          tinyfd_selectFolderDialog("Choose download folder", ui->folder);
+          tinyfd_selectFolderDialog(tr("gui.choose_download_folder"), ui->folder);
       if (chosen)
         copy_text(ui->folder, sizeof(ui->folder), chosen);
       if (chosen)
@@ -1284,14 +1308,14 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
     nk_layout_row_dynamic(ctx, THEME_ROW_WIDE_SPACER, 1);
     nk_label(ctx, "", NK_TEXT_LEFT);
     nk_layout_row_dynamic(ctx, THEME_ROW_SECTION, 1);
-    if (nk_button_label(ctx, ui->advanced ? "- Advanced options"
-                                          : "+ Advanced options"))
+    if (nk_button_label(ctx, ui->advanced ? tr("gui.hide_advanced_options")
+                                          : tr("gui.show_advanced_options")))
       ui->advanced = !ui->advanced;
     if (ui->advanced) {
-      input_field(ctx, "Cookie", ui->cookie, sizeof(ui->cookie));
-      input_field(ctx, "Referrer", ui->referrer, sizeof(ui->referrer));
-      input_field(ctx, "Extra headers", ui->headers, sizeof(ui->headers));
-      input_field(ctx, "SHA-256", ui->sha256, sizeof(ui->sha256));
+      input_field(ctx, tr("gui.cookie"), ui->cookie, sizeof(ui->cookie));
+      input_field(ctx, tr("gui.referrer"), ui->referrer, sizeof(ui->referrer));
+      input_field(ctx, tr("gui.extra_headers"), ui->headers, sizeof(ui->headers));
+      input_field(ctx, tr("gui.sha_256"), ui->sha256, sizeof(ui->sha256));
       Queue queues[GUI_MODEL_MAX_QUEUES];
       const char *names[GUI_MODEL_MAX_QUEUES];
       int queue_count = gui_model_snapshot_queues(queues, GUI_MODEL_MAX_QUEUES);
@@ -1303,13 +1327,13 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
       }
       if (queue_count > 0) {
         nk_layout_row_dynamic(ctx, THEME_ROW_TEXT, 1);
-        nk_label(ctx, "Queue", NK_TEXT_LEFT);
+        nk_label(ctx, tr("gui.queue"), NK_TEXT_LEFT);
         nk_layout_row_dynamic(ctx, THEME_ROW_BUTTON, 1);
         selected = nk_combo(ctx, names, queue_count, selected, 30,
                             nk_vec2(260, 240));
         ui->add_queue_id = queues[selected].id;
       }
-      number_field(ctx, "Speed limit (bytes/sec, 0 = unlimited)",
+      number_field(ctx, tr("gui.speed_limit_bytes_sec_0_unlimited"),
                    ui->numbers[5]);
     }
     nk_group_end(ctx);
@@ -1318,21 +1342,21 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
   text_at(ctx, 20, h - 76, w - 40, 22, ui->error, 11, STATUS_ERROR,
           SURFACE);
   fill(ctx, screen_rect(ctx, 0, h - 54, w, 1), 0, BORDER);
-  if (button(ctx, 20, h - 41, 200, 30, "Paste multiple URLs", true,
+  if (button(ctx, 20, h - 41, 200, 30, tr("gui.paste_multiple_urls"), true,
              false)) {
     ui->add_open = false;
     ui->batch_add_open = true;
     ui->error[0] = '\0';
   }
-  if (button(ctx, w - 232, h - 41, 80, 30, "Cancel", true, false))
+  if (button(ctx, w - 232, h - 41, 80, 30, tr("gui.cancel"), true, false))
     ui->add_open = false;
-  if (button(ctx, w - 144, h - 41, 124, 30, "Add download", true, true)) {
+  if (button(ctx, w - 144, h - 41, 124, 30, tr("gui.add_download"), true, true)) {
     if (!ui->url[0] || !ui->folder[0])
       copy_text(ui->error, sizeof(ui->error),
-                "Enter a URL and destination folder.");
+                tr("gui.enter_a_url_and_destination_folder"));
     else if (!parse_number(ui->numbers[5], 0, 1000000000, &ui->speed_limit))
       copy_text(ui->error, sizeof(ui->error),
-                "Speed limit must be between 0 and 1000000000.");
+                tr("gui.speed_limit_must_be_between_0_and_1000000000"));
     else if (add_download(ui->url, ui->folder, ui->cookie, ui->referrer,
                           ui->headers, ui->sha256, (uint64_t)ui->speed_limit,
                           ui->add_queue_id, !ui->folder_explicit)) {
@@ -1349,7 +1373,7 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
       ui->advanced = false;
     } else
       copy_text(ui->error, sizeof(ui->error),
-                "Could not prepare or enqueue the download.");
+                tr("gui.could_not_prepare_or_enqueue_the_download"));
   }
   modal_end(ctx);
 }
@@ -1357,28 +1381,28 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
 static void draw_batch_add(struct nk_context *ctx, UiState *ui, float width,
                            float height) {
   float w = 520, h = 550;
-  if (!modal_start(ctx, "batch-add", "Paste multiple URLs",
+  if (!modal_start(ctx, "batch-add", tr("gui.paste_multiple_urls"),
                    (width - w) / 2, (height - h) / 2, w, h,
                    &ui->batch_add_open)) {
     nk_end(ctx);
     return;
   }
   text_at(ctx, 20, 68, w - 40, 20,
-          "One HTTP(S) URL per line; blank and # lines are ignored.",
+          tr("gui.one_http_s_url_per_line_blank_and_lines_are_ignored"),
           11, MUTED, SURFACE);
   nk_layout_space_push(ctx, nk_rect(20, 98, w - 40, 260));
   nk_edit_string_zero_terminated(ctx, NK_EDIT_BOX, ui->batch_urls,
                                  sizeof(ui->batch_urls), NULL);
-  text_at(ctx, 20, 368, w - 40, 20, "Save to", 11, MUTED, SURFACE);
+  text_at(ctx, 20, 368, w - 40, 20, tr("gui.save_to"), 11, MUTED, SURFACE);
   nk_layout_space_push(ctx, nk_rect(20, 390, w - 40, 32));
   if (nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->folder,
                                      sizeof(ui->folder), NULL) & NK_EDIT_ACTIVE)
     ui->folder_explicit = true;
   text_at(ctx, 20, h - 90, w - 40, 22, ui->error, 11, RED, SURFACE);
   fill(ctx, screen_rect(ctx, 0, h - 54, w, 1), 0, BORDER);
-  if (button(ctx, w - 232, h - 41, 80, 30, "Cancel", true, false))
+  if (button(ctx, w - 232, h - 41, 80, 30, tr("gui.cancel"), true, false))
     ui->batch_add_open = false;
-  if (button(ctx, w - 144, h - 41, 124, 30, "Add all", true, true)) {
+  if (button(ctx, w - 144, h - 41, 124, 30, tr("gui.add_all"), true, true)) {
     size_t consumed = 0;
     int added = 0;
     bool failed = false;
@@ -1419,9 +1443,9 @@ static void draw_batch_add(struct nk_context *ctx, UiState *ui, float width,
     }
     if (failed)
       copy_text(ui->error, sizeof(ui->error),
-                "Invalid URL, destination, or command queue full.");
+                tr("gui.invalid_url_destination_or_command_queue_full"));
     else if (!added)
-      copy_text(ui->error, sizeof(ui->error), "Paste at least one URL.");
+      copy_text(ui->error, sizeof(ui->error), tr("gui.paste_at_least_one_url"));
     else {
       ui->batch_urls[0] = '\0';
       ui->batch_add_open = false;
@@ -1437,25 +1461,25 @@ static bool queue_draft_valid(UiState *ui) {
       !parse_number(ui->queue_priority, 0, 1000, &priority) ||
       !parse_number(ui->queue_cap, 0, 64, &cap)) {
     copy_text(ui->error, sizeof(ui->error),
-              "Enter a name, priority 0-1000, and max concurrent 0-64.");
+              tr("gui.enter_a_name_priority_0_1000_and_max_concurrent_0_64"));
     return false;
   }
   if (!gui_schedule_valid(ui->queue_draft.schedule_start,
                           ui->queue_draft.schedule_stop)) {
     copy_text(ui->error, sizeof(ui->error),
-              "Enter two different HH:MM times, or leave both empty.");
+              tr("gui.enter_two_different_hh_mm_times_or_leave_both_empty"));
     return false;
   }
   if (ui->queue_draft.post_action[0] &&
       strcmp(ui->queue_draft.post_action, "none") != 0 &&
       !config_post_action_enabled(ui->queue_draft.post_action)) {
     copy_text(ui->error, sizeof(ui->error),
-              "Enable this post-action in [post_actions] before saving.");
+              tr("gui.enable_this_post_action_in_post_actions_before_saving"));
     return false;
   }
   if (strcmp(ui->queue_draft.post_action, "command") == 0 &&
       !ui->queue_draft.post_action_arg[0]) {
-    copy_text(ui->error, sizeof(ui->error), "Enter a command to run.");
+    copy_text(ui->error, sizeof(ui->error), tr("gui.enter_a_command_to_run"));
     return false;
   }
   ui->error[0] = '\0';
@@ -1468,33 +1492,33 @@ static bool queue_draft_valid(UiState *ui) {
 }
 
 static void queue_fields(struct nk_context *ctx, UiState *ui) {
-  input_field(ctx, "Name", ui->queue_draft.name,
+  input_field(ctx, tr("gui.name"), ui->queue_draft.name,
               sizeof(ui->queue_draft.name));
-  number_field(ctx, "Priority (0-1000)", ui->queue_priority);
-  number_field(ctx, "Max concurrent (0 = unlimited)", ui->queue_cap);
-  input_field(ctx, "Schedule start (HH:MM)", ui->queue_draft.schedule_start,
+  number_field(ctx, tr("gui.priority_0_1000"), ui->queue_priority);
+  number_field(ctx, tr("gui.max_concurrent_0_unlimited"), ui->queue_cap);
+  input_field(ctx, tr("gui.schedule_start_hh_mm"), ui->queue_draft.schedule_start,
               sizeof(ui->queue_draft.schedule_start));
-  input_field(ctx, "Schedule stop (HH:MM)", ui->queue_draft.schedule_stop,
+  input_field(ctx, tr("gui.schedule_stop_hh_mm"), ui->queue_draft.schedule_stop,
               sizeof(ui->queue_draft.schedule_stop));
   nk_layout_row_dynamic(ctx, THEME_ROW_CAPTION, 1);
   if (!ui->queue_draft.schedule_start[0] &&
       !ui->queue_draft.schedule_stop[0])
-    nk_label_colored(ctx, "Always", NK_TEXT_LEFT, MUTED);
+    nk_label_colored(ctx, tr("gui.always"), NK_TEXT_LEFT, MUTED);
   else if (!gui_schedule_valid(ui->queue_draft.schedule_start,
                                ui->queue_draft.schedule_stop))
-    nk_label_colored(ctx, "Use two different HH:MM times (00:00-23:59).",
+    nk_label_colored(ctx, tr("gui.use_two_different_hh_mm_times_00_00_23_59"),
                      NK_TEXT_LEFT, RED);
   else
-    nk_label_colored(ctx, "Active during this time window", NK_TEXT_LEFT,
+    nk_label_colored(ctx, tr("gui.active_during_this_time_window"), NK_TEXT_LEFT,
                      MUTED);
   static const char *actions[] = {"none", "shutdown", "sleep", "command"};
-  static const char *labels[] = {"None", "Shut down", "Sleep", "Run command"};
+  const char *labels[] = {tr("gui.none"), tr("gui.shut_down"), tr("gui.sleep"), tr("gui.run_command")};
   int selected = 0;
   for (int i = 1; i < 4; ++i)
     if (strcmp(ui->queue_draft.post_action, actions[i]) == 0)
       selected = i;
   nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
-  nk_label(ctx, "Post action", NK_TEXT_LEFT);
+  nk_label(ctx, tr("gui.post_action"), NK_TEXT_LEFT);
   nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
   if (nk_combo_begin_label(ctx, labels[selected], nk_vec2(400, 150))) {
     nk_layout_row_dynamic(ctx, THEME_ROW_ACTION, 1);
@@ -1516,14 +1540,14 @@ static void queue_fields(struct nk_context *ctx, UiState *ui) {
   nk_layout_row_dynamic(ctx, THEME_ROW_CAPTION, 1);
   if (selected && !config_post_action_enabled(actions[selected]))
     nk_label_colored(ctx,
-        "Enable this action under [post_actions] in config.toml.",
+        tr("gui.enable_this_action_under_post_actions_in_config_toml"),
         NK_TEXT_LEFT, MUTED);
   else
     nk_label_colored(ctx,
-        "Power and command actions need explicit config enablement.",
+        tr("gui.power_and_command_actions_need_explicit_config_enablement"),
         NK_TEXT_LEFT, MUTED);
   if (strcmp(ui->queue_draft.post_action, "command") == 0)
-    input_field(ctx, "Command (executable and arguments)",
+    input_field(ctx, tr("gui.command_executable_and_arguments"),
                 ui->queue_draft.post_action_arg,
                 sizeof(ui->queue_draft.post_action_arg));
 }
@@ -1533,7 +1557,7 @@ static void draw_queue_add(struct nk_context *ctx, UiState *ui, float width,
   float w = 520, h = height * .82f;
   if (h > 660)
     h = 660;
-  if (!modal_start(ctx, "queue-add", "Add queue", (width - w) / 2,
+  if (!modal_start(ctx, "queue-add", tr("gui.add_queue_title"), (width - w) / 2,
                    (height - h) / 2, w, h, &ui->queue_add_open)) {
     nk_end(ctx);
     return;
@@ -1545,9 +1569,9 @@ static void draw_queue_add(struct nk_context *ctx, UiState *ui, float width,
   }
   text_at(ctx, 20, h - 74, w - 40, 20, ui->error, 11, RED, SURFACE);
   fill(ctx, screen_rect(ctx, 0, h - 54, w, 1), 0, BORDER);
-  if (button(ctx, w - 230, h - 41, 80, 30, "Cancel", true, false))
+  if (button(ctx, w - 230, h - 41, 80, 30, tr("gui.cancel"), true, false))
     ui->queue_add_open = false;
-  if (button(ctx, w - 142, h - 41, 122, 30, "Add queue", true, true) &&
+  if (button(ctx, w - 142, h - 41, 122, 30, tr("gui.add_queue_title"), true, true) &&
       queue_draft_valid(ui)) {
     bool queued = gui_controller_enqueue_queue_create(&ui->queue_draft);
     report_enqueue(ui, queued);
@@ -1572,14 +1596,14 @@ static void draw_queues(struct nk_context *ctx, UiState *ui, float width,
   float priority_x = content * .33f, cap_x = content * .44f;
   float schedule_x = content * .56f, action_x = content * .74f;
   nk_layout_space_begin(ctx, NK_STATIC, THEME_ROW_BUTTON, 1);
-  text_at(ctx, 14, 0, 48, 30, "Order", 11, MUTED, BG);
-  text_at(ctx, 68, 0, priority_x - 72, 30, "Name", 11, MUTED, BG);
-  text_at(ctx, priority_x, 0, cap_x - priority_x, 30, "Priority", 11, MUTED,
+  text_at(ctx, 14, 0, 48, 30, tr("gui.order"), 11, MUTED, BG);
+  text_at(ctx, 68, 0, priority_x - 72, 30, tr("gui.name"), 11, MUTED, BG);
+  text_at(ctx, priority_x, 0, cap_x - priority_x, 30, tr("gui.priority"), 11, MUTED,
           BG);
-  text_at(ctx, cap_x, 0, schedule_x - cap_x, 30, "Max", 11, MUTED, BG);
-  text_at(ctx, schedule_x, 0, action_x - schedule_x, 30, "Schedule", 11,
+  text_at(ctx, cap_x, 0, schedule_x - cap_x, 30, tr("gui.max"), 11, MUTED, BG);
+  text_at(ctx, schedule_x, 0, action_x - schedule_x, 30, tr("gui.schedule"), 11,
           MUTED, BG);
-  text_at(ctx, action_x, 0, content - action_x - 120, 30, "Post action", 11,
+  text_at(ctx, action_x, 0, content - action_x - 120, 30, tr("gui.post_action"), 11,
           MUTED, BG);
   nk_layout_space_end(ctx);
   for (int i = 0; i < count; ++i) {
@@ -1587,7 +1611,7 @@ static void draw_queues(struct nk_context *ctx, UiState *ui, float width,
     nk_layout_space_begin(ctx, NK_STATIC, 56, 1);
     struct nk_rect row = screen_rect(ctx, 8, 1, content, 52);
     fill(ctx, row, 8, SURFACE);
-    button(ctx, 14, 12, 44, 30, "Drag", true, false);
+    button(ctx, 14, 12, 44, 30, tr("gui.drag"), true, false);
     struct nk_rect grip = screen_rect(ctx, 14, 12, 44, 30);
     if (nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT) &&
         nk_input_is_mouse_hovering_rect(&ctx->input, grip))
@@ -1635,12 +1659,12 @@ static void draw_queues(struct nk_context *ctx, UiState *ui, float width,
       if (written < 0 || (size_t)written >= sizeof(schedule))
         schedule[0] = '\0';
     } else
-      copy_text(schedule, sizeof(schedule), "Always");
+      copy_text(schedule, sizeof(schedule), tr("gui.always"));
     label(ctx, screen_rect(ctx, schedule_x, 10, action_x - schedule_x, 32),
           schedule, 12, MUTED, SURFACE);
     label(ctx, screen_rect(ctx, action_x, 10, content - action_x - 124, 32),
           queue->post_action, 12, MUTED, SURFACE);
-    if (button(ctx, content - 112, 12, 48, 30, "Edit", true, false)) {
+    if (button(ctx, content - 112, 12, 48, 30, tr("gui.edit"), true, false)) {
       ui->queue_edit_id = queue->id;
       ui->queue_draft = *queue;
       written = snprintf(ui->queue_priority, sizeof(ui->queue_priority), "%d",
@@ -1654,7 +1678,7 @@ static void draw_queues(struct nk_context *ctx, UiState *ui, float width,
     }
     if (queue->id == 1)
       text_at(ctx, content - 53, 12, 44, 30, "-", 12, DISABLED, SURFACE);
-    else if (button(ctx, content - 60, 12, 54, 30, "Delete", true, false)) {
+    else if (button(ctx, content - 60, 12, 54, 30, tr("gui.delete"), true, false)) {
       ui->queue_delete_id = queue->id;
       ui->queue_delete_open = true;
     }
@@ -1665,9 +1689,9 @@ static void draw_queues(struct nk_context *ctx, UiState *ui, float width,
       if (nk_group_begin(ctx, "queue-inline-edit", 0)) {
         queue_fields(ctx, ui);
         nk_layout_row_dynamic(ctx, THEME_ROW_BUTTON, 2);
-        if (nk_button_label(ctx, "Cancel"))
+        if (nk_button_label(ctx, tr("gui.cancel")))
           ui->queue_edit_id = 0;
-        if (nk_button_label(ctx, "Save") && queue_draft_valid(ui)) {
+        if (nk_button_label(ctx, tr("gui.save")) && queue_draft_valid(ui)) {
           bool queued = gui_controller_enqueue_queue_update(&ui->queue_draft);
           report_enqueue(ui, queued);
           if (queued)
@@ -1686,17 +1710,17 @@ static void draw_queues(struct nk_context *ctx, UiState *ui, float width,
 static void draw_queue_delete(struct nk_context *ctx, UiState *ui,
                               float width, float height) {
   float w = 480, h = 220;
-  if (!modal_start(ctx, "queue-delete", "Delete queue", (width - w) / 2,
+  if (!modal_start(ctx, "queue-delete", tr("gui.delete_queue"), (width - w) / 2,
                    (height - h) / 2, w, h, &ui->queue_delete_open)) {
     nk_end(ctx);
     return;
   }
   text_at(ctx, 20, 78, w - 40, 48,
-          "Downloads in this queue will move to Default.", 13, TEXT,
+          tr("gui.downloads_in_this_queue_will_move_to_default"), 13, TEXT,
           SURFACE);
-  if (button(ctx, w - 222, h - 43, 84, 30, "Cancel", true, false))
+  if (button(ctx, w - 222, h - 43, 84, 30, tr("gui.cancel"), true, false))
     ui->queue_delete_open = false;
-  if (button(ctx, w - 132, h - 43, 112, 30, "Delete", true, true)) {
+  if (button(ctx, w - 132, h - 43, 112, 30, tr("gui.delete"), true, true)) {
     bool queued = gui_controller_enqueue_queue_delete(ui->queue_delete_id);
     report_enqueue(ui, queued);
     if (queued)
@@ -1737,12 +1761,12 @@ static void draw_category_menu(struct nk_context *ctx, UiState *ui,
                      NK_WINDOW_NO_SCROLLBAR, bounds)) {
     nk_layout_space_begin(ctx, NK_STATIC, 76, 2);
     fill(ctx, screen_rect(ctx, 0, 0, 174, 76), 8, SURFACE2);
-    if (button(ctx, 5, 5, 164, 30, "Edit", true, false)) {
+    if (button(ctx, 5, 5, 164, 30, tr("gui.edit"), true, false)) {
       ui->category_draft = *selected;
       ui->category_edit_open = true;
       ui->category_menu_open = false;
     }
-    if (button(ctx, 5, 39, 164, 30, "Delete", true, false)) {
+    if (button(ctx, 5, 39, 164, 30, tr("gui.delete"), true, false)) {
       ui->category_delete_id = selected->id;
       ui->category_delete_open = true;
       ui->category_menu_open = false;
@@ -1760,7 +1784,7 @@ static void draw_category_edit(struct nk_context *ctx, UiState *ui,
                                float width, float height) {
   float w = 520, h = 360;
   if (!modal_start(ctx, "category-edit",
-                   ui->category_draft.id ? "Edit category" : "Add category",
+                   ui->category_draft.id ? tr("gui.edit_category") : tr("gui.add_category"),
                    (width - w) / 2, (height - h) / 2, w, h,
                    &ui->category_edit_open)) {
     nk_end(ctx);
@@ -1768,22 +1792,22 @@ static void draw_category_edit(struct nk_context *ctx, UiState *ui,
   }
   nk_layout_space_push(ctx, nk_rect(20, 65, w - 40, 220));
   if (nk_group_begin(ctx, "category-fields", 0)) {
-    input_field(ctx, "Name", ui->category_draft.name,
+    input_field(ctx, tr("gui.name"), ui->category_draft.name,
                 sizeof(ui->category_draft.name));
-    input_field(ctx, "Extensions (comma separated)",
+    input_field(ctx, tr("gui.extensions_comma_separated"),
                 ui->category_draft.extensions,
                 sizeof(ui->category_draft.extensions));
-    input_field(ctx, "Default directory (optional)",
+    input_field(ctx, tr("gui.default_directory_optional"),
                 ui->category_draft.default_dir,
                 sizeof(ui->category_draft.default_dir));
     nk_group_end(ctx);
   }
   text_at(ctx, 20, 283, w - 40, 24, ui->error, 11, RED, SURFACE);
-  if (button(ctx, w - 230, h - 42, 80, 30, "Cancel", true, false))
+  if (button(ctx, w - 230, h - 42, 80, 30, tr("gui.cancel"), true, false))
     ui->category_edit_open = false;
-  if (button(ctx, w - 142, h - 42, 122, 30, "Save", true, true)) {
+  if (button(ctx, w - 142, h - 42, 122, 30, tr("gui.save"), true, true)) {
     if (!ui->category_draft.name[0])
-      copy_text(ui->error, sizeof(ui->error), "Category name is required");
+      copy_text(ui->error, sizeof(ui->error), tr("gui.category_name_is_required"));
     else {
       bool queued = ui->category_draft.id
           ? gui_controller_enqueue_category_update(&ui->category_draft)
@@ -1799,18 +1823,18 @@ static void draw_category_edit(struct nk_context *ctx, UiState *ui,
 static void draw_category_delete(struct nk_context *ctx, UiState *ui,
                                  float width, float height) {
   float w = 480, h = 220;
-  if (!modal_start(ctx, "category-delete", "Delete category",
+  if (!modal_start(ctx, "category-delete", tr("gui.delete_category"),
                    (width - w) / 2, (height - h) / 2, w, h,
                    &ui->category_delete_open)) {
     nk_end(ctx);
     return;
   }
   text_at(ctx, 20, 78, w - 40, 48,
-          "Downloads in this category will move to Default.",
+          tr("gui.downloads_in_this_category_will_move_to_default"),
           13, TEXT, SURFACE);
-  if (button(ctx, w - 222, h - 43, 84, 30, "Cancel", true, false))
+  if (button(ctx, w - 222, h - 43, 84, 30, tr("gui.cancel"), true, false))
     ui->category_delete_open = false;
-  if (button(ctx, w - 132, h - 43, 112, 30, "Delete", true, true)) {
+  if (button(ctx, w - 132, h - 43, 112, 30, tr("gui.delete"), true, true)) {
     bool queued = gui_controller_enqueue_category_delete(ui->category_delete_id);
     report_enqueue(ui, queued);
     if (queued) {
@@ -1825,7 +1849,7 @@ static void draw_category_delete(struct nk_context *ctx, UiState *ui,
 static void draw_details(struct nk_context *ctx, UiState *ui, float width,
                          float height) {
   float w = 580, h = 390;
-  if (!modal_start(ctx, "details", "Download details", (width - w) / 2,
+  if (!modal_start(ctx, "details", tr("gui.download_details"), (width - w) / 2,
                    (height - h) / 2, w, h, &ui->details_open)) {
     nk_end(ctx);
     return;
@@ -1834,21 +1858,22 @@ static void draw_details(struct nk_context *ctx, UiState *ui, float width,
   if (nk_group_begin(ctx, "details-fields", 0)) {
     nk_layout_row_dynamic(ctx, THEME_ROW_CHOICE, 1);
     if (!ui->details_found)
-      nk_label(ctx, "Loading details...", NK_TEXT_LEFT);
+      nk_label(ctx, tr("gui.loading_details"), NK_TEXT_LEFT);
     else {
-      nk_labelf(ctx, NK_TEXT_LEFT, "ID %u  |  Speed limit: %llu bytes/sec",
-                ui->selected_id,
+      nk_labelf(ctx, NK_TEXT_LEFT, "ID %u  |  %s: %llu bytes/sec",
+                ui->selected_id, tr("gui.speed_limit"),
                 (unsigned long long)ui->details.speed_limit_bps);
-      nk_labelf_wrap(ctx, "Cookie: %s", ui->details.cookie);
-      nk_labelf_wrap(ctx, "Referrer: %s", ui->details.referrer);
-      nk_labelf_wrap(ctx, "Headers: %s", ui->details.extra_headers);
+      nk_labelf_wrap(ctx, "%s: %s", tr("gui.cookie"), ui->details.cookie);
+      nk_labelf_wrap(ctx, "%s: %s", tr("gui.referrer"), ui->details.referrer);
+      nk_labelf_wrap(ctx, "%s: %s", tr("gui.headers"),
+                      ui->details.extra_headers);
       nk_labelf_wrap(ctx, "SHA-256: %s", ui->details.expected_sha256);
     }
     nk_group_end(ctx);
   }
   text_at(ctx, 20, h - 56, w - 125, 36, ui->error, 11, STATUS_ERROR,
           SURFACE);
-  if (button(ctx, w - 100, h - 46, 80, 30, "Close", true, false))
+  if (button(ctx, w - 100, h - 46, 80, 30, tr("gui.close"), true, false))
     ui->details_open = false;
   modal_end(ctx);
 }
@@ -1856,21 +1881,21 @@ static void draw_details(struct nk_context *ctx, UiState *ui, float width,
 static void draw_delete_confirmation(struct nk_context *ctx, UiState *ui,
                                      float width, float height) {
   float w = 520, h = 230;
-  if (!modal_start(ctx, "delete-file", "Delete download file",
+  if (!modal_start(ctx, "delete-file", tr("gui.delete_download_file"),
                    (width - w) / 2, (height - h) / 2, w, h,
                    &ui->delete_confirm_open)) {
     nk_end(ctx);
     return;
   }
   text_at(ctx, 20, 76, w - 40, 22,
-          "Delete this download record and its file from disk?", 12, TEXT,
+          tr("gui.delete_this_download_record_and_its_file_from_disk"), 12, TEXT,
           SURFACE);
   text_at(ctx, 20, 111, w - 40, 22, ui->delete_confirm_path, 11, MUTED,
           SURFACE);
   fill(ctx, screen_rect(ctx, 0, h - 54, w, 1), 0, BORDER);
-  if (button(ctx, w - 232, h - 41, 80, 30, "Cancel", true, false))
+  if (button(ctx, w - 232, h - 41, 80, 30, tr("gui.cancel"), true, false))
     ui->delete_confirm_open = false;
-  if (button(ctx, w - 144, h - 41, 124, 30, "Delete file", true, true)) {
+  if (button(ctx, w - 144, h - 41, 124, 30, tr("gui.delete_file"), true, true)) {
     report_enqueue(ui, gui_controller_enqueue_remove(ui->delete_confirm_id,
                                                       true));
     ui->delete_confirm_open = false;
@@ -1887,16 +1912,16 @@ static void draw_toast(struct nk_context *ctx, UiState *ui, float width,
       nk_layout_space_begin(ctx, NK_STATIC, 116, 4);
       fill(ctx, screen_rect(ctx, 0, 0, 340, 116), 10, SURFACE2);
       outline(ctx, screen_rect(ctx, .5f, .5f, 339, 115), 10);
-      bold_at(ctx, 16, 12, 308, 20, "URL copied to clipboard", 13,
+      bold_at(ctx, 16, 12, 308, 20, tr("gui.url_copied_to_clipboard"), 13,
               ACCENT, SURFACE2);
       text_at(ctx, 16, 38, 308, 20, ui->clipboard_offer, 11, TEXT,
               SURFACE2);
-      if (button(ctx, 16, 74, 148, 30, "Review download", true, true)) {
+      if (button(ctx, 16, 74, 148, 30, tr("gui.browser.review"), true, true)) {
         copy_text(ui->url, sizeof(ui->url), ui->clipboard_offer);
         ui->add_open = true;
         ui->clipboard_offer_open = false;
       }
-      if (button(ctx, 176, 74, 148, 30, "Dismiss", true, false))
+      if (button(ctx, 176, 74, 148, 30, tr("gui.dismiss"), true, false))
         ui->clipboard_offer_open = false;
       nk_layout_space_end(ctx);
     }
@@ -1907,10 +1932,10 @@ static void draw_toast(struct nk_context *ctx, UiState *ui, float width,
                  nk_rect(width - 300, height - 100, 280, 80),
                  NK_WINDOW_NO_SCROLLBAR)) {
       nk_layout_row_dynamic(ctx, THEME_ROW_TEXT, 1);
-      nk_labelf(ctx, NK_TEXT_LEFT, "Already downloading (ID %u)",
-                ui->duplicate_id);
+      nk_labelf(ctx, NK_TEXT_LEFT, "%s (ID %u)",
+                tr("gui.already_downloading"), ui->duplicate_id);
       nk_layout_row_dynamic(ctx, THEME_ROW_SECTION, 1);
-      if (nk_button_label(ctx, "Close"))
+      if (nk_button_label(ctx, tr("gui.close")))
         ui->duplicate_toast_open = false;
     }
     nk_end(ctx);
@@ -1923,7 +1948,7 @@ static void draw_toast(struct nk_context *ctx, UiState *ui, float width,
     nk_layout_space_begin(ctx, NK_STATIC, 150, 4);
     fill(ctx, screen_rect(ctx, 0, 0, 280, 150), 10, SURFACE2);
     outline(ctx, screen_rect(ctx, .5f, .5f, 279, 149), 10);
-    bold_at(ctx, 16, 14, 220, 20, "Download complete", 13, GREEN, SURFACE2);
+    bold_at(ctx, 16, 14, 220, 20, tr("gui.download_complete"), 13, GREEN, SURFACE2);
     if (close_button(ctx, 240, 10))
       ui->toast_open = false;
     text_at(ctx, 16, 42, 248, 18, filename_for_row(&ui->toast), 13, TEXT,
@@ -1934,9 +1959,9 @@ static void draw_toast(struct nk_context *ctx, UiState *ui, float width,
     if (slash)
       directory[slash == directory ? 1 : (size_t)(slash - directory)] = '\0';
     text_at(ctx, 16, 64, 248, 18, directory, 11, MUTED, SURFACE2);
-    if (button(ctx, 16, 100, 120, 30, "Open", true, true))
+    if (button(ctx, 16, 100, 120, 30, tr("gui.open"), true, true))
       open_path(ui, ui->toast.dest_path, false);
-    if (button(ctx, 144, 100, 120, 30, "Open folder", true, false))
+    if (button(ctx, 144, 100, 120, 30, tr("gui.open_folder"), true, false))
       open_path(ui, ui->toast.dest_path, true);
     nk_layout_space_end(ctx);
   }
@@ -2069,13 +2094,13 @@ static void consume_events(UiState *ui) {
 
 int run_gui(void) {
   if (!gui_client_connect()) {
-    fprintf(stderr, "Cannot connect to daemon.\n");
+    fprintf(stderr, "%s\n", tr("gui.cannot_connect_to_daemon"));
     return 1;
   }
   gui_model_init();
   GuiSdlBackendConfig config = {.width = 1100,
                                 .height = 720,
-                                .title = "Core Download Manager",
+                                .title = tr("gui.core_download_manager"),
                                 .font_size = 13};
   GuiSdlBackend *backend = gui_sdl_backend_create(&config);
   if (!backend) {

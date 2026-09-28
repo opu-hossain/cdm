@@ -23,6 +23,7 @@
 
 #include "../utils/log.h"
 #include "gui_backend_sdl.h"
+#include "../utils/i18n.h"
 
 #define GUI_SDL_MAX_VERTEX_MEMORY (512 * 1024)
 #define GUI_SDL_MAX_ELEMENT_MEMORY (128 * 1024)
@@ -65,7 +66,7 @@ GuiSdlBackend *gui_sdl_backend_create(const GuiSdlBackendConfig *config) {
     goto fail;
 
   backend->window = SDL_CreateWindow(
-      config->title ? config->title : "Core Download Manager",
+      config->title ? config->title : tr("gui.core_download_manager"),
       SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
       config->width > 0 ? config->width : 1100,
       config->height > 0 ? config->height : 720,

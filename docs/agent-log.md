@@ -1102,3 +1102,10 @@ Completed: user-approved i18n/test scope; routed CLI help, diagnostics and statu
 Verification: test-first missing fallback, then i18n/CLI focused tests and full Debug CTest 41/41 pass. All CLI keys have fallbacks.
 Open questions: composed CLI fragments keep English word order; locale review should address reordered placeholders.
 Next: 5.3.2 GUI string extraction. No push.
+
+## 2026-09-28 — Codex, task 5.3.2 (GUI)
+Branch: `cdm`; commit: `refactor(gui): route user-facing strings through tr`.
+Completed: routed main window, browser popup, controller errors and window title through stable GUI keys with 215 built-in English fallbacks; kept protocol values and widget IDs literal.
+Verification: test-first fallback failure, catalog override and focused GUI/i18n tests pass; full Debug CTest 41/41 pass. GUI visual smoke unavailable without a display server.
+Open questions: formatted fragments retain English word order; locale review may need named placeholders.
+Next: 5.3.2 native-host string extraction. No push.

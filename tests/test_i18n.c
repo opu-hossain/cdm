@@ -14,12 +14,14 @@ Test(i18n, quoted_dotted_keys_load_once_and_fall_back) {
   cr_assert_not_null(file);
   fputs("\"settings.title\" = \"Settings\"\n"
         "\"download.done\" = \"Finished\"\n"
+        "\"gui.settings.title\" = \"Preferencias\"\n"
         "\"cli.usage.main\" = \"Translated usage\"\n", file);
   cr_assert_eq(fclose(file), 0);
   cr_assert_str_eq(tr("settings.title"), "settings.title");
   cr_assert(tr_load_catalog(path));
   cr_assert_str_eq(tr("settings.title"), "Settings");
   cr_assert_str_eq(tr("download.done"), "Finished");
+  cr_assert_str_eq(tr("gui.settings.title"), "Preferencias");
   cr_assert_str_eq(tr("cli.usage.main"), "Translated usage");
   char log_path[] = "/tmp/cdm-i18n-log-XXXXXX";
   int log_fd = mkstemp(log_path);
@@ -46,6 +48,11 @@ Test(i18n, quoted_dotted_keys_load_once_and_fall_back) {
 Test(i18n, builtin_cli_english_is_available_without_a_catalog) {
   cr_assert_str_eq(tr("cli.usage.main"),
                    "Usage: cdm cli <command> [args...]");
+}
+
+Test(i18n, builtin_gui_english_is_available_without_a_catalog) {
+  cr_assert_str_eq(tr("gui.settings.title"), "Settings");
+  cr_assert_str_eq(tr("gui.browser.review"), "Review download");
 }
 
 Test(i18n, rejects_non_string_values_without_publishing) {

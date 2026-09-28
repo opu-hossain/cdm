@@ -290,3 +290,11 @@ A supplied checksum applies to the final primary file (merged when available).
 TODO(platform): secure DASH staging/publication needs a Windows implementation.
 The static parser restrictions from 4.3.1 also apply to the downloader; companion
 path display in the GUI/CLI and crash-orphan staging discovery remain future work.
+
+## Task 5.3.2 — Formatted translation order
+
+CLI and GUI keep fixed C format strings and translate fragments around dynamic
+values, so a locale cannot reorder values within a sentence. Should a later
+i18n task add named placeholders with checked substitution before translating
+such messages? The current extraction leaves these formats in their English
+word order while avoiding catalog-controlled printf formats.
