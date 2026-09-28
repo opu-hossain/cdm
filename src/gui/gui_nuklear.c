@@ -23,6 +23,7 @@
 #define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
 #define NK_INCLUDE_FONT_BAKING
 #include "nuklear.h"
+#include "theme.h"
 
 #define GUI_URL_CAP 2048
 #define GUI_FOLDER_CAP 1024
@@ -32,20 +33,6 @@
 
 typedef enum { TAB_ALL, TAB_DOWNLOADING, TAB_COMPLETED, TAB_QUEUES } GuiTab;
 
-/* Exact tokens from docs/ui/mockup.html. */
-static const struct nk_color BG = {11, 15, 20, 255};
-static const struct nk_color SURFACE = {17, 23, 34, 255};
-static const struct nk_color SURFACE2 = {22, 30, 44, 255};
-static const struct nk_color BORDER = {35, 45, 61, 255};
-static const struct nk_color TEXT = {232, 236, 241, 255};
-static const struct nk_color MUTED = {124, 138, 157, 255};
-static const struct nk_color ACCENT = {61, 157, 207, 255};
-static const struct nk_color ACCENT_DIM = {31, 92, 128, 255};
-static const struct nk_color GREEN = {63, 143, 95, 255};
-static const struct nk_color RED = {163, 68, 72, 255};
-static const struct nk_color AMBER = {184, 130, 63, 255};
-static const struct nk_color WHITE = {255, 255, 255, 255};
-static const struct nk_color DISABLED = {80, 93, 111, 255};
 static const struct nk_user_font *bold_fonts[6];
 static const struct nk_user_font *fonts[6]; /* 11 through 16 px */
 
@@ -215,47 +202,6 @@ static bool row_matches(const UiState *ui, const GuiRow *row) {
          contains_case_insensitive(row->dest_path, ui->search);
 }
 
-static void apply_theme(struct nk_context *ctx) {
-  struct nk_color colors[NK_COLOR_COUNT];
-  for (int i = 0; i < NK_COLOR_COUNT; ++i)
-    colors[i] = SURFACE2;
-  colors[NK_COLOR_TEXT] = TEXT;
-  colors[NK_COLOR_WINDOW] = BG;
-  colors[NK_COLOR_HEADER] = SURFACE;
-  colors[NK_COLOR_BORDER] = BORDER;
-  colors[NK_COLOR_BUTTON] = SURFACE2;
-  colors[NK_COLOR_BUTTON_HOVER] = BORDER;
-  colors[NK_COLOR_BUTTON_ACTIVE] = ACCENT_DIM;
-  colors[NK_COLOR_EDIT] = BG;
-  colors[NK_COLOR_EDIT_CURSOR] = TEXT;
-  colors[NK_COLOR_PROPERTY] = BG;
-  colors[NK_COLOR_SELECT_ACTIVE] = ACCENT_DIM;
-  colors[NK_COLOR_TOGGLE_CURSOR] = ACCENT;
-  colors[NK_COLOR_SCROLLBAR] = BG;
-  colors[NK_COLOR_SCROLLBAR_CURSOR] = BORDER;
-  colors[NK_COLOR_SCROLLBAR_CURSOR_HOVER] = MUTED;
-  colors[NK_COLOR_SCROLLBAR_CURSOR_ACTIVE] = ACCENT;
-  nk_style_from_table(ctx, colors);
-  ctx->style.window.padding = nk_vec2(0, 0);
-  ctx->style.window.group_padding = nk_vec2(0, 0);
-  ctx->style.window.spacing = nk_vec2(0, 0);
-  ctx->style.window.border = 0;
-  ctx->style.window.group_border = 0;
-  ctx->style.window.popup_padding = nk_vec2(0, 0);
-  ctx->style.window.popup_border = 0;
-  ctx->style.window.scrollbar_size = nk_vec2(5, 5);
-  ctx->style.button.rounding = 7;
-  ctx->style.button.padding = nk_vec2(7, 4);
-  ctx->style.button.border = 0;
-  ctx->style.edit.rounding = 7;
-  ctx->style.edit.padding = nk_vec2(10, 8);
-  ctx->style.edit.border = 1;
-  ctx->style.edit.cursor_size = 1.5f;
-  ctx->style.property.rounding = 7;
-  ctx->style.property.border = 1;
-  ctx->style.property.padding = nk_vec2(10, 8);
-}
-
 static struct nk_rect screen_rect(struct nk_context *ctx, float x, float y,
                                   float w, float h) {
   return nk_layout_space_rect_to_screen(ctx, nk_rect(x, y, w, h));
@@ -315,7 +261,7 @@ static bool button(struct nk_context *ctx, float x, float y, float w, float h,
                    const char *text, bool enabled, bool primary) {
   struct nk_style_button style = ctx->style.button;
   style.normal = nk_style_item_color(primary ? ACCENT : SURFACE2);
-  style.hover = nk_style_item_color(primary ? nk_rgb(75, 171, 224) : BORDER);
+  style.hover = nk_style_item_color(primary ? ACCENT_HOVER : BORDER);
   style.active = nk_style_item_color(ACCENT_DIM);
   style.text_normal = style.text_hover = style.text_active =
       enabled ? (primary ? WHITE : TEXT) : DISABLED;
@@ -678,17 +624,17 @@ static void file_chip(const char *filename, char ext[5],
   copy_text(ext, 5, dot && dot[1] ? dot + 1 : "FILE");
   for (char *p = ext; *p; ++p)
     *p = (char)toupper((unsigned char)*p);
-  *color = nk_rgb(61, 127, 176);
+  *color = STATUS_BLUE;
   if (!strcmp(ext, "ZIP") || !strcmp(ext, "GZ") || !strcmp(ext, "7Z") ||
       !strcmp(ext, "TAR"))
-    *color = nk_rgb(122, 95, 176);
+    *color = STATUS_PURPLE;
   else if (!strcmp(ext, "MP4") || !strcmp(ext, "MKV") || !strcmp(ext, "WEBM") ||
            !strcmp(ext, "MP3"))
-    *color = nk_rgb(192, 85, 63);
+    *color = STATUS_ORANGE;
   else if (!strcmp(ext, "EXE") || !strcmp(ext, "APPI"))
-    *color = nk_rgb(63, 143, 111);
+    *color = STATUS_GREEN;
   else if (!strcmp(ext, "PNG") || !strcmp(ext, "JPG") || !strcmp(ext, "JPEG"))
-    *color = nk_rgb(176, 135, 61);
+    *color = STATUS_GOLD;
 }
 
 static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
@@ -699,10 +645,10 @@ static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
   if (!nk_group_begin(ctx, "downloads", 0))
     return;
   nk_layout_set_min_row_height(ctx, 0);
-  nk_layout_row_dynamic(ctx, 8, 1);
+  nk_layout_row_dynamic(ctx, THEME_ROW_TIGHT_SPACER, 1);
   nk_label(ctx, "", NK_TEXT_LEFT);
   if (!count && !ui->history_loading) {
-    nk_layout_row_dynamic(ctx, 100, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_PREVIEW, 1);
     nk_label_colored(ctx, "Your download queue is empty", NK_TEXT_CENTERED,
                      MUTED);
   }
@@ -770,9 +716,9 @@ static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
         : (is_status(row, "ERROR") || is_status(row, "CANCELED")) ? RED
                                                                   : ACCENT;
     struct nk_color ink =
-        is_status(row, "DONE") ? nk_rgb(111, 189, 140)
+        is_status(row, "DONE") ? STATUS_DONE
         : (is_status(row, "ERROR") || is_status(row, "CANCELED"))
-            ? nk_rgb(224, 132, 136)
+            ? STATUS_ERROR
             : pill;
     struct nk_color tint = nk_rgb((int)(pill.r * .18f + bg.r * .82f),
                                   (int)(pill.g * .18f + bg.g * .82f),
@@ -817,7 +763,7 @@ static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
   bool all_history = ui->category == 0 && ui->tab == TAB_ALL &&
                      ui->search[0] == '\0';
   if (all_history && ui->history_loading) {
-    nk_layout_row_dynamic(ctx, 28, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_SECTION, 1);
     nk_label_colored(ctx, "Loading more downloads...", NK_TEXT_CENTERED,
                      MUTED);
     content_height += 28;
@@ -963,12 +909,12 @@ static void draw_menu(struct nk_context *ctx, UiState *ui, GuiRow *rows,
 
 static void number_field(struct nk_context *ctx, const char *label_text,
                          char *buffer) {
-  nk_layout_row_dynamic(ctx, 24, 1);
+  nk_layout_row_dynamic(ctx, THEME_ROW_TEXT, 1);
   nk_label(ctx, label_text, NK_TEXT_LEFT);
-  nk_layout_row_dynamic(ctx, 36, 1);
+  nk_layout_row_dynamic(ctx, THEME_ROW_DETAIL, 1);
   nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, buffer, 16,
                                  nk_filter_decimal);
-  nk_layout_row_dynamic(ctx, 12, 1);
+  nk_layout_row_dynamic(ctx, THEME_ROW_WIDE_SPACER, 1);
   nk_label(ctx, "", NK_TEXT_LEFT);
 }
 
@@ -991,7 +937,7 @@ static bool close_button(struct nk_context *ctx, float x, float y) {
 }
 
 static void section(struct nk_context *ctx, const char *text) {
-  nk_layout_row_dynamic(ctx, 28, 1);
+  nk_layout_row_dynamic(ctx, THEME_ROW_SECTION, 1);
   nk_style_push_font(ctx, fonts[0]);
   nk_label_colored(ctx, text, NK_TEXT_LEFT, MUTED);
   nk_style_pop_font(ctx);
@@ -999,10 +945,10 @@ static void section(struct nk_context *ctx, const char *text) {
 
 static void modal_backdrop(struct nk_context *ctx, float width, float height) {
   nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
-                           nk_style_item_color(nk_rgba(0, 0, 0, 0)));
+                           nk_style_item_color(MODAL_CLEAR));
   if (nk_begin(ctx, "modal-backdrop", nk_rect(0, 0, width, height),
                NK_WINDOW_NO_SCROLLBAR | NK_WINDOW_NO_INPUT))
-    fill(ctx, nk_rect(0, 0, width, height), 0, nk_rgba(4, 6, 9, 140));
+    fill(ctx, nk_rect(0, 0, width, height), 0, MODAL_SHADE);
   nk_end(ctx);
   nk_style_pop_style_item(ctx);
 }
@@ -1094,19 +1040,19 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
   if (nk_group_begin(ctx, "settings-fields", 0)) {
     section(ctx, "GENERAL");
     nk_bool monitor = ui->clipboard_monitor;
-    nk_layout_row_dynamic(ctx, 28, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_SECTION, 1);
     nk_checkbox_label(ctx, "Monitor clipboard for URLs", &monitor);
     ui->clipboard_monitor = monitor;
-    nk_layout_row_dynamic(ctx, 20, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_CAPTION, 1);
     nk_label_colored(ctx, "Ask before adding a copied URL.", NK_TEXT_LEFT,
                      MUTED);
-    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
     nk_label(ctx, "Default download directory", NK_TEXT_LEFT);
-    nk_layout_row_begin(ctx, NK_STATIC, 34, 3);
+    nk_layout_row_begin(ctx, NK_STATIC, THEME_ROW_INPUT, 3);
     nk_layout_row_push(ctx, 312);
     nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->directory,
                                    sizeof(ui->directory), NULL);
-    nk_layout_row_push(ctx, 8);
+    nk_layout_row_push(ctx, THEME_COLUMN_GAP);
     nk_spacing(ctx, 1);
     nk_layout_row_push(ctx, 90);
     if (nk_button_label(ctx, "Browse")) {
@@ -1116,22 +1062,22 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
         copy_text(ui->directory, sizeof(ui->directory), chosen);
     }
     nk_layout_row_end(ctx);
-    nk_layout_row_dynamic(ctx, 12, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_WIDE_SPACER, 1);
     nk_label(ctx, "", NK_TEXT_LEFT);
     number_field(ctx, "Maximum concurrent downloads", ui->numbers[0]);
     section(ctx, "CONNECTIONS");
     number_field(ctx, "Connections per download (1-16)", ui->numbers[6]);
     number_field(ctx, "Connect timeout (seconds)", ui->numbers[7]);
     number_field(ctx, "Transfer timeout (seconds)", ui->numbers[8]);
-    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
     nk_label(ctx, "User-Agent", NK_TEXT_LEFT);
-    nk_layout_row_dynamic(ctx, 34, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
     nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->user_agent,
                                    sizeof(ui->user_agent), NULL);
     if (!ui->user_agent[0]) {
       DownloadManagerConfig current;
       config_get(&current);
-      nk_layout_row_dynamic(ctx, 20, 1);
+      nk_layout_row_dynamic(ctx, THEME_ROW_CAPTION, 1);
       nk_labelf_colored(ctx, NK_TEXT_LEFT, MUTED, "Current: %s",
                         current.user_agent);
     }
@@ -1142,19 +1088,19 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     section(ctx, "BANDWIDTH");
     number_field(ctx, "Global speed limit (bytes/sec, 0 = unlimited)",
                  ui->numbers[4]);
-    nk_layout_row_dynamic(ctx, 20, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_CAPTION, 1);
     nk_label_colored(ctx, "0 disables the limit entirely.", NK_TEXT_LEFT,
                      MUTED);
     section(ctx, "PROXY");
-    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
     nk_label(ctx, "Mode", NK_TEXT_LEFT);
-    nk_layout_row_dynamic(ctx, 34, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
     const char *modes[] = {"None", "HTTP", "SOCKS5"};
     ui->proxy_mode = (ProxyMode)nk_combo(ctx, modes, 3, ui->proxy_mode, 30,
                                          nk_vec2(400, 110));
-    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
     nk_label(ctx, "Proxy URL", NK_TEXT_LEFT);
-    nk_layout_row_dynamic(ctx, 34, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
     nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->proxy_url,
                                    sizeof(ui->proxy_url), NULL);
     const char *scheme = strstr(ui->proxy_url, "://");
@@ -1162,18 +1108,18 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
                    (scheme && scheme != ui->proxy_url && scheme[3] &&
                     scheme[3] != ':' && scheme[3] != '/');
     if (!proxy_url_ok) {
-      nk_layout_row_dynamic(ctx, 22, 1);
+      nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
       nk_label_colored(ctx, "Enter a proxy URL with scheme and host.",
                        NK_TEXT_LEFT, RED);
     }
-    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
     nk_label(ctx, "Username", NK_TEXT_LEFT);
-    nk_layout_row_dynamic(ctx, 34, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
     nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->proxy_username,
                                    sizeof(ui->proxy_username), NULL);
-    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
     nk_label(ctx, "Password", NK_TEXT_LEFT);
-    nk_layout_row_dynamic(ctx, 34, 2);
+    nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 2);
     if (nk_button_label(ctx, ui->proxy_password[0] ? "Change password..."
                                                   : "Set password...")) {
       char *value = tinyfd_inputBox("Proxy password", "Enter proxy password",
@@ -1184,11 +1130,11 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     if (nk_button_label(ctx, "Clear password"))
       ui->proxy_password[0] = '\0';
     section(ctx, "IMPORT / EXPORT");
-    nk_layout_space_begin(ctx, NK_STATIC, 34, 1);
+    nk_layout_space_begin(ctx, NK_STATIC, THEME_ROW_INPUT, 1);
     if (button(ctx, 0, 0, 390, 32, "Export settings and history...", true, false))
       settings_transfer(ui, false, false);
     nk_layout_space_end(ctx);
-    nk_layout_space_begin(ctx, NK_STATIC, 34, 2);
+    nk_layout_space_begin(ctx, NK_STATIC, THEME_ROW_INPUT, 2);
     if (button(ctx, 0, 0, 190, 32, "Import missing...", true, false))
       settings_transfer(ui, true, false);
     if (button(ctx, 200, 0, 190, 32, "Replace from file...", true, false))
@@ -1198,7 +1144,7 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
   }
   nk_style_pop_style_item(ctx);
   text_at(ctx, 20, h - 80, w - 40, 24, ui->settings_message, 11,
-          nk_rgb(224, 132, 136), SURFACE);
+          STATUS_ERROR, SURFACE);
   fill(ctx, screen_rect(ctx, 0, h - 60, w, 1), 0, BORDER);
   if (button(ctx, w - 232, h - 46, 80, 32, "Cancel", true, false))
     ui->settings_open = false;
@@ -1254,11 +1200,11 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
 
 static void input_field(struct nk_context *ctx, const char *name, char *buffer,
                         int size) {
-  nk_layout_row_dynamic(ctx, 22, 1);
+  nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
   nk_label(ctx, name, NK_TEXT_LEFT);
-  nk_layout_row_dynamic(ctx, 34, 1);
+  nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
   nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, buffer, size, NULL);
-  nk_layout_row_dynamic(ctx, 10, 1);
+  nk_layout_row_dynamic(ctx, THEME_ROW_SPACER, 1);
   nk_label(ctx, "", NK_TEXT_LEFT);
 }
 
@@ -1277,14 +1223,14 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
                            nk_style_item_color(SURFACE));
   if (nk_group_begin(ctx, "add-fields", 0)) {
     input_field(ctx, "URL", ui->url, sizeof(ui->url));
-    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
     nk_label(ctx, "Save to", NK_TEXT_LEFT);
-    nk_layout_row_begin(ctx, NK_STATIC, 34, 3);
+    nk_layout_row_begin(ctx, NK_STATIC, THEME_ROW_INPUT, 3);
     nk_layout_row_push(ctx, 342);
     if (nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, ui->folder,
                                        sizeof(ui->folder), NULL) & NK_EDIT_ACTIVE)
       ui->folder_explicit = true;
-    nk_layout_row_push(ctx, 8);
+    nk_layout_row_push(ctx, THEME_COLUMN_GAP);
     nk_spacing(ctx, 1);
     nk_layout_row_push(ctx, 120);
     if (nk_button_label(ctx, "Choose folder")) {
@@ -1296,9 +1242,9 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
         ui->folder_explicit = true;
     }
     nk_layout_row_end(ctx);
-    nk_layout_row_dynamic(ctx, 12, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_WIDE_SPACER, 1);
     nk_label(ctx, "", NK_TEXT_LEFT);
-    nk_layout_row_dynamic(ctx, 28, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_SECTION, 1);
     if (nk_button_label(ctx, ui->advanced ? "- Advanced options"
                                           : "+ Advanced options"))
       ui->advanced = !ui->advanced;
@@ -1317,9 +1263,9 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
           selected = i;
       }
       if (queue_count > 0) {
-        nk_layout_row_dynamic(ctx, 24, 1);
+        nk_layout_row_dynamic(ctx, THEME_ROW_TEXT, 1);
         nk_label(ctx, "Queue", NK_TEXT_LEFT);
-        nk_layout_row_dynamic(ctx, 32, 1);
+        nk_layout_row_dynamic(ctx, THEME_ROW_BUTTON, 1);
         selected = nk_combo(ctx, names, queue_count, selected, 30,
                             nk_vec2(260, 240));
         ui->add_queue_id = queues[selected].id;
@@ -1330,7 +1276,7 @@ static void draw_add(struct nk_context *ctx, UiState *ui, float width,
     nk_group_end(ctx);
   }
   nk_style_pop_style_item(ctx);
-  text_at(ctx, 20, h - 76, w - 40, 22, ui->error, 11, nk_rgb(224, 132, 136),
+  text_at(ctx, 20, h - 76, w - 40, 22, ui->error, 11, STATUS_ERROR,
           SURFACE);
   fill(ctx, screen_rect(ctx, 0, h - 54, w, 1), 0, BORDER);
   if (button(ctx, 20, h - 41, 200, 30, "Paste multiple URLs", true,
@@ -1491,7 +1437,7 @@ static void queue_fields(struct nk_context *ctx, UiState *ui) {
               sizeof(ui->queue_draft.schedule_start));
   input_field(ctx, "Schedule stop (HH:MM)", ui->queue_draft.schedule_stop,
               sizeof(ui->queue_draft.schedule_stop));
-  nk_layout_row_dynamic(ctx, 20, 1);
+  nk_layout_row_dynamic(ctx, THEME_ROW_CAPTION, 1);
   if (!ui->queue_draft.schedule_start[0] &&
       !ui->queue_draft.schedule_stop[0])
     nk_label_colored(ctx, "Always", NK_TEXT_LEFT, MUTED);
@@ -1508,11 +1454,11 @@ static void queue_fields(struct nk_context *ctx, UiState *ui) {
   for (int i = 1; i < 4; ++i)
     if (strcmp(ui->queue_draft.post_action, actions[i]) == 0)
       selected = i;
-  nk_layout_row_dynamic(ctx, 22, 1);
+  nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
   nk_label(ctx, "Post action", NK_TEXT_LEFT);
-  nk_layout_row_dynamic(ctx, 34, 1);
+  nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
   if (nk_combo_begin_label(ctx, labels[selected], nk_vec2(400, 150))) {
-    nk_layout_row_dynamic(ctx, 30, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_ACTION, 1);
     for (int i = 0; i < 4; ++i) {
       bool enabled = i == 0 || config_post_action_enabled(actions[i]);
       if (!enabled)
@@ -1528,7 +1474,7 @@ static void queue_fields(struct nk_context *ctx, UiState *ui) {
     }
     nk_combo_end(ctx);
   }
-  nk_layout_row_dynamic(ctx, 20, 1);
+  nk_layout_row_dynamic(ctx, THEME_ROW_CAPTION, 1);
   if (selected && !config_post_action_enabled(actions[selected]))
     nk_label_colored(ctx,
         "Enable this action under [post_actions] in config.toml.",
@@ -1586,7 +1532,7 @@ static void draw_queues(struct nk_context *ctx, UiState *ui, float width,
   float content = width - 236;
   float priority_x = content * .33f, cap_x = content * .44f;
   float schedule_x = content * .56f, action_x = content * .74f;
-  nk_layout_space_begin(ctx, NK_STATIC, 32, 1);
+  nk_layout_space_begin(ctx, NK_STATIC, THEME_ROW_BUTTON, 1);
   text_at(ctx, 14, 0, 48, 30, "Order", 11, MUTED, BG);
   text_at(ctx, 68, 0, priority_x - 72, 30, "Name", 11, MUTED, BG);
   text_at(ctx, priority_x, 0, cap_x - priority_x, 30, "Priority", 11, MUTED,
@@ -1679,7 +1625,7 @@ static void draw_queues(struct nk_context *ctx, UiState *ui, float width,
       nk_layout_space_push(ctx, nk_rect(14, 0, content - 28, 490));
       if (nk_group_begin(ctx, "queue-inline-edit", 0)) {
         queue_fields(ctx, ui);
-        nk_layout_row_dynamic(ctx, 32, 2);
+        nk_layout_row_dynamic(ctx, THEME_ROW_BUTTON, 2);
         if (nk_button_label(ctx, "Cancel"))
           ui->queue_edit_id = 0;
         if (nk_button_label(ctx, "Save") && queue_draft_valid(ui)) {
@@ -1847,7 +1793,7 @@ static void draw_details(struct nk_context *ctx, UiState *ui, float width,
   }
   nk_layout_space_push(ctx, nk_rect(20, 74, w - 40, h - 130));
   if (nk_group_begin(ctx, "details-fields", 0)) {
-    nk_layout_row_dynamic(ctx, 26, 1);
+    nk_layout_row_dynamic(ctx, THEME_ROW_CHOICE, 1);
     if (!ui->details_found)
       nk_label(ctx, "Loading details...", NK_TEXT_LEFT);
     else {
@@ -1861,7 +1807,7 @@ static void draw_details(struct nk_context *ctx, UiState *ui, float width,
     }
     nk_group_end(ctx);
   }
-  text_at(ctx, 20, h - 56, w - 125, 36, ui->error, 11, nk_rgb(224, 132, 136),
+  text_at(ctx, 20, h - 56, w - 125, 36, ui->error, 11, STATUS_ERROR,
           SURFACE);
   if (button(ctx, w - 100, h - 46, 80, 30, "Close", true, false))
     ui->details_open = false;
@@ -1921,10 +1867,10 @@ static void draw_toast(struct nk_context *ctx, UiState *ui, float width,
     if (nk_begin(ctx, "duplicate-toast",
                  nk_rect(width - 300, height - 100, 280, 80),
                  NK_WINDOW_NO_SCROLLBAR)) {
-      nk_layout_row_dynamic(ctx, 24, 1);
+      nk_layout_row_dynamic(ctx, THEME_ROW_TEXT, 1);
       nk_labelf(ctx, NK_TEXT_LEFT, "Already downloading (ID %u)",
                 ui->duplicate_id);
-      nk_layout_row_dynamic(ctx, 28, 1);
+      nk_layout_row_dynamic(ctx, THEME_ROW_SECTION, 1);
       if (nk_button_label(ctx, "Close"))
         ui->duplicate_toast_open = false;
     }
@@ -2102,7 +2048,7 @@ int run_gui(void) {
     fonts[i] = gui_sdl_backend_font(backend, 11 + i);
     bold_fonts[i] = gui_sdl_backend_bold_font(backend, 11 + i);
   }
-  apply_theme(ctx);
+  theme_apply(ctx, THEME_DEFAULT);
   if (!gui_controller_start()) {
     gui_sdl_backend_destroy(backend);
     gui_client_disconnect();
@@ -2200,7 +2146,7 @@ int run_gui(void) {
       }
       if (ui.error[0]) {
         text_at(ctx, 236, height - 34, width - 290, 32, ui.error, 12,
-                nk_rgb(224, 132, 136), BG);
+                STATUS_ERROR, BG);
         if (close_button(ctx, width - 42, height - 31))
           ui.error[0] = '\0';
       }

@@ -1067,3 +1067,10 @@ Completed: Settings dialog now offers secret-free JSON export, merge import and 
 Verification: GUI compiles; targeted GUI/config/import CTest and full Debug CTest 40/40 pass. Interactive GUI smoke is unavailable without a display server.
 Open questions: none for this task; phase gates remain open.
 Next: 5.2.1 theme extraction. No push.
+
+## 2026-09-28 — Codex, task 5.2.1
+Branch: `cdm`; commit: `refactor(gui): extract theme constants into theme.c`.
+Completed: moved existing palette, literal status colors, Nuklear style and standard row spacing into theme.c/theme.h; added `theme_apply()` and user-approved CMake wiring.
+Verification: checked all 13 original palette values and 18 style assignments against HEAD; build and full Debug CTest 40/40 pass. Screenshot comparison is unverified because no display server is available.
+Open questions: desktop visual comparison remains for a later gate.
+Next: 5.2.2 dark theme. No push.
