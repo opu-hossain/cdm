@@ -3,6 +3,7 @@
 
 #include "cli.h"
 
+#include "../persistence/export.h"
 #include "../platform/ipc_socket.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
@@ -206,6 +207,38 @@ static int run_list(int sock, uint16_t daemon_version, int argc, char **argv) {
   return result;
 }
 
+static int run_export(int sock, uint16_t daemon_version, int argc,
+                      char **argv) {
+  const char *destination = NULL;
+  bool history = false, secrets = false;
+  for (int i = 2; i < argc; i++) {
+    if (strcmp(argv[i], "--out") == 0 && i + 1 < argc && !destination)
+      destination = argv[++i];
+    else if (strcmp(argv[i], "--include-history") == 0 && !history)
+      history = true;
+    else if (strcmp(argv[i], "--include-secrets") == 0 && !secrets)
+      secrets = true;
+    else {
+      fprintf(stderr, "Usage: cdm cli export --out FILE [--include-history] [--include-secrets]\n");
+      return 1;
+    }
+  }
+  if (!destination || !destination[0]) {
+    fprintf(stderr, "Usage: cdm cli export --out FILE [--include-history] [--include-secrets]\n");
+    return 1;
+  }
+  if (secrets)
+    fprintf(stderr, "Warning: export includes proxy credentials and stored HTTP headers/cookies; HTTP Basic passwords are never exported.\n");
+  if (history)
+    fprintf(stderr, "Warning: history URLs may contain private query values.\n");
+  if (export_json_file(sock, daemon_version, destination, history, secrets) != 0) {
+    fprintf(stderr, "Could not export JSON (daemon version, IPC, or output path error)\n");
+    return 1;
+  }
+  printf("Exported JSON to %s\n", destination);
+  return 0;
+}
+
 static int submit_add(int sock, uint16_t daemon_version, const char *url,
                       const char *dest_dir, const IpcDownloadOptions *opts) {
   IpcDownloadOptions selected_opts = opts ? *opts : (IpcDownloadOptions){0};
@@ -323,6 +356,7 @@ int run_cli(int argc, char **argv) {
     printf("  resume <id>          Resume a download\n");
     printf("  cancel <id>          Cancel a download\n");
     printf("  list [--offset N] [--limit N] [--status S]\n");
+    printf("  export --out FILE [--include-history] [--include-secrets]\n");
     return 1;
   }
 
@@ -352,6 +386,9 @@ int run_cli(int argc, char **argv) {
   /* ---------- dispatch ---------- */
   if (strcmp(cmd, "list") == 0) {
     ret = run_list(sock, daemon_version, argc, argv);
+
+  } else if (strcmp(cmd, "export") == 0) {
+    ret = run_export(sock, daemon_version, argc, argv);
 
   } else if (strcmp(cmd, "add") == 0 && argc >= 3 &&
              strcmp(argv[2], "--file") == 0) {

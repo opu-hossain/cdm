@@ -1046,3 +1046,10 @@ Completed: refreshed project context/release notes and added media guide for HLS
 Verification: Debug and ASan full CTest 39/39 pass; TSan build passes, but Criterion aborts before assertions in 23/39 targets; 16/39 pass.
 Open questions: real-stream/browser smoke and a Criterion-compatible TSan runner; task 4.5.1 remains unchecked.
 Next: 5.1.1 JSON export (independent). No push.
+
+## 2026-09-28 — Codex, task 5.1.1
+Branch: `cdm`; commit: `feat(export): json export of settings and history`.
+Completed: user-approved CLI/CMake/test scope; versioned JSON settings and optional paged history export, explicit secret opt-in warning, private atomic output, byte counts as decimal strings.
+Verification: test-first local daemon fixture covers 501 rows, 64-bit size, default redaction, opt-in stored secrets and file mode; full Debug build/CTest 40/40 pass, no new warnings.
+Open questions: Basic passwords are never exported, concurrent page changes and slow secret-detail IPC noted; 5.1.2 will cover import round-trip.
+Next: 5.1.2 JSON import. No push.

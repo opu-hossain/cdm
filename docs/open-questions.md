@@ -1,5 +1,23 @@
 # Open Questions
 
+## Task 5.1.1 — JSON export scope and schema (resolved)
+
+The brief lists only `src/utils/config.c` and a new
+`src/persistence/export.c`, yet requires a CLI command and an optional history
+export. The CLI, CMake and tests are necessary for an end-to-end command. A
+versioned JSON schema also needs an explicit field list and history source.
+The user approved extending to CLI/CMake/tests and reading history through
+paged daemon IPC on 2026-09-28. Schema version 1 exports non-secret settings
+and optional visible history fields. `--include-secrets` adds stored Cookie,
+Referer, extra headers, auth username and proxy credentials with an explicit
+warning; HTTP Basic passwords remain unavailable over details IPC and are
+never exported. URLs and destination paths may themselves contain private
+values; `--include-history` warns. A concurrent queue mutation can change
+page membership, and secret export requests one details record per download,
+which is slow for large histories. Import round-trip is deferred to 5.1.2.
+`TODO(platform)` in `src/persistence/export.c` tracks a private temporary-file
+and sync implementation for Windows.
+
 ## Task 4.5.1 — Phase 4 release gates
 
 Phase 4 documentation and local fixtures are complete. Debug and ASan builds

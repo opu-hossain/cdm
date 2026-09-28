@@ -173,6 +173,7 @@ set(CORE_SOURCES
 
 set(PERSISTENCE_SOURCES
     src/persistence/db.c
+    src/persistence/export.c
 )
 
 # Core library – shared code (no main)
