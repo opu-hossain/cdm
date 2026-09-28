@@ -223,12 +223,14 @@ on 2026-09-28. Contextual redirects retain the fresh-offer requirement.
 
 ## Task 3.5.1 — Installed-browser verification gate
 
-Debug build/CTest and JS/native/HTTP/IPC/installer fixtures pass. Chromium and
-Firefox executables are available, but no installed-browser visual/handshake
-smoke was performed. Chrome, Edge, Brave, Opera and Vivaldi are unavailable.
-Run the local-fixture consent/menu/filter/exclusion/refresh smoke checklist in
-`docs/browser-integration.md` on all seven browsers before closing this gate.
-Phase 3 documentation is updated; task 3.5.1 stays unchecked for this gate.
+Debug/Release CTest and JS/native/HTTP/IPC/installer fixtures pass. Chromium
+and Firefox executables are available, but installed-browser visual/handshake
+smoke remains unverified. Chrome, Edge, Brave, Opera and Vivaldi executables
+are unavailable here. The user deferred Edge/Brave/Opera/Vivaldi extension
+acceptance; Chrome/Chromium and Firefox are the release browser scope. Run the
+local-fixture consent/menu/filter/exclusion/refresh checklist in
+`docs/browser-integration.md` on the release desktop before publication.
+Task 3.5.1 records the pre-merge handoff; this manual release gate remains open.
 
 ## Task 4.1.1 — Media detection offer policy
 

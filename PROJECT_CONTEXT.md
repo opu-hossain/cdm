@@ -82,6 +82,8 @@ flowchart LR
 | Browser bridge/popup | `browser/{chromium,firefox}`, `src/native_host/{main_host,browser_install}.c`, `src/gui/browser_popup.c`; native host select loop polls offers every 250 ms, max 64, popup UI uses IPC confirm/dismiss/subscribe. Browser offers expire after 600 seconds unless confirmed and running (`src/platform/ipc_socket.c:33`, `:160`). |
 | Packaging/notifications | `CMakeLists.txt:260`, `resources/autostart/cdm-daemon.desktop.in`, `src/platform/daemon_autostart.c`, `src/utils/notify.c`; installed XDG entry, per-user override, libnotify complete/failure. |
 
+Phase 3 wrap-up targets Chrome/Chromium and Firefox extension acceptance. Registration flags for Edge, Brave, Opera, and Vivaldi are implemented but their extension smoke is deferred by user decision. Native-host protocol and local HTTP/IPC fixtures pass; live installed-browser handoff remains for the user's release-desktop test (`docs/browser-integration.md`).
+
 ### Phase 4 architecture supplement
 
 | Path and interface | Current contract |

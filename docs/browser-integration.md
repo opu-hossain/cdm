@@ -177,11 +177,14 @@ context enablement and correlated headers are session memory, not sync settings.
 
 ## Phase 3 verification status
 
-On 2026-09-28, all 33 CTest targets pass, including Node extension/options tests,
-native-host JSON/context tests, local HTTP/IPC refresh tests, and temp-HOME
-registration tests for all seven flags. Chromium and Firefox executables are
-available; Chrome, Edge, Brave, Opera, and Vivaldi are unavailable. No installed
-browser visual/handshake smoke was performed, so task 3.5.1's all-browser manual
-gate remains open. To close it, load each extension, register its host, verify
-confirmation and progress, test consent on/off, filters/exclusions and explicit
-menu bypass, and verify refresh success/failure against local HTTP fixtures.
+On 2026-09-28, the current Debug and Release suites each pass 41/41 targets,
+including Node extension/options tests, native-host JSON/context tests, local
+HTTP/IPC refresh tests, and isolated registration tests for all seven flags.
+The staged native-host binary also passes its protocol smoke. Chrome/Chromium
+and Firefox are the release browser targets; Edge, Brave, Opera, and Vivaldi
+registration flags are shipped but their extension smoke is deferred by user
+decision. Installed-browser visual/handshake smoke for Chromium and Firefox
+remains a manual release acceptance check: load each extension, register its
+host, verify confirmation and progress, test consent on/off,
+filters/exclusions and explicit menu bypass, and verify refresh success/failure
+against a local HTTP fixture.

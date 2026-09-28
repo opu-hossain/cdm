@@ -16,6 +16,7 @@ This checklist is for the current Linux release candidate. A checked item must r
 - [ ] Start `cdm daemon` twice and verify one serving PID; restart after `SIGKILL` to check stale socket recovery.
 - [ ] Verify the installed GUI, `cdm cli` commands, and native browser host from a clean prefix.
 - [ ] On a release desktop, inspect queue schedules/actions, category editing, tray controls, clipboard review, and both GUI themes. Confirm dialogs before destructive actions.
+- [ ] In installed Chromium and Firefox, load each extension and register its native host. Verify confirmation/progress, context consent, filters/exclusions, context menus, and URL refresh against a local HTTP server.
 - [ ] Confirm `/etc/xdg/autostart/cdm-daemon.desktop`, the desktop launcher, browser extension files, and native-host binary are installed.
 
 ## Package checks
