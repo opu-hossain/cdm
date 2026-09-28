@@ -76,6 +76,12 @@ make_source_tarball() {
         --exclude='packaging/arch/src' \
         --exclude='packaging/arch/cdm-*.tar.gz' \
         --exclude='.cache' \
+        --exclude='PLAN.md' \
+        --exclude='PROJECT_CONTEXT.md' \
+        --exclude='docs/agent-log.md' \
+        --exclude='docs/agent-task-brief-template.md' \
+        --exclude='docs/agent-task-queue.md' \
+        --exclude='docs/open-questions.md' \
         "$ROOT/" "$stage/cdm-${version}/"
     tar -czf "$out" -C "$stage" "cdm-${version}"
     rm -rf "$stage"
@@ -230,42 +236,7 @@ run_tests() {
 
 # Version management.
 bump_version() {
-    local what="${1:-}"
-    case "$what" in
-        rc)
-            local n="${2:-}" cur; cur="$(release_rc)"
-            [[ -z "$n" ]] && n=$((cur + 1))
-            sed -i "s|^rc[[:space:]]*=.*|rc = ${n}|"      .release.toml
-            sed -i "s|^channel[[:space:]]*=.*|channel = \"rc\"|" .release.toml
-            ok "rc -> $n"
-            ;;
-        rcreset)
-            sed -i "s|^rc[[:space:]]*=.*|rc = 1|" .release.toml
-            sed -i "s|^channel[[:space:]]*=.*|channel = \"rc\"|" .release.toml
-            ok "rc reset to 1, channel=rc"
-            ;;
-        stable)
-            sed -i "s|^channel[[:space:]]*=.*|channel = \"stable\"|" .release.toml
-            ok "channel=stable"
-            ;;
-        major|minor|patch)
-            local v a b c
-            v="$(release_version)"
-            IFS=. read -r a b c <<< "$v"
-            case "$what" in
-                major) a=$((a+1)); b=0; c=0 ;;
-                minor) b=$((b+1)); c=0 ;;
-                patch) c=$((c+1)) ;;
-            esac
-            sed -i "s|^version[[:space:]]*=.*|version = \"${a}.${b}.${c}\"|" .release.toml
-            sed -i "s|^rc[[:space:]]*=.*|rc = 1|"                            .release.toml
-            sed -i "s|^channel[[:space:]]*=.*|channel = \"rc\"|"              .release.toml
-            ok "version -> ${a}.${b}.${c}-rc1"
-            ;;
-        *)
-            die "usage: $0 bump rc [N] | rcreset | stable | patch | minor | major"
-            ;;
-    esac
+    python3 "$ROOT/scripts/sync-release-version.py" "$@"
     show_version
 }
 
@@ -417,7 +388,7 @@ Usage: cdm-release <command> [args]
 
 Version
   version                 show resolved versions from .release.toml
-  bump rc [N]             bump rc to N (or +1)
+  bump rc [N]             bump rc to N (or +1), sync project references
   bump rcreset            set rc=1
   bump stable             switch channel to stable
   bump patch|minor|major  bump base version, switch to rc

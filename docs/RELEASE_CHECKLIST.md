@@ -1,6 +1,7 @@
 # Release checklist: 0.3.0-rc1 draft
 
 This checklist is for the current Linux release candidate. A checked item must reflect a completed verification run; package configuration alone is not release validation.
+After `scripts/cdm-release bump` changes the version, all checkboxes reset. Dated observations then describe earlier candidates until the checks are repeated.
 
 ## Scope
 

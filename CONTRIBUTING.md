@@ -44,6 +44,15 @@ cpack --config build/CPackConfig.cmake -G RPM
 
 Build the Arch package from the local checkout with `./scripts/cdm-release arch` on an Arch system with the tools in `packaging/deps/arch.sh`. The public PKGBUILD fetches a tagged source archive and requires that tag to exist. Do not publish a PKGBUILD with `sha256sums=('SKIP')` without generating and reviewing a checksum.
 
+Use `./scripts/cdm-release bump rc [N]`, `bump rcreset`, `bump stable`, or
+`bump patch|minor|major` to change release versions. The command updates
+`.release.toml`, the Arch PKGBUILD, browser manifest base versions, and current
+version references in the README, contribution guide, release notes and
+checklist. Browser manifests use numeric `MAJOR.MINOR.PATCH`; the RC number is
+carried by package metadata and tags. A version change resets release checklist
+boxes so each candidate is verified separately. Review the resulting diff and
+commit it before tagging.
+
 ## Submit a change
 
 Keep commits focused and update documentation when behavior changes. Before opening a pull request, build the affected targets and run relevant tests. Describe what changed, why, and how it was checked. For security reports, use the private route in [SECURITY.md](SECURITY.md) instead of a public issue.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-0.1.0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION="${1:-$("$ROOT/scripts/cdm-release" version | awk '/^tag version:/ {print $3}')}"
 STAGE="$(mktemp -d)"
 OUT="/tmp/cdm-${VERSION}.tar.gz"
 
@@ -22,6 +22,12 @@ rsync -a \
   --exclude='packaging/arch/src' \
   --exclude='packaging/arch/cdm-*.tar.gz' \
   --exclude='.cache' \
+  --exclude='PLAN.md' \
+  --exclude='PROJECT_CONTEXT.md' \
+  --exclude='docs/agent-log.md' \
+  --exclude='docs/agent-task-brief-template.md' \
+  --exclude='docs/agent-task-queue.md' \
+  --exclude='docs/open-questions.md' \
   "$ROOT/" "$STAGE/cdm-${VERSION}/"
 
 tar -czf "$OUT" -C "$STAGE" "cdm-${VERSION}"

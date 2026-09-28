@@ -109,6 +109,9 @@ if(UNIX AND NOT WIN32)
                  COMMAND ${Python3_EXECUTABLE} -B
                          ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_export.py
                          $<TARGET_FILE:cdm>)
+        add_test(NAME test_release_bump
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_release_bump.py)
         add_test(NAME test_ipc_fallback
                  COMMAND ${Python3_EXECUTABLE} -B
                          ${CMAKE_CURRENT_SOURCE_DIR}/test_ipc_fallback.py
