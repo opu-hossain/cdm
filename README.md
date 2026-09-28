@@ -8,40 +8,13 @@ The current source builds Linux DEB and RPM packages and includes an Arch PKGBUI
 
 ## Features
 
-### Downloads and recovery
-
-- Download HTTP(S) files with multiple connections per download, segmented transfer, resume, and work rebalancing. Configure up to 16 connections per download, concurrent download count, connection and transfer timeouts, and the User-Agent.
-- Recover from transient failures with configurable retry attempts and exponential backoff. SQLite retains downloads and chunk state across daemon restarts.
-- Probe metadata with HEAD and a bounded GET fallback. Derive safe, unique filenames from `Content-Disposition` or the URL, including percent-decoded names.
-- Validate resumed content with stored ETag and Last-Modified values and `If-Range`; restart from byte zero when the source changes. Check the final size and an optional expected SHA-256 digest.
-- Set a global bandwidth limit or a per-download byte-per-second limit. Use HTTP or SOCKS5 proxies with optional credentials; individual downloads can supply cookies, Referer, and repeated custom headers.
-- View received bytes, total size when known, sampled speed, ETA, progress, and failure details. Active-URL duplicate detection points to the existing download instead of queuing a second copy.
-
-### Queues, categories, and automation
-
-- Create and reorder named queues with priority, per-queue concurrency caps, and daily local-time schedules. Scheduled pauses are separate from manual pauses.
-- Enable a queue post-action after every download in a nonempty queue completes: run a command, shut down, or suspend. Each action requires an explicit configuration opt-in.
-- Create categories with extension rules and destination folders. Automatically chosen destinations follow category rules; a folder chosen explicitly takes precedence. Deleting a queue or category moves its downloads to Default.
-- Keep completed and stopped downloads in paginated history. Remove a record without deleting its file, or confirm deletion of both record and file. Refresh the stored URL and validators of a stopped download when its source redirects.
-
-### Desktop and command line
-
-- Use the SDL2/Nuklear GUI to add one URL or paste a batch, choose a queue and destination, search and filter history, inspect details, manage queues and categories, and export or import backups. Row actions include pause, resume, cancel, open file/folder, copy URL, re-download, refresh URL, and removal.
-- Use System, Light, or Dark appearance and English or Spanish interface text. System appearance follows the Linux desktop preference when available; a locale change takes effect after restart.
-- Opt into clipboard URL monitoring; a copied link opens a review prompt before adding. Desktop notifications report completion and failure. An optional Linux tray shows aggregate progress and offers Pause all, Resume all, and Quit.
-- Use the CLI for single and batch additions, pause/resume/cancel, paginated and status-filtered history, and JSON export/import. Ordinary exports exclude secrets; `--include-secrets` is explicit. Imports can merge or replace after validation; replace backs up SQLite and is refused while a download is active.
-- Run a per-user daemon on demand or through XDG graphical-login autostart. `cdm daemon enable|disable|status` manages autostart for the current user.
-
-### Browser and media integration
-
-- Load the optional Chrome/Chromium or Firefox extension and register the per-user native messaging host. Supported HTTP(S) GET downloads open a cdm confirmation popup; link and page context menus can also offer a URL explicitly.
-- Configure automatic interception by minimum byte size, extension and MIME allow/deny lists, and excluded hostnames. Explicit context-menu offers bypass automatic filters. An extension badge reports skipped downloads and host errors.
-- Opt into site-specific browser-session sharing for bounded Cookie, User-Agent, and Referer capture. Captured values stay in memory and require a fresh offer after daemon restart; the confirmation popup shows their presence without displaying them.
-- Select detected video, HLS, or DASH candidates in the extension before offering them to cdm. Finite HLS VOD (including supported AES-128 streams) and static single-period DASH downloads support private resume state; optional `ffmpeg` remuxes or merges outputs. See [media downloads](docs/media.md) for supported stream layouts.
-- Explicitly opt into the optional `yt-dlp` site extractor for allowlisted HTTPS sites. It is disabled by default and requires a local `yt-dlp` installation.
-- Optionally configure an external antivirus scanner. Published HTTP and media outputs are scanned before completion; scanner failure or timeout blocks completion and attempts to quarantine the file.
-
-Browser extensions require manual installation and host registration. Edge, Brave, Opera, and Vivaldi have native-host registration commands but are not release-verified browser targets. See [browser integration](docs/browser-integration.md) for setup, permissions, and download types that cannot be handed off.
+- **Reliable downloads:** HTTP(S), segmented transfer, resume with ETag/Last-Modified checks, retries, SHA-256 verification, speed limits, and HTTP/SOCKS5 proxies.
+- **Organization:** SQLite history, named queues with schedules and optional completion actions, and categories that route files into folders.
+- **Desktop GUI:** Add single or multiple URLs, manage downloads and queues, see speed and ETA, search history, choose Light/Dark/System theme, and switch between English and Spanish.
+- **CLI:** Add, pause, resume, cancel, list, and export/import settings and history as JSON.
+- **Browser handoff:** Optional Chrome/Chromium and Firefox extensions offer supported downloads for confirmation; filters, context menus, and optional site-specific browser-session sharing are available.
+- **Video:** Select detected HLS/DASH or video URLs in extension Options; optional `yt-dlp` can handle supported video-site pages. See [video downloads](#video-downloads).
+- **Desktop extras:** On-demand or login-started daemon, notifications, optional tray and clipboard review, and an optional external antivirus scanner.
 
 ## Install a locally built package
 
@@ -105,28 +78,19 @@ cdm cli list --limit 20
 cdm daemon status
 ```
 
-`cdm cli add` takes an optional destination **directory** and derives a unique filename from the URL or response headers. Other commands are:
-
-| Command | Purpose |
-|---|---|
-| `cdm cli add --file list.txt [dest_dir]` | Add one HTTP(S) URL per line. |
-| `cdm cli add URL [dest_dir] --cookie VALUE --referrer URL --header "Name: value" --sha256 HEX --limit BYTES_PER_SEC` | Supply optional request headers, integrity check, and a per-download speed limit; repeat `--header` as needed. |
-| `cdm cli pause ID`, `resume ID`, `cancel ID` | Control a download. |
-| `cdm cli list [--offset N] [--limit N] [--status STATUS]` | Page through history; show ID, status, progress, total size in bytes, and filename. |
-| `cdm cli export --out FILE [--include-history] [--include-secrets]` | Save settings and optional history as JSON. |
-| `cdm cli import --in FILE --merge` or `--replace` | Restore a JSON backup; replace requires confirmation or `--yes`. |
-
-Replace the `example.invalid` URL with a real file URL. Configuration is read from `~/.local/share/cdm/config.toml` on Linux; absent values use built-in defaults. The daemon stores downloads in `~/.local/share/cdm/downloads.db` and logs to `~/.local/share/cdm/daemon.log`. See [CONTRIBUTING.md](CONTRIBUTING.md) for build and test commands.
+Replace the `example.invalid` URL with a real file URL. The optional argument to `cdm cli add` is a **directory**. Run `cdm cli` without a subcommand to see all CLI commands and flags. Configuration and the download database live in `~/.local/share/cdm/`.
 
 ## Browser integration
 
 The optional extensions hand supported GET downloads to cdm. Per-origin consent can include bounded Cookie, User-Agent and Referer context; Authorization headers, POST bodies, Blob/data URLs, and browser-internal URLs are unsupported. Browser cancellation is best effort and can leave a partial browser file. See [browser integration](docs/browser-integration.md) for setup and limits.
 
-## Privacy and current limits
+## Video downloads
 
-Browser-captured session values are kept in memory, but cookies and other request options entered directly in the CLI or GUI, HTTP Basic credentials stored through the engine, and proxy credentials use plaintext local persistence. Protect your user account and backups; ordinary JSON exports omit secrets. The CLI and GUI do not currently provide an entry field for HTTP Basic credentials.
+The extension's **ON** badge enables browser-session sharing for one site; it does not start video detection. To try detection, open the extension's **Options**, enable **Media detection**, save and grant the requested permission. Play a video, then return to Options, click **Refresh detected media**, select a candidate, and click **Offer selected media to cdm**. Detection does not open a popup by itself. Many sites expose separate video segments rather than a complete file; cdm supports only the finite HLS/DASH layouts in [media downloads](docs/media.md).
 
-HLS and DASH support the finite layouts described in [media downloads](docs/media.md); live streams, DRM, and several advanced manifest layouts are unsupported. The site extractor and antivirus scanner require external programs and are disabled by default. Browser extension installation and native-host registration are manual.
+For a supported video-site page such as YouTube, install `yt-dlp`, enable `use_yt_dlp = true` under `[sites]` in `~/.local/share/cdm/config.toml`, restart the daemon, then right-click the video page and choose **Download page with cdm**. In the confirmation popup, select **Use yt-dlp for this site**. This option is disabled by default and sends the page URL without browser cookies or headers.
+
+Browser-captured session values stay in memory. Cookies, proxy credentials, and request options entered directly into cdm use plaintext local storage; ordinary JSON exports omit secrets.
 
 ## Daemon lifecycle
 
