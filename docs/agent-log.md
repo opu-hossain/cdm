@@ -1039,3 +1039,10 @@ Completed: approved end-to-end scope; disabled-by-default config, HTTPS site all
 Verification: test-first parser/spawn/config/DB/IPC and mock executable success/failure fixtures; full Debug build/CTest 39/39 pass, no new warnings.
 Open questions: Windows implementation, aggregate rate cap and crash-orphan recovery documented; existing TSan/browser gates remain open.
 Next: 4.5.1 Phase 4 wrap-up. No push.
+
+## 2026-09-28 — Codex, task 4.5.1 (gate open)
+Branch: `cdm`; commit: `docs(media): document phase 4 and release gate status`.
+Completed: refreshed project context/release notes and added media guide for HLS, DASH, ffmpeg, site opt-in, IPC v11 and schema v13.
+Verification: Debug and ASan full CTest 39/39 pass; TSan build passes, but Criterion aborts before assertions in 23/39 targets; 16/39 pass.
+Open questions: real-stream/browser smoke and a Criterion-compatible TSan runner; task 4.5.1 remains unchecked.
+Next: 5.1.1 JSON export (independent). No push.

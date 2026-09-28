@@ -2,6 +2,15 @@
 
 These notes describe the current source and packaging configuration. This draft does not state that a tag or downloadable package has been published.
 
+## Unreleased — phase 4 media (implementation complete; release gates open)
+
+- Browser extensions collect media candidates and offer them only after user selection. The popup identifies HLS, DASH and video offers; detection alone does not open a popup.
+- Added finite HLS VOD parsing/downloading with master selection, AES-128 identity keys, initialization maps, validator-aware private resume state, and optional fixed-argument ffmpeg remux. Live, DRM, byte ranges, discontinuities and separate HLS audio renditions remain unsupported.
+- Added static single-period DASH parsing/downloading with highest-bandwidth audio/video selection, inherited BaseURL/SegmentTemplate/SegmentList, finite timelines and optional ffmpeg merge. Missing/failed ffmpeg retains both tracks and records the companion audio path. Dynamic/live, DRM, SegmentBase, byte ranges and multi-period MPDs remain unsupported.
+- Added disabled-by-default, explicit yt-dlp selection for an HTTPS site allowlist. It uses a cached executable, fixed arguments, progress/speed/ETA parsing, process cancellation, and redacted exit diagnostics. Browser cookies and headers are discarded before site jobs are queued. The global rate setting currently caps each yt-dlp job separately.
+- SQLite schema is now version 13 (`media_kind`, `companion_path`, `site_grab`, `last_error`); HELLO reports IPC version 11, with new media/site lookup and opt-in confirmation messages. OpenSSL Crypto and libxml2 are now required build dependencies. See [media downloads](media.md).
+- The Debug and ASan builds each passed full CTest 39/39 on 2026-09-28 with mock/local fixtures. The TSan build succeeded but 23/39 Criterion targets failed before assertions inside `libcriterion.so.3`; 16/39 non-Criterion targets passed. Manual real-stream smoke remains unverified. Task 4.5.1 remains open.
+
 ## Unreleased — phase 3 browser integration
 
 - Added per-origin, optional browser-session consent and bounded Cookie/User-Agent/Referer capture. Captured context stays in memory; SQLite schema v10 stores only `requires_browser_context`. Restarted contextual downloads require a fresh confirmed browser offer. Contextual redirects are refused; Authorization, POST and Blob/data handoff remain unsupported.
