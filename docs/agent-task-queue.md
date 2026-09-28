@@ -73,7 +73,7 @@ with the user; skip to Phase 2 in the meantime.
 - [x] **5.2.1** Extract theme constants — **S**, but it's a large mechanical diff across `gui_nuklear.c`; verifier should screenshot-diff before/after per the plan's own test note
 - [x] **5.2.2** Dark theme — **S** — `src/gui/AGENTS.md`, WCAG AA is a checkable constraint, not a judgment call
 - [x] **5.2.3** Settings theme dropdown — **S**
-- [ ] **5.3.1** `tr()` helper — **S** — small self-contained module
+- [x] **5.3.1** `tr()` helper — **S** — small self-contained module
 - [ ] **5.3.2** Extract strings (one commit per subsystem) — **S** — repetitive, many small commits, good parallel-subagent candidate since each subsystem file is disjoint
 - [ ] **5.3.3** Add one locale — **S**
 - [ ] **5.4.1** Antivirus scanner config key — **S**

@@ -1088,3 +1088,10 @@ Completed: persisted `[ui] theme` with system/light/dark validation, startup sel
 Verification: test-first config round trip, invalid theme fallback and JSON import/export tests pass; full Debug CTest 40/40 pass. Interactive GUI smoke unavailable without display.
 Open questions: no new design questions; desktop visual check remains.
 Next: 5.3.1 i18n helper. No push.
+
+## 2026-09-28 — Codex, task 5.3.1
+Branch: `cdm`; commit: `feat(i18n): add tr helper and catalog loader`.
+Completed: user-approved CMake/test scope; immutable, one-time flat TOML catalog with quoted dotted keys, thread-safe lookup and debug log once for missing keys.
+Verification: test-first compile failure, then catalog/fallback/invalid/log-once tests pass; full Debug CTest 41/41 pass.
+Open questions: catalog must load once at startup; locale changes require restart as planned in 5.3.3.
+Next: 5.3.2 string extraction by subsystem. No push.

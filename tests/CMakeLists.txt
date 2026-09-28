@@ -18,6 +18,7 @@ set(TEST_SOURCES
     test_path.c
     test_gui_controller.c
     test_config.c
+    test_i18n.c
     test_url.c
 )
 
