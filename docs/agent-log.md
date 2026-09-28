@@ -1144,3 +1144,10 @@ Completed: argv-safe, cancellable scanner with timeout; all HTTP/media/site publ
 Verification: mock scanner exit/argv/timeout, quarantine collision, media companion and scheduler tests pass; full Debug CTest 41/41 pass. No display required.
 Open questions: Windows scanner process helper is tracked in docs/open-questions.md.
 Next: 5.5.1 platform port plan. No push.
+
+## 2026-09-28 — Codex, task 5.5.1
+Branch: `cdm`; commit: `docs: add windows and macos platform port plan`.
+Completed: mapped every `PROJECT_CONTEXT.md` §6 blocker to Windows/macOS adapters, ordered the port, preserved IPC/media/privacy contracts, and added native acceptance gates with official platform API references.
+Verification: source/path review and Markdown diff check; full Debug CTest 41/41 pass. Native builds remain UNKNOWN.
+Open questions: installer format, GUI/daemon desktop ownership, macOS signing, and IPC endianness remain design decisions.
+Next: 5.6.1 phase 5 wrap-up. No push.
