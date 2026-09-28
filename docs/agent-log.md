@@ -1199,3 +1199,9 @@ Branch: `cdm`; phase-4 wrap-up recorded without a phase merge.
 Completed: documented playable loopback HLS/DASH, parser/lifetime fixes, remaining browser/site acceptance; isolated native-host test locale from the desktop config.
 Verification: Debug, Release and ASan each pass 41/41; ffprobe confirms video+audio in both outputs. Criterion/TSan is a user-accepted tooling exception.
 Next: 5.6.1 final release handoff. No push.
+
+## 2026-09-28 — Codex, task 5.6.1
+Branch: `cdm`; final phase-5 verification handoff, no phase merge or push.
+Completed: refreshed context, notes and checklist; marked target-distro packages, desktop/browser interaction and Criterion/TSan coverage as pending or waived precisely.
+Verification: Debug/Release/ASan 41/41, staged runtime/file list, local DEB/RPM generation and playable loopback HLS/DASH; final Debug 41/41 and `git diff --check` pass.
+Next: user acceptance of unchecked `docs/RELEASE_CHECKLIST.md` items, then merge/release at user direction.

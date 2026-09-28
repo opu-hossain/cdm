@@ -8,7 +8,7 @@ These notes describe the current source and packaging configuration. This draft 
 - Added System/Light/Dark GUI palettes and a settings selector. On Linux, System reads the XDG Settings portal; unavailable preference falls back to light. Added stable `tr()` keys with built-in English and an installed Spanish catalog. `[ui] locale` takes effect after restart.
 - Added disabled-by-default `[security] scanner_command` and quoted `scanner_args`. Every published HTTP, HLS, DASH and site-tool output is scanned before scheduler completion, including DASH companion audio. A nonzero exit, launch failure or 120-second timeout attempts a private `.quarantine` move and records nonretryable `Blocked by scanner`; a failed move can leave the original path under ERROR. Scanner command/args are included in JSON only with `--include-secrets`.
 - Added a [Windows/macOS port plan](platform-port.md) covering local IPC, daemon/process/file primitives, desktop integration, browser registration and packaging. Neither platform is supported yet.
-- On 2026-09-28, full Debug and ASan builds each passed 41/41 CTest targets. The TSan build succeeded, but 24/41 targets aborted in the Criterion runner before assertions; 17/41 passed. An isolated daemon-status smoke passed outside the sandbox. GUI visual/theme screenshots, installed-browser handoff and real media streams remain unverified. Phase 5 release gate 5.6.1 remains open.
+- On 2026-09-28, full Debug, Release and ASan builds each passed 41/41 CTest targets. The TSan build succeeded, but 24 Criterion targets aborted before assertions; a standalone one-assertion reproduction has the same runner failure. The user accepted this tooling exception for wrap-up, without a claim of race-free Criterion coverage. Staged daemon-status and native-host protocol smoke passed; the GUI started with SDL's offscreen driver. Loopback HLS/DASH downloads produced playable video and audio. Release-desktop visual checks, installed Chromium/Firefox offers, a real site extractor, and target-distro package installation remain on the [release checklist](RELEASE_CHECKLIST.md).
 
 ## Unreleased — phase 4 media (implementation complete; release gates open)
 
@@ -67,6 +67,8 @@ Windows and macOS are not yet supported.
 ## Packaging
 
 CMake can build DEB and RPM packages. The Arch PKGBUILD and local release helper can build an Arch package. All package targets install `cdm`, `cdm_native_host`, the desktop launcher, browser extension files, and an XDG autostart entry. The autostart entry starts the daemon at the next graphical login; it does not start it during package installation. See [daemon startup](daemon-autostart.md).
+
+Local Arch-host CPack generation produced DEB and RPM files with the expected installed file list. These are smoke artifacts, not target-distro release validation: the Arch-host DEB lacks automatically discovered non-GUI runtime dependencies, and the RPM auto-requires this host's glibc/libxml versions. The release workflows build on Ubuntu 24.04 and Fedora 41 respectively; inspect and install those outputs on their target systems before publishing.
 
 The configured version is `0.3.0-rc1` (CPack package version `0.3.0~rc1`). Local CPack artifacts use names such as `cdm-0.3.0-rc1-Linux.deb` and `cdm-0.3.0-rc1-Linux.rpm`. Release workflows copy them to architecture-specific names before upload. These names describe build output, not a published download URL.
 
