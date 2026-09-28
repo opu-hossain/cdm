@@ -63,6 +63,15 @@ restart, so reload the extension after restarting. Persistent Firefox
 installation requires a signed extension package; `cdm-firefox.zip` is an
 unsigned build artifact for signing and testing.
 
+After rebuilding and reinstalling cdm from source, reload the unpacked Chromium
+extension in `chrome://extensions` or `chromium://extensions`. For a Firefox
+temporary add-on, remove it and load its installed `manifest.json` again in
+`about:debugging`. If a download stays in the browser without a cdm badge or
+popup, inspect the extension's background/service-worker console first: a
+startup error can prevent the download listener from registering. The optional
+`webRequest` API is used only for consented header capture and media detection;
+ordinary download handoff does not require granting it.
+
 ## Install Edge, Brave, Opera, or Vivaldi
 
 Load the same Chromium extension directory through the browser's extensions

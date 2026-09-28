@@ -57,7 +57,7 @@ browser.action.onClicked.addListener(async tab => {
   browser.action.setTitle({title: "Browser session on for this site; click to turn off"});
 });
 
-browser.webRequest.onSendHeaders.addListener(details => {
+function observeSendHeaders(details) {
   if (details.incognito) return;
   if (!enabledOrigins.has(originFor(details.url || ""))) return;
   forgetOldHeaders();
@@ -73,7 +73,7 @@ browser.webRequest.onSendHeaders.addListener(details => {
   observedHeaders.set(details.url, samples.slice(-2));
   if (observedHeaders.size > 128)
     observedHeaders.delete(observedHeaders.keys().next().value);
-}, {urls: ["http://*/*", "https://*/*"]}, ["requestHeaders"]);
+}
 
 async function offerContext(item, url) {
   if (item.incognito) return {}; // No cookie-store correlation for incognito.
@@ -254,7 +254,7 @@ function pruneMedia() {
   for (const [key, value] of mediaCandidates)
     if (Date.now() - value.at > 600000) mediaCandidates.delete(key);
 }
-browser.webRequest.onHeadersReceived.addListener(async details => {
+async function observeMediaHeaders(details) {
   if (details.incognito || details.tabId < 0 || details.method !== "GET" ||
       details.statusCode < 200 || details.statusCode >= 300 ||
       !originFor(details.url) || new TextEncoder().encode(details.url).length > 2047)
@@ -289,7 +289,32 @@ browser.webRequest.onHeadersReceived.addListener(async details => {
   } catch (_) {
     // Unavailable storage/permissions fail closed; no native offer was sent.
   }
-}, {urls: ["http://*/*", "https://*/*"]}, ["responseHeaders"]);
+}
+
+// webRequest is optional; without consent the namespace may not exist at all.
+// Keep ordinary downloads registered even when header/media observation cannot.
+let headerObserverRegistered = false;
+let mediaObserverRegistered = false;
+function registerOptionalObservers() {
+  const webRequest = browser.webRequest;
+  if (!webRequest) return;
+  if (!headerObserverRegistered && webRequest.onSendHeaders) {
+    try {
+      webRequest.onSendHeaders.addListener(observeSendHeaders,
+        {urls: ["http://*/*", "https://*/*"]}, ["requestHeaders"]);
+      headerObserverRegistered = true;
+    } catch (_) { /* Retry if the optional permission is granted later. */ }
+  }
+  if (!mediaObserverRegistered && webRequest.onHeadersReceived) {
+    try {
+      webRequest.onHeadersReceived.addListener(observeMediaHeaders,
+        {urls: ["http://*/*", "https://*/*"]}, ["responseHeaders"]);
+      mediaObserverRegistered = true;
+    } catch (_) { /* Retry if the optional permission is granted later. */ }
+  }
+}
+registerOptionalObservers();
+browser.permissions?.onAdded?.addListener(registerOptionalObservers);
 
 browser.runtime.onMessage.addListener((message, sender, reply) => {
   if (sender.url !== browser.runtime.getURL("options.html") ||

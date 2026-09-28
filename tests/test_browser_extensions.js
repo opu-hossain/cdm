@@ -444,6 +444,54 @@ async function verifyOptions(file, globalName) {
     filters.normalize({mimeAllow: ["*/*"]})), "");
 }
 
+async function verifyWithoutOptionalWebRequest(file, globalName) {
+  let downloadListener;
+  let permissionListener;
+  let headerRegistrations = 0;
+  let mediaRegistrations = 0;
+  const sent = [];
+  const canceled = [];
+  const port = {
+    postMessage(message) { sent.push(message); },
+    onMessage: {addListener() {}}, onDisconnect: {addListener() {}}
+  };
+  const api = {
+    action: {setTitle() {}, setBadgeText() {}, setBadgeBackgroundColor() {},
+      onClicked: {addListener() {}}},
+    downloads: {onCreated: {addListener(listener) { downloadListener = listener; }},
+      cancel(id) { canceled.push(id); return Promise.resolve(); }},
+    storage: {sync: {get() { return Promise.resolve({}); }},
+      onChanged: {addListener() {}}},
+    runtime: {connectNative() { return port; },
+      onInstalled: {addListener() {}}, onMessage: {addListener() {}}},
+    permissions: {onAdded: {addListener(listener) { permissionListener = listener; }}},
+    contextMenus: {onClicked: {addListener() {}}}
+  };
+  const sandbox = vm.createContext({[globalName]: api, URL, TextEncoder, console,
+    crypto: {randomUUID() { return "optional-api-fixture"; }},
+    importScripts(name) {
+      vm.runInContext(fs.readFileSync(path.join(path.dirname(file), name), "utf8"), sandbox);
+    }});
+  if (globalName === "browser")
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(file), "filters.js"), "utf8"), sandbox);
+  vm.runInContext(fs.readFileSync(file, "utf8"), sandbox);
+  assert.equal(typeof downloadListener, "function",
+    "automatic downloads must register without optional webRequest permission");
+  await downloadListener({id: 42, state: "in_progress",
+    url: "https://example.invalid/test.zip", totalBytes: 100});
+  assert.deepEqual(canceled, [42]);
+  assert.equal(sent.at(-1).type, "download_offer");
+  assert.equal(typeof permissionListener, "function");
+  api.webRequest = {
+    onSendHeaders: {addListener() { headerRegistrations++; }},
+    onHeadersReceived: {addListener() { mediaRegistrations++; }}
+  };
+  permissionListener({permissions: ["webRequest"]});
+  permissionListener({permissions: ["webRequest"]});
+  assert.equal(headerRegistrations, 1);
+  assert.equal(mediaRegistrations, 1);
+}
+
 for (const file of [process.argv[2], process.argv[3]]) {
   const manifest = JSON.parse(fs.readFileSync(
     path.join(path.dirname(file), "manifest.json"), "utf8"));
@@ -458,6 +506,8 @@ for (const file of [process.argv[2], process.argv[3]]) {
 Promise.all([
   verify(process.argv[2], "chrome", "chromium"),
   verify(process.argv[3], "browser", "firefox"),
+  verifyWithoutOptionalWebRequest(process.argv[2], "chrome"),
+  verifyWithoutOptionalWebRequest(process.argv[3], "browser"),
   verifyOptions(process.argv[2], "chrome"),
   verifyOptions(process.argv[3], "browser")
 ]).catch(error => { console.error(error); process.exitCode = 1; });
