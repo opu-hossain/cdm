@@ -1,5 +1,12 @@
 # Open Questions
 
+## Task 5.3.2 — localized CLI messages
+
+CLI dynamic messages assemble translated, format-free fragments around IDs,
+paths and error details. This avoids treating catalog text as a printf format,
+but fixes the word order. A later locale review should replace these with a
+validated named-placeholder formatter where translators need reordering.
+
 ## Task 5.2.2 — appearance preference on other platforms
 
 The Linux GUI reads `org.freedesktop.appearance` `color-scheme` through the

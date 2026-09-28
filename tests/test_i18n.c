@@ -13,12 +13,14 @@ Test(i18n, quoted_dotted_keys_load_once_and_fall_back) {
   FILE *file = fdopen(fd, "w");
   cr_assert_not_null(file);
   fputs("\"settings.title\" = \"Settings\"\n"
-        "\"download.done\" = \"Finished\"\n", file);
+        "\"download.done\" = \"Finished\"\n"
+        "\"cli.usage.main\" = \"Translated usage\"\n", file);
   cr_assert_eq(fclose(file), 0);
   cr_assert_str_eq(tr("settings.title"), "settings.title");
   cr_assert(tr_load_catalog(path));
   cr_assert_str_eq(tr("settings.title"), "Settings");
   cr_assert_str_eq(tr("download.done"), "Finished");
+  cr_assert_str_eq(tr("cli.usage.main"), "Translated usage");
   char log_path[] = "/tmp/cdm-i18n-log-XXXXXX";
   int log_fd = mkstemp(log_path);
   cr_assert_geq(log_fd, 0);
@@ -39,6 +41,11 @@ Test(i18n, quoted_dotted_keys_load_once_and_fall_back) {
   cr_assert_not(tr_load_catalog(path));
   unlink(log_path);
   unlink(path);
+}
+
+Test(i18n, builtin_cli_english_is_available_without_a_catalog) {
+  cr_assert_str_eq(tr("cli.usage.main"),
+                   "Usage: cdm cli <command> [args...]");
 }
 
 Test(i18n, rejects_non_string_values_without_publishing) {

@@ -6,6 +6,7 @@
 #include "../persistence/export.h"
 #include "../platform/ipc_socket.h"
 #include "../utils/config.h"
+#include "../utils/i18n.h"
 #include "../utils/log.h"
 #include "../utils/path.h"
 #include "platform/ipc_protocol.h"
@@ -127,28 +128,28 @@ static int run_list(int sock, uint16_t daemon_version, int argc, char **argv) {
   uint32_t offset = 0, limit = 100;
   char status[16] = {0};
   if ((argc - 2) % 2 != 0) {
-    fprintf(stderr, "Usage: cdm cli list [--offset N] [--limit N] [--status S]\n");
+    fprintf(stderr, "%s\n", tr("cli.usage.list"));
     return 1;
   }
   for (int i = 2; i < argc; i += 2) {
     uint64_t value;
     if (strcmp(argv[i], "--offset") == 0) {
       if (!parse_u64(argv[i + 1], &value) || value > UINT32_MAX) {
-        fprintf(stderr, "Invalid list offset: %s\n", argv[i + 1]);
+        fprintf(stderr, "%s %s\n", tr("cli.error.invalid_offset"), argv[i + 1]);
         return 1;
       }
       offset = (uint32_t)value;
     } else if (strcmp(argv[i], "--limit") == 0) {
       if (!parse_u64(argv[i + 1], &value) || value == 0 ||
           value > IPC_LIST_PAGE_MAX) {
-        fprintf(stderr, "List limit must be 1..%d\n", IPC_LIST_PAGE_MAX);
+        fprintf(stderr, "%s%d\n", tr("cli.error.invalid_limit"), IPC_LIST_PAGE_MAX);
         return 1;
       }
       limit = (uint32_t)value;
     } else if (strcmp(argv[i], "--status") == 0) {
       size_t length = strlen(argv[i + 1]);
       if (length == 0 || length >= sizeof(status)) {
-        fprintf(stderr, "Invalid list status\n");
+        fprintf(stderr, "%s\n", tr("cli.error.invalid_status"));
         return 1;
       }
       for (size_t j = 0; j < length; j++)
@@ -156,17 +157,17 @@ static int run_list(int sock, uint16_t daemon_version, int argc, char **argv) {
       if (strcmp(status, "QUEUED") && strcmp(status, "ACTIVE") &&
           strcmp(status, "PAUSED") && strcmp(status, "DONE") &&
           strcmp(status, "ERROR") && strcmp(status, "CANCELED")) {
-        fprintf(stderr, "Invalid list status: %s\n", argv[i + 1]);
+        fprintf(stderr, "%s: %s\n", tr("cli.error.invalid_status"), argv[i + 1]);
         return 1;
       }
     } else {
-      fprintf(stderr, "Unknown list flag: %s\n", argv[i]);
+      fprintf(stderr, "%s %s\n", tr("cli.error.unknown_list_flag"), argv[i]);
       return 1;
     }
   }
 
   if (daemon_version < 2) {
-    fprintf(stderr, "Daemon does not support history rows with size\n");
+    fprintf(stderr, "%s\n", tr("cli.error.list_size_unsupported"));
     return 1;
   }
   IpcDownloadRecord *rows = calloc(IPC_LIST_PAGE_MAX, sizeof(*rows));
@@ -183,12 +184,12 @@ static int run_list(int sock, uint16_t daemon_version, int argc, char **argv) {
     int count = ipc_send_list_page_with_size(sock, raw_offset, request_limit,
                                               rows, IPC_LIST_PAGE_MAX, &total);
     if (count < 0) {
-      fprintf(stderr, "Daemon does not support sized history pages or IPC failed\n");
+      fprintf(stderr, "%s\n", tr("cli.error.list_ipc"));
       result = 1;
       break;
     }
     if (!header_printed) {
-      puts("id\tstatus\tpercent\tsize\tfilename");
+      puts(tr("cli.list.header"));
       header_printed = true;
     }
     for (int i = 0; i < count && printed < limit; i++) {
@@ -220,23 +221,23 @@ static int run_export(int sock, uint16_t daemon_version, int argc,
     else if (strcmp(argv[i], "--include-secrets") == 0 && !secrets)
       secrets = true;
     else {
-      fprintf(stderr, "Usage: cdm cli export --out FILE [--include-history] [--include-secrets]\n");
+      fprintf(stderr, "%s\n", tr("cli.usage.export"));
       return 1;
     }
   }
   if (!destination || !destination[0]) {
-    fprintf(stderr, "Usage: cdm cli export --out FILE [--include-history] [--include-secrets]\n");
+    fprintf(stderr, "%s\n", tr("cli.usage.export"));
     return 1;
   }
   if (secrets)
-    fprintf(stderr, "Warning: export includes proxy credentials and stored HTTP headers/cookies; HTTP Basic passwords are never exported.\n");
+    fprintf(stderr, "%s\n", tr("cli.warn.export_secrets"));
   if (history)
-    fprintf(stderr, "Warning: history URLs may contain private query values.\n");
+    fprintf(stderr, "%s\n", tr("cli.warn.export_history"));
   if (export_json_file(sock, daemon_version, destination, history, secrets) != 0) {
-    fprintf(stderr, "Could not export JSON (daemon version, IPC, or output path error)\n");
+    fprintf(stderr, "%s\n", tr("cli.error.export"));
     return 1;
   }
-  printf("Exported JSON to %s\n", destination);
+  printf("%s %s\n", tr("cli.exported"), destination);
   return 0;
 }
 
@@ -255,25 +256,25 @@ static int run_import(int sock, uint16_t daemon_version, int argc,
     } else if (strcmp(argv[i], "--yes") == 0 && !yes)
       yes = true;
     else {
-      fprintf(stderr, "Usage: cdm cli import --in FILE [--merge|--replace] [--yes]\n");
+      fprintf(stderr, "%s\n", tr("cli.usage.import"));
       return 1;
     }
   }
   if (!source || !source[0] || (yes && !replace)) {
-    fprintf(stderr, "Usage: cdm cli import --in FILE [--merge|--replace] [--yes]\n");
+    fprintf(stderr, "%s\n", tr("cli.usage.import"));
     return 1;
   }
   if (daemon_version < 12) {
-    fprintf(stderr, "Daemon does not support JSON import\n");
+    fprintf(stderr, "%s\n", tr("cli.error.import_version"));
     return 1;
   }
   if (replace && !yes) {
     if (!isatty(STDIN_FILENO)) {
-      fprintf(stderr, "Replace requires --yes outside an interactive terminal\n");
+      fprintf(stderr, "%s\n", tr("cli.error.import_yes"));
       return 1;
     }
     char answer[16];
-    fprintf(stderr, "Replace local history and settings after backup? [y/N] ");
+    fputs(tr("cli.import.confirm"), stderr);
     if (!fgets(answer, sizeof(answer), stdin) ||
         (strcmp(answer, "y\n") != 0 && strcmp(answer, "yes\n") != 0))
       return 1;
@@ -281,18 +282,18 @@ static int run_import(int sock, uint16_t daemon_version, int argc,
   /* TODO(platform): choose the native path canonicalization/console prompt. */
   char resolved[PATH_MAX];
   if (!realpath(source, resolved)) {
-    fprintf(stderr, "Could not resolve import file: %s\n", strerror(errno));
+    fprintf(stderr, "%s %s\n", tr("cli.error.import_file"), strerror(errno));
     return 1;
   }
   IpcResult result = IPC_RESULT_ERROR;
   if (ipc_send_import_json_v1(sock, resolved, replace, &result) != 0 ||
       result != IPC_RESULT_OK) {
-    fprintf(stderr, "Import failed (%s)\n",
-            result == IPC_RESULT_REJECTED ? "invalid file or active download"
-                                          : "daemon or backup error");
+    fprintf(stderr, "%s (%s)\n", tr("cli.error.import"),
+            result == IPC_RESULT_REJECTED ? tr("cli.error.import_rejected")
+                                          : tr("cli.error.import_daemon"));
     return 1;
   }
-  puts(replace ? "Replaced history and settings" : "Merged missing history");
+  puts(tr(replace ? "cli.import.replaced" : "cli.import.merged"));
   return 0;
 }
 
@@ -312,7 +313,7 @@ static int submit_add(int sock, uint16_t daemon_version, const char *url,
   else if (prepared)
     prepared = path_make_unique(full_path, unique_path, sizeof(unique_path));
   if (!prepared) {
-    fprintf(stderr, "Could not create a destination path\n");
+    fprintf(stderr, "%s\n", tr("cli.error.destination"));
     return 1;
   }
   IpcAddResponse add = {0};
@@ -328,14 +329,15 @@ static int submit_add(int sock, uint16_t daemon_version, const char *url,
     add.result = add.id ? IPC_RESULT_OK : IPC_RESULT_ERROR;
   }
   if (!add.id) {
-    fprintf(stderr, "Daemon rejected the download\n");
+    fprintf(stderr, "%s\n", tr("cli.error.add_rejected"));
     return 1;
   }
   if (add.result == IPC_RESULT_REJECTED)
-    printf("Already downloading (ID %u)\n", add.id);
+    printf("%s %u)\n", tr("cli.add.duplicate"), add.id);
   else
-    printf("Download added (ID: %u, initial path %s; final filename may "
-           "change after probing)\n", add.id, unique_path);
+    printf("%s %u%s %s%s\n", tr("cli.add.created"), add.id,
+           tr("cli.add.initial_path"), unique_path,
+           tr("cli.add.final_note"));
   return 0;
 }
 
@@ -357,7 +359,7 @@ static int run_batch_add(int sock, uint16_t daemon_version, const char *file,
                          const char *dest_dir) {
   FILE *fp = fopen(file, "r");
   if (!fp) {
-    fprintf(stderr, "Could not read URL file: %s\n", strerror(errno));
+    fprintf(stderr, "%s %s\n", tr("cli.error.url_file"), strerror(errno));
     return 2;
   }
   char line[4096];
@@ -370,7 +372,8 @@ static int run_batch_add(int sock, uint16_t daemon_version, const char *file,
     if (!complete && !feof(fp)) {
       int ch;
       while ((ch = fgetc(fp)) != '\n' && ch != EOF) {}
-      fprintf(stderr, "Line %lu: URL too long\n", line_number);
+      fprintf(stderr, "%s %lu: %s\n", tr("cli.batch.line"), line_number,
+              tr("cli.error.url_long"));
       result = 1;
       continue;
     }
@@ -383,15 +386,15 @@ static int run_batch_add(int sock, uint16_t daemon_version, const char *file,
       url++;
     if (!*url || *url == '#')
       continue;
-    printf("Line %lu: ", line_number);
+    printf("%s %lu: ", tr("cli.batch.line"), line_number);
     if (!batch_url_valid(url) ||
         submit_add(sock, daemon_version, url, dest_dir, NULL) != 0) {
-      puts("failed");
+      puts(tr("cli.batch.failed"));
       result = 1;
     }
   }
   if (ferror(fp)) {
-    fprintf(stderr, "Could not read URL file: %s\n", strerror(errno));
+    fprintf(stderr, "%s %s\n", tr("cli.error.url_file"), strerror(errno));
     result = 2;
   }
   fclose(fp);
@@ -403,18 +406,17 @@ static int run_batch_add(int sock, uint16_t daemon_version, const char *file,
 int run_cli(int argc, char **argv) {
   /* ---------- usage ---------- */
   if (argc < 2) {
-    printf("Usage: cdm cli <command> [args...]\n");
-    printf("Commands:\n");
-    printf("  add <url> [dest_dir] [--cookie V] [--referrer V] "
-           "[--header \"K: V\"] [--sha256 HEX] [--limit BYTES_PER_SEC]\n");
-    printf("         (--header may be repeated)\n");
-    printf("  add --file list.txt [dest_dir]  Add one URL per line\n");
-    printf("  pause  <id>          Pause a download\n");
-    printf("  resume <id>          Resume a download\n");
-    printf("  cancel <id>          Cancel a download\n");
-    printf("  list [--offset N] [--limit N] [--status S]\n");
-    printf("  export --out FILE [--include-history] [--include-secrets]\n");
-    printf("  import --in FILE [--merge|--replace] [--yes]\n");
+    puts(tr("cli.usage.main"));
+    puts(tr("cli.commands"));
+    puts(tr("cli.help.add"));
+    puts(tr("cli.help.header"));
+    puts(tr("cli.help.batch"));
+    puts(tr("cli.help.pause"));
+    puts(tr("cli.help.resume"));
+    puts(tr("cli.help.cancel"));
+    puts(tr("cli.help.list"));
+    puts(tr("cli.help.export"));
+    puts(tr("cli.help.import"));
     return 1;
   }
 
@@ -422,7 +424,7 @@ int run_cli(int argc, char **argv) {
       strcmp(argv[2], "--file") == 0) {
     FILE *probe = fopen(argv[3], "r");
     if (!probe) {
-      fprintf(stderr, "Could not read URL file: %s\n", strerror(errno));
+      fprintf(stderr, "%s %s\n", tr("cli.error.url_file"), strerror(errno));
       return 2;
     }
     fclose(probe);
@@ -433,8 +435,7 @@ int run_cli(int argc, char **argv) {
   int sock = ipc_client_connect_compatible(-1, &daemon_version);
   if (sock < 0) {
     LOG_ERROR("Cannot connect to daemon");
-    fprintf(stderr,
-            "Is the daemon running? Start it with: cdm daemon\n");
+    fprintf(stderr, "%s\n", tr("cli.error.daemon"));
     return 1;
   }
 
@@ -454,7 +455,7 @@ int run_cli(int argc, char **argv) {
   } else if (strcmp(cmd, "add") == 0 && argc >= 3 &&
              strcmp(argv[2], "--file") == 0) {
     if (argc < 4 || argc > 5) {
-      fprintf(stderr, "Usage: cdm cli add --file list.txt [dest_dir]\n");
+      fprintf(stderr, "%s\n", tr("cli.usage.batch"));
       ret = 1;
     } else
       ret = run_batch_add(sock, daemon_version, argv[3],
@@ -476,7 +477,7 @@ int run_cli(int argc, char **argv) {
         parse_add_options(argc, argv, first_opt_index, headers_buf,
                           sizeof(headers_buf), &opts, &valid_opts);
     if (!valid_opts) {
-      fprintf(stderr, "Invalid add options\n");
+      fprintf(stderr, "%s\n", tr("cli.error.add_options"));
       ipc_client_disconnect(sock);
       return 1;
     }
@@ -487,42 +488,42 @@ int run_cli(int argc, char **argv) {
   } else if (strcmp(cmd, "pause") == 0 && argc >= 3) {
     uint32_t id = 0;
     if (!parse_id(argv[2], &id)) {
-      fprintf(stderr, "Invalid download ID: %s\n", argv[2]);
+      fprintf(stderr, "%s %s\n", tr("cli.error.download_id"), argv[2]);
       ipc_client_disconnect(sock);
       return 1;
     }
     if (ipc_send_pause(sock, id) == 0)
-      printf("Paused download %u\n", id);
+      printf("%s %u\n", tr("cli.pause.done"), id);
     else {
-      fprintf(stderr, "Could not pause download %u\n", id);
+      fprintf(stderr, "%s %u\n", tr("cli.pause.failed"), id);
       ret = 1;
     }
 
   } else if (strcmp(cmd, "resume") == 0 && argc >= 3) {
     uint32_t id = 0;
     if (!parse_id(argv[2], &id)) {
-      fprintf(stderr, "Invalid download ID: %s\n", argv[2]);
+      fprintf(stderr, "%s %s\n", tr("cli.error.download_id"), argv[2]);
       ipc_client_disconnect(sock);
       return 1;
     }
     if (ipc_send_resume(sock, id) == 0)
-      printf("Resumed download %u\n", id);
+      printf("%s %u\n", tr("cli.resume.done"), id);
     else {
-      fprintf(stderr, "Could not resume download %u\n", id);
+      fprintf(stderr, "%s %u\n", tr("cli.resume.failed"), id);
       ret = 1;
     }
 
   } else if (strcmp(cmd, "cancel") == 0 && argc >= 3) {
     uint32_t id = 0;
     if (!parse_id(argv[2], &id)) {
-      fprintf(stderr, "Invalid download ID: %s\n", argv[2]);
+      fprintf(stderr, "%s %s\n", tr("cli.error.download_id"), argv[2]);
       ipc_client_disconnect(sock);
       return 1;
     }
     if (ipc_send_cancel(sock, id) == 0)
-      printf("Cancelled download %u\n", id);
+      printf("%s %u\n", tr("cli.cancel.done"), id);
     else {
-      fprintf(stderr, "Could not cancel download %u\n", id);
+      fprintf(stderr, "%s %u\n", tr("cli.cancel.failed"), id);
       ret = 1;
     }
 

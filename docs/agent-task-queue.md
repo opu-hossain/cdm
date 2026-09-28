@@ -75,6 +75,10 @@ with the user; skip to Phase 2 in the meantime.
 - [x] **5.2.3** Settings theme dropdown — **S**
 - [x] **5.3.1** `tr()` helper — **S** — small self-contained module
 - [ ] **5.3.2** Extract strings (one commit per subsystem) — **S** — repetitive, many small commits, good parallel-subagent candidate since each subsystem file is disjoint
+  - [x] CLI user-facing copy
+  - [ ] GUI user-facing copy
+  - [ ] Native host user-facing copy
+  - [ ] Notifications user-facing copy
 - [ ] **5.3.3** Add one locale — **S**
 - [ ] **5.4.1** Antivirus scanner config key — **S**
 - [ ] **5.4.2** Run scanner after finalize — **S** — quarantine-move logic is mechanical once the config key exists

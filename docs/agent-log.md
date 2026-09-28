@@ -1095,3 +1095,10 @@ Completed: user-approved CMake/test scope; immutable, one-time flat TOML catalog
 Verification: test-first compile failure, then catalog/fallback/invalid/log-once tests pass; full Debug CTest 41/41 pass.
 Open questions: catalog must load once at startup; locale changes require restart as planned in 5.3.3.
 Next: 5.3.2 string extraction by subsystem. No push.
+
+## 2026-09-28 — Codex, task 5.3.2 (CLI)
+Branch: `cdm`; commit: `refactor(cli): route user-facing strings through tr`.
+Completed: user-approved i18n/test scope; routed CLI help, diagnostics and status copy through 54 stable identifiers with built-in English fallbacks and locale override support.
+Verification: test-first missing fallback, then i18n/CLI focused tests and full Debug CTest 41/41 pass. All CLI keys have fallbacks.
+Open questions: composed CLI fragments keep English word order; locale review should address reordered placeholders.
+Next: 5.3.2 GUI string extraction. No push.
