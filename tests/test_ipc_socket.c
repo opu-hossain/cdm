@@ -940,6 +940,17 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   cr_assert_neq(ipc_browser_offer(client, &invalid, &ignored), 0);
   cr_assert_eq(queue_manager_count_by_status(DOWNLOAD_QUEUED), 1);
 
+  queue_manager_set_site_error(download_id, "synthetic transfer failure");
+  queue_manager_update_status(download_id, DOWNLOAD_ERROR);
+  int failure_client = ipc_client_connect_compatible(1500, NULL);
+  cr_assert_geq(failure_client, 0);
+  IpcBrowserProgress failure = {0};
+  cr_assert_eq(ipc_browser_subscribe_progress(failure_client, download_id,
+                                              &failure), 0);
+  cr_assert_str_eq(failure.status, "ERROR");
+  cr_assert_str_eq(failure.error, "synthetic transfer failure");
+  ipc_client_disconnect(failure_client);
+
   int oversized = ipc_client_connect_timeout(1500);
   cr_assert_geq(oversized, 0);
   MsgHeader bad_header = {.length = IPC_MAX_FRAME_SIZE + 1,

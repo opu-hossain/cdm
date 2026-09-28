@@ -375,7 +375,8 @@ static IpcBrowserProgress browser_progress_snapshot(uint32_t id,
     event.progress = 1.0f;
   if (error)
     snprintf(event.error, sizeof(event.error), "%s", error);
-  if (error && snapshot.status == DOWNLOAD_ERROR) {
+  /* Polling clients pass no event text; keep the stored failure reason. */
+  if (snapshot.status == DOWNLOAD_ERROR) {
     char detail[sizeof(event.error)] = {0};
     if (queue_manager_get_error(id, detail, sizeof(detail)) && detail[0])
       memcpy(event.error, detail, sizeof(event.error));
