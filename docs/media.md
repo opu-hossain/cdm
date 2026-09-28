@@ -73,3 +73,11 @@ Run `cmake --build build -j` and
 mock executable and never visits the offered URL. Manual browser and real
 stream checks are separate release gates. Windows staging and child spawning
 remain `TODO(platform)`; see `docs/open-questions.md`.
+
+On 2026-09-28, a separate loopback smoke generated three-second HLS and DASH
+VOD with ffmpeg, downloaded each through `hls_download_driver`, and verified
+video and audio streams in both published outputs with ffprobe. This exposed
+and led to a fix for DASH manifests whose zero Period start is written
+`PT0.0S`. Debug, Release and ASan suites each pass 41/41 on the corrected tree.
+An installed-browser offer and a real external site selection remain manual
+release acceptance checks; the yt-dlp test uses a mock executable.

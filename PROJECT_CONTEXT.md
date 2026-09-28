@@ -97,6 +97,8 @@ Phase 3 wrap-up targets Chrome/Chromium and Firefox extension acceptance. Regist
 
 See `docs/media.md` for user flow, supported layouts, recovery behavior, and focused tests. Phase 4 test targets are `test_hls`, `test_hls_download`, `test_dash`, `test_dash_download`, `test_site_grab`, `test_site_grab_download`, `test_spawn`, `test_db`, and `test_ipc_socket` (`CMakeLists.txt:314`, `tests/`).
 
+Phase 4 wrap-up found and fixed two release-smoke issues: DASH accepts equivalent zero Period starts (including ffmpeg's `PT0.0S`), and scheduler removal refuses a terminal download until its worker joins (`src/engine/dash.c`, `src/core/scheduler.c`, `src/core/queue_manager.c`). Debug, Release and ASan each pass 41/41. Three-second ffmpeg-generated loopback HLS and DASH downloads produced playable video+audio outputs verified by ffprobe. An installed-browser media offer and external site-tool selection remain manual release acceptance checks.
+
 ### Phase 5 architecture supplement
 
 | Path and interface | Current contract |

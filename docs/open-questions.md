@@ -55,17 +55,16 @@ and sync implementation for Windows.
 
 ## Task 4.5.1 — Phase 4 release gates
 
-Phase 4 documentation and local fixtures are complete. Debug and ASan builds
-each passed 39/39 CTest targets on 2026-09-28. The TSan build succeeded, but
-23/39 tests failed before test assertions inside Criterion 2.4.3's runner
-(`libcriterion.so.3` initialization/segfault); 16 non-Criterion targets passed.
-This repeats the earlier Criterion/TSan environment blocker and does not
-establish a cdm race result. A Criterion/TSan-compatible environment is needed
-for the formal gate. Manual smoke against real HLS/DASH streams and a real
-yt-dlp site selection was not run in this restricted, URL-free test session;
-use consented test media and a desktop browser before closing the gate. Task
-4.5.1 remains unchecked; work can continue on independent Phase 5 tasks on the
-user's single `cdm` branch. No phase merge or push is authorized.
+Phase 4 documentation and local fixtures are complete. On 2026-09-28 the
+corrected Debug, Release and ASan builds each passed 41/41 CTest targets.
+An ffmpeg-generated loopback smoke produced playable HLS and DASH video+audio
+files and exposed the now-fixed DASH zero-start bug. An ASan scheduler test
+exposed the now-fixed terminal-state worker lifetime race. Criterion/TSan
+still fails before assertions in a standalone reproduction; the user accepted
+this as a tooling exception for wrap-up, not a claim of race-free unit tests.
+Installed-browser media offers and a real yt-dlp site selection remain manual
+release acceptance checks. The phase-4 handoff is recorded on `cdm`; no phase
+merge or push was performed.
 
 ## Task 4.4.1 — Optional site extractor constraints
 

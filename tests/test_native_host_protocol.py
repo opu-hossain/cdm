@@ -35,13 +35,17 @@ def main(host: str) -> None:
     input_bytes = frame(b"{bad json") + frame(
         json.dumps({"type": "unsupported", "request_id": "second"}).encode()
     )
-    result = subprocess.run([host], input=input_bytes, capture_output=True, timeout=5)
-    assert result.returncode == 0, result.stderr.decode(errors="replace")
-    messages = decode_frames(result.stdout)
-    assert len(messages) == 2, messages
-    assert messages[0]["type"] == "error" and messages[0]["error"] == "invalid JSON"
-    assert messages[1]["type"] == "error"
-    assert messages[1]["request_id"] == "second"
+    with tempfile.TemporaryDirectory(prefix="cdm-host-default-") as root:
+        default_env = os.environ.copy()
+        default_env["HOME"] = root
+        result = subprocess.run([host], input=input_bytes, env=default_env,
+                                capture_output=True, timeout=5)
+        assert result.returncode == 0, result.stderr.decode(errors="replace")
+        messages = decode_frames(result.stdout)
+        assert len(messages) == 2, messages
+        assert messages[0]["type"] == "error" and messages[0]["error"] == "invalid JSON"
+        assert messages[1]["type"] == "error"
+        assert messages[1]["request_id"] == "second"
 
     with tempfile.TemporaryDirectory(prefix="cdm-host-locale-") as root:
         config_dir = Path(root) / ".local" / "share" / "cdm"

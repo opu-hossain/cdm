@@ -17,6 +17,8 @@ This checklist is for the current Linux release candidate. A checked item must r
 - [ ] Verify the installed GUI, `cdm cli` commands, and native browser host from a clean prefix.
 - [ ] On a release desktop, inspect queue schedules/actions, category editing, tray controls, clipboard review, and both GUI themes. Confirm dialogs before destructive actions.
 - [ ] In installed Chromium and Firefox, load each extension and register its native host. Verify confirmation/progress, context consent, filters/exclusions, context menus, and URL refresh against a local HTTP server.
+- [x] Download ffmpeg-generated HLS and DASH VOD over `127.0.0.1` and verify both published outputs contain playable video and audio with ffprobe (2026-09-28).
+- [ ] Confirm HLS/DASH offers in an installed browser and an explicit yt-dlp selection on a consented external test site; verify failure behavior when ffmpeg or yt-dlp is absent.
 - [ ] Confirm `/etc/xdg/autostart/cdm-daemon.desktop`, the desktop launcher, browser extension files, and native-host binary are installed.
 
 ## Package checks

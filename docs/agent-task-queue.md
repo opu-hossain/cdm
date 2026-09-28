@@ -63,7 +63,7 @@ with the user; skip to Phase 2 in the meantime.
 - [x] **4.3.1** DASH MPD parser — **L** — same reasoning as 4.2.1, XML + template substitution schemes
 - [x] **4.3.2** DASH download and merge — **S** *after 4.2.x patterns exist* — mechanical reuse of the same download+ffmpeg shape
 - [x] **4.4.1** yt-dlp integration — **S** — child-process spawn + line-format parsing, fully specified allowlist/config surface
-- [ ] **4.5.1** Phase 4 wrap-up — **S**
+- [x] **4.5.1** Phase 4 wrap-up — **S** — Debug/Release/ASan 41/41 and playable loopback HLS/DASH pass; installed-browser media and real site-tool acceptance remain on the release checklist
 
 ## Phase 5 — Polish and platforms
 

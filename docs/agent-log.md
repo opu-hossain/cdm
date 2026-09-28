@@ -1193,3 +1193,9 @@ Branch: `cdm`; phase-4 ASan gate exposed scanner status/reason ordering and a te
 Completed: publish scanner reason before ERROR and retain a download until its scheduler worker is joined; added lifetime regression.
 Verification: ASan scheduler 20 consecutive passes; full ASan and Debug suites each pass 41/41.
 Next: complete 4.5.1 media wrap-up. No push.
+
+## 2026-09-28 — Codex, task 4.5.1
+Branch: `cdm`; phase-4 wrap-up recorded without a phase merge.
+Completed: documented playable loopback HLS/DASH, parser/lifetime fixes, remaining browser/site acceptance; isolated native-host test locale from the desktop config.
+Verification: Debug, Release and ASan each pass 41/41; ffprobe confirms video+audio in both outputs. Criterion/TSan is a user-accepted tooling exception.
+Next: 5.6.1 final release handoff. No push.
