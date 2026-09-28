@@ -264,7 +264,7 @@ static bool button(struct nk_context *ctx, float x, float y, float w, float h,
   style.hover = nk_style_item_color(primary ? ACCENT_HOVER : BORDER);
   style.active = nk_style_item_color(ACCENT_DIM);
   style.text_normal = style.text_hover = style.text_active =
-      enabled ? (primary ? WHITE : TEXT) : DISABLED;
+      enabled ? (primary ? theme_contrast_ink(ACCENT) : TEXT) : DISABLED;
   if (!enabled)
     style.hover = style.active = style.normal;
   nk_layout_space_push(ctx, nk_rect(x, y, w, h));
@@ -673,7 +673,7 @@ static void draw_rows(struct nk_context *ctx, UiState *ui, GuiRow *rows,
     const struct nk_user_font *font = bold_fonts[0];
     float ew = font->width(font->userdata, font->height, ext, (int)strlen(ext));
     label_font(ctx, nk_rect(icon.x + (34 - ew) / 2, icon.y, 34, 34), ext,
-               bold_fonts[0], WHITE, chip);
+               bold_fonts[0], theme_contrast_ink(chip), chip);
     float name_width = r.w - 64 - 14 - 64 - 14 - 28 - 16;
     label(ctx, nk_rect(r.x + 64, r.y + 10, name_width, 16),
           filename_for_row(row), 13, TEXT, bg);

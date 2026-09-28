@@ -62,6 +62,9 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBNOTIFY REQUIRED IMPORTED_TARGET libnotify)
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
 pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0)
+endif()
 pkg_check_modules(LIBXML2 REQUIRED IMPORTED_TARGET libxml-2.0>=2.9)
 option(DOWNLOADMGR_ENABLE_TRAY "Build the Linux tray backend when available" ON)
 if(DOWNLOADMGR_ENABLE_TRAY AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -258,6 +261,9 @@ target_link_libraries(cdm PRIVATE
     PkgConfig::EPOXY
     OpenGL::GL
 )
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(cdm PRIVATE PkgConfig::GIO)
+endif()
 if(UNIX)
     target_link_libraries(cdm PRIVATE m)
 endif()
@@ -433,7 +439,7 @@ set(CPACK_PACKAGE_RELOCATABLE OFF)
 # Debian.
 # libcurl4t64 on Ubuntu 24.04+; libcurl4 on older. SHLIBDEPS picks the right
 # one automatically, so we only list the GUI libs here as a floor.
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libnotify4, libsdl2-2.0-0, libepoxy0, libgl1")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libnotify4, libsdl2-2.0-0, libepoxy0, libgl1, libglib2.0-0 | libglib2.0-0t64")
 set(CPACK_DEBIAN_PACKAGE_SECTION "net")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
@@ -446,7 +452,7 @@ set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
 # RPM.
 set(CPACK_RPM_PACKAGE_LICENSE "MIT")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Internet")
-set(CPACK_RPM_PACKAGE_REQUIRES "libnotify, SDL2, libepoxy, mesa-libGL")
+set(CPACK_RPM_PACKAGE_REQUIRES "libnotify, SDL2, libepoxy, mesa-libGL, glib2")
 set(CPACK_RPM_PACKAGE_RELEASE 1)
 set(CPACK_RPM_PACKAGE_AUTOREQ ON)
 set(CPACK_RPM_PACKAGE_SUMMARY "Core Download Manager")

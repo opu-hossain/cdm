@@ -4,15 +4,49 @@
 
 #include "nuklear.h"
 
-typedef enum { THEME_DEFAULT = 0 } ThemeId;
+typedef enum {
+  THEME_SYSTEM = 0,
+  THEME_LIGHT,
+  THEME_DARK,
+  THEME_DEFAULT = THEME_SYSTEM,
+} ThemeId;
 
-/* The original GUI palette. Keep these values stable for the default theme. */
-extern const struct nk_color BG, SURFACE, SURFACE2, BORDER, TEXT, MUTED;
-extern const struct nk_color ACCENT, ACCENT_DIM, GREEN, RED, AMBER, WHITE;
-extern const struct nk_color DISABLED, ACCENT_HOVER, STATUS_BLUE;
-extern const struct nk_color STATUS_PURPLE, STATUS_ORANGE, STATUS_GREEN;
-extern const struct nk_color STATUS_GOLD, STATUS_DONE, STATUS_ERROR;
-extern const struct nk_color MODAL_CLEAR, MODAL_SHADE;
+typedef struct {
+  struct nk_color bg, surface, surface2, border, text, muted;
+  struct nk_color accent, accent_dim, green, red, amber, white;
+  struct nk_color disabled, accent_hover, status_blue, status_purple;
+  struct nk_color status_orange, status_green, status_gold, status_done;
+  struct nk_color status_error, modal_clear, modal_shade;
+} ThemePalette;
+
+/* GUI main thread alone calls theme_apply and reads the current palette. */
+const ThemePalette *theme_current_palette(void);
+ThemeId theme_detect_desktop(void); // light when no portal preference is available
+struct nk_color theme_contrast_ink(struct nk_color background);
+
+#define BG (theme_current_palette()->bg)
+#define SURFACE (theme_current_palette()->surface)
+#define SURFACE2 (theme_current_palette()->surface2)
+#define BORDER (theme_current_palette()->border)
+#define TEXT (theme_current_palette()->text)
+#define MUTED (theme_current_palette()->muted)
+#define ACCENT (theme_current_palette()->accent)
+#define ACCENT_DIM (theme_current_palette()->accent_dim)
+#define GREEN (theme_current_palette()->green)
+#define RED (theme_current_palette()->red)
+#define AMBER (theme_current_palette()->amber)
+#define WHITE (theme_current_palette()->white)
+#define DISABLED (theme_current_palette()->disabled)
+#define ACCENT_HOVER (theme_current_palette()->accent_hover)
+#define STATUS_BLUE (theme_current_palette()->status_blue)
+#define STATUS_PURPLE (theme_current_palette()->status_purple)
+#define STATUS_ORANGE (theme_current_palette()->status_orange)
+#define STATUS_GREEN (theme_current_palette()->status_green)
+#define STATUS_GOLD (theme_current_palette()->status_gold)
+#define STATUS_DONE (theme_current_palette()->status_done)
+#define STATUS_ERROR (theme_current_palette()->status_error)
+#define MODAL_CLEAR (theme_current_palette()->modal_clear)
+#define MODAL_SHADE (theme_current_palette()->modal_shade)
 
 enum {
   THEME_ROW_TIGHT_SPACER = 8,

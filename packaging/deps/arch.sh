@@ -3,4 +3,4 @@
 set -euo pipefail
 sudo pacman -S --needed base-devel pacman-contrib rsync \
     cmake pkgconf git python \
-    libnotify sdl2 libepoxy mesa curl sqlite openssl libxml2
+    libnotify sdl2 libepoxy mesa curl sqlite openssl libxml2 glib2

@@ -4,6 +4,6 @@ set -euo pipefail
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
     build-essential cmake pkg-config \
-    libnotify-dev libsdl2-dev libepoxy-dev libgl1-mesa-dev \
+    libnotify-dev libsdl2-dev libepoxy-dev libgl1-mesa-dev libglib2.0-dev \
     libcurl4-openssl-dev libsqlite3-dev libssl-dev libxml2-dev \
     libcriterion-dev python3

@@ -1,5 +1,13 @@
 # Open Questions
 
+## Task 5.2.2 — appearance preference on other platforms
+
+The Linux GUI reads `org.freedesktop.appearance` `color-scheme` through the
+XDG Settings portal using GIO. `TODO(platform)` in `src/gui/theme.c` tracks
+native Windows/macOS appearance detection; these platforms currently use the
+light fallback. The desktop preference is sampled when `theme_apply()` is
+called, not subscribed to live portal changes.
+
 ## Task 5.1.2 — JSON import contract (resolved, with limitations)
 
 The user approved daemon-owned versioned IPC, SQLite online backup before

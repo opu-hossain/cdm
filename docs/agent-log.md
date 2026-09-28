@@ -1074,3 +1074,10 @@ Completed: moved existing palette, literal status colors, Nuklear style and stan
 Verification: checked all 13 original palette values and 18 style assignments against HEAD; build and full Debug CTest 40/40 pass. Screenshot comparison is unverified because no display server is available.
 Open questions: desktop visual comparison remains for a later gate.
 Next: 5.2.2 dark theme. No push.
+
+## 2026-09-28 — Codex, task 5.2.2
+Branch: `cdm`; commit: `feat(gui): add light and dark palettes`.
+Completed: Linux system appearance via XDG Settings portal/GIO with light fallback; separate light/dark palettes and contrast ink for primary buttons and file chips. User approved GUI/build/package scope.
+Verification: no-bus fallback probe returns light; scripted AA contrast minima 4.61:1 dark and 6.11:1 light for button/chip ink, plus light text pairs >=4.5:1; full Debug CTest 40/40 pass. Desktop visual smoke unavailable.
+Open questions: native Windows/macOS preference lookup and live portal subscription remain; see docs/open-questions.md.
+Next: 5.2.3 theme dropdown. No push.

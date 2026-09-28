@@ -15,6 +15,7 @@ depends=(
   'sqlite'
   'openssl'
   'libxml2'
+  'glib2'
   'glibc'
   'gcc-libs'
 )
@@ -27,6 +28,7 @@ makedepends=(
   'sdl2'
   'libepoxy'
   'mesa'
+  'glib2'
 )
 backup=('etc/xdg/autostart/cdm-daemon.desktop')
 _upstream_version="${pkgver/rc/-rc}"
