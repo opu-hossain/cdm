@@ -15,6 +15,7 @@ Test(i18n, quoted_dotted_keys_load_once_and_fall_back) {
   fputs("\"settings.title\" = \"Settings\"\n"
         "\"download.done\" = \"Finished\"\n"
         "\"gui.settings.title\" = \"Preferencias\"\n"
+        "\"notify.download_complete\" = \"Descarga completa\"\n"
         "\"cli.usage.main\" = \"Translated usage\"\n", file);
   cr_assert_eq(fclose(file), 0);
   cr_assert_str_eq(tr("settings.title"), "settings.title");
@@ -22,6 +23,7 @@ Test(i18n, quoted_dotted_keys_load_once_and_fall_back) {
   cr_assert_str_eq(tr("settings.title"), "Settings");
   cr_assert_str_eq(tr("download.done"), "Finished");
   cr_assert_str_eq(tr("gui.settings.title"), "Preferencias");
+  cr_assert_str_eq(tr("notify.download_complete"), "Descarga completa");
   cr_assert_str_eq(tr("cli.usage.main"), "Translated usage");
   char log_path[] = "/tmp/cdm-i18n-log-XXXXXX";
   int log_fd = mkstemp(log_path);
@@ -57,6 +59,11 @@ Test(i18n, builtin_gui_english_is_available_without_a_catalog) {
 
 Test(i18n, builtin_native_host_error_is_available_without_a_catalog) {
   cr_assert_str_eq(tr("host.error.invalid_json"), "invalid JSON");
+}
+
+Test(i18n, builtin_notification_titles_are_available_without_a_catalog) {
+  cr_assert_str_eq(tr("notify.download_complete"), "Download Complete");
+  cr_assert_str_eq(tr("notify.download_failed"), "Download Failed");
 }
 
 Test(i18n, rejects_non_string_values_without_publishing) {

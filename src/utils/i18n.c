@@ -26,6 +26,8 @@ static MissingKey *g_missing;
 
 /* English UI copy stays available when no locale catalog is installed. */
 static const struct { const char *key, *value; } builtin[] = {
+  {"notify.download_complete", "Download Complete"},
+  {"notify.download_failed", "Download Failed"},
   {"host.error.invalid_site_exclusions", "invalid site exclusion list"},
   {"host.error.invalid_excluded_hostname", "invalid excluded hostname"},
   {"host.error.invalid_offer", "invalid or unsupported download offer"},

@@ -11,6 +11,7 @@
 #include "../platform/thread.h"
 #include "../platform/tray.h"
 #include "../utils/config.h"
+#include "../utils/i18n.h"
 #include "../utils/log.h"
 #include "../utils/notify.h"
 
@@ -87,7 +88,7 @@ static int download_thread_fn(void *arg) {
     db_update_status(dl->id, "DONE");
     ipc_broadcast_status(dl->id, "Done", 1.0f);
     LOG_INFO("Download %u completed", dl->id);
-    dm_notify_send("Download Complete", basename_of(dl->dest_path),
+    dm_notify_send(tr("notify.download_complete"), basename_of(dl->dest_path),
                    DM_NOTIFY_INFO);
     return 0;
   }
@@ -122,7 +123,7 @@ static int download_thread_fn(void *arg) {
     ipc_broadcast_status(dl->id, "Verification failed", dl->progress);
     LOG_WARN("Download %u failed verification – not retrying, file removed",
              dl->id);
-    dm_notify_send("Download Failed", basename_of(dl->dest_path),
+    dm_notify_send(tr("notify.download_failed"), basename_of(dl->dest_path),
                    DM_NOTIFY_ERROR);
     return rc;
   }
@@ -138,7 +139,7 @@ static int download_thread_fn(void *arg) {
              rc == -5 ? "fresh browser session required" :
              rc == -4 ? "resume file is missing" : "destination already exists",
              dl->dest_path);
-    dm_notify_send("Download Failed", basename_of(dl->dest_path),
+    dm_notify_send(tr("notify.download_failed"), basename_of(dl->dest_path),
                    DM_NOTIFY_ERROR);
     return rc;
   }
@@ -163,7 +164,7 @@ static int download_thread_fn(void *arg) {
   db_update_status(dl->id, "ERROR");
   ipc_broadcast_status(dl->id, "Error", dl->progress);
   LOG_WARN("Download %u failed (resumable)", dl->id);
-  dm_notify_send("Download Failed", basename_of(dl->dest_path),
+  dm_notify_send(tr("notify.download_failed"), basename_of(dl->dest_path),
                  DM_NOTIFY_ERROR);
   return rc;
 }

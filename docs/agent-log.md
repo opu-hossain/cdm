@@ -1116,3 +1116,10 @@ Completed: routed 16 browser-visible native-host error messages through stable k
 Verification: test-first missing fallback, focused i18n/native messaging protocol tests pass; full Debug CTest 41/41 pass. Protocol test covers host framing and English fallback.
 Open questions: native host catalog loading is deferred to 5.3.3.
 Next: 5.3.2 notifications string extraction. No push.
+
+## 2026-09-28 — Codex, task 5.3.2 (notifications)
+Branch: `cdm`; commit: `refactor(notify): translate download notification titles`.
+Completed: user-approved scheduler scope; routed success/failure desktop notification titles through stable keys and built-in English fallbacks. `notify.c` only transports caller-provided title/body.
+Verification: test-first missing fallback, catalog override and focused scheduler/i18n tests pass; full Debug CTest 41/41 pass.
+Open questions: formatted text ordering from earlier 5.3.2 subsystems remains open.
+Next: 5.3.3 locale and startup wiring. No push.
