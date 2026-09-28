@@ -188,6 +188,17 @@ inside `libcriterion.so.3`. Debug and ASan suites both pass 33/33. Which
 Criterion/TSan-compatible runner should be used for the release gate? Repeat
 the full TSan suite there before treating it as race-clean.
 
+2026-09-28 reproduction on the phase-5 tree: a standalone one-assertion
+Criterion program linked with TSan fails before its assertion under both GCC
+and Clang. `strace` shows BoxFort creating and resizing its `/dev/shm` arena,
+then failing while searching for a fixed address; this also happens outside
+the sandbox. Linking the minimal program with `-no-pie` passed once but failed
+on repetition with a `libcriterion.so.3` crash, so it is not a reliable fix.
+All 13 non-Criterion TSan integration targets passed outside the sandbox;
+Debug and ASan passed 41/41. These results do not establish that Criterion's
+unit tests are race-clean. A reliable runner must avoid the BoxFort/TSan
+address conflict or run the Criterion cases under a different test harness.
+
 ## Task 3.1.4 — Ephemeral context scope and restart marker
 
 The brief lists IPC, worker pool, and popup files, but `RequestOptions` is

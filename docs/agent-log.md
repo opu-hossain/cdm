@@ -1157,3 +1157,9 @@ Branch: `cdm`; commit: `docs(release): record phase 5 verification limits`.
 Completed: refreshed project context/file inventory and draft release notes; Debug 41/41 and ASan 41/41 pass. Isolated daemon-status smoke passes outside sandbox.
 Blocked gate: TSan builds but 24/41 Criterion targets fail before assertions; an isolated target also fails outside sandbox. GUI visual, installed-browser and real-stream smoke remain unverified.
 Next: resolve Criterion/TSan runner and manual gates before checking 5.6.1 or earlier phase wrap-ups. No push.
+
+## 2026-09-28 — Codex, TSan blocker investigation
+Branch: `cdm`; task 5.6.1 remains unchecked.
+Completed: isolated Criterion/BoxFort startup failure with a one-assertion TSan repro; GCC and Clang fail before cdm code. A non-PIE trial was intermittent and reverted.
+Verification: 13/13 non-Criterion TSan integration targets and 41/41 Debug targets pass; findings recorded in `docs/open-questions.md`.
+Next: use a reliable Criterion/TSan runner or alternate unit-test harness, then repeat the full TSan gate. No push.
