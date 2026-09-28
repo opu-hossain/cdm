@@ -72,7 +72,8 @@ static bool number(Parse *p, xmlNode **nodes, size_t count, const char *name,
   xmlFree(s);
   return ok;
 }
-static bool duration(Parse *p, xmlNode *n, const char *name, double *out) {
+static bool duration(Parse *p, xmlNode *n, const char *name, double *out,
+                     bool allow_zero) {
   char *s = property(n, name);
   if (!s)
     return true;
@@ -120,7 +121,7 @@ static bool duration(Parse *p, xmlNode *n, const char *name, double *out) {
     t++;
   }
   xmlFree(s);
-  if (!ok || !any || seconds <= 0 || seconds > 1e12L)
+  if (!ok || !any || (seconds == 0 && !allow_zero) || seconds > 1e12L)
     return fail(p, DASH_INVALID,
                 "invalid ISO duration (PT hours/minutes/seconds required)");
   *out = (double)seconds;
@@ -614,16 +615,16 @@ DashResult dash_parse(const char *text, size_t length, const char *base,
     fail(&p, DASH_INVALID, "missing period");
     goto done;
   }
-  if (!duration(&p, root, "mediaPresentationDuration", &m.duration) ||
-      !duration(&p, period, "duration", &m.duration))
+  if (!duration(&p, root, "mediaPresentationDuration", &m.duration, false) ||
+      !duration(&p, period, "duration", &m.duration, false))
     goto done;
-  char *start_time = property(period, "start");
-  if (start_time && strcmp(start_time, "PT0S")) {
-    xmlFree(start_time);
+  double start_time = 0;
+  if (!duration(&p, period, "start", &start_time, true))
+    goto done;
+  if (start_time > 0) {
     fail(&p, DASH_UNSUPPORTED, "nonzero period start unsupported");
     goto done;
   }
-  xmlFree(start_time);
   xmlNode *chosen_video = NULL, *chosen_audio = NULL, *video_set = NULL,
           *audio_set = NULL;
   uint64_t video_bw = 0, audio_bw = 0;

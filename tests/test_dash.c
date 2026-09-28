@@ -88,6 +88,21 @@ static void reject(const char *xml, DashResult expected) {
   cr_assert_null(m.video.segments);
   cr_assert_null(m.audio.segments);
 }
+Test(dash, equivalent_zero_period_starts) {
+  DashManifest m = parse_ok(
+      "<MPD><Period start='PT0.0S'><AdaptationSet contentType='video'>"
+      "<Representation bandwidth='1'><SegmentList><SegmentURL media='v.mp4'/>"
+      "</SegmentList></Representation></AdaptationSet></Period></MPD>");
+  cr_assert_eq(m.video.segment_count, 1);
+  dash_manifest_free(&m);
+  m = parse_ok(
+      "<MPD><Period start='PT0H0M0.000S'><AdaptationSet contentType='video'>"
+      "<Representation bandwidth='1'><SegmentList><SegmentURL media='v.mp4'/>"
+      "</SegmentList></Representation></AdaptationSet></Period></MPD>");
+  cr_assert_eq(m.video.segment_count, 1);
+  dash_manifest_free(&m);
+  reject("<MPD><Period start='PT0.1S'/></MPD>", DASH_UNSUPPORTED);
+}
 Test(dash, unsupported_layouts) {
   reject("<MPD type='dynamic'><Period/></MPD>", DASH_UNSUPPORTED);
   reject("<MPD><Period/><Period/></MPD>", DASH_UNSUPPORTED);

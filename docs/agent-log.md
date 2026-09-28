@@ -1181,3 +1181,9 @@ Branch: `cdm`; phase-3 wrap-up recorded without a phase merge.
 Completed: limited release-browser acceptance to Chromium/Firefox, documented deferred browsers and live handoff checklist; updated context and release notes.
 Verification: Debug/Release 41/41, Node extension tests and staged native-host protocol pass. Installed-browser interaction remains for user testing.
 Next: 4.5.1 media wrap-up. No push.
+
+## 2026-09-28 — Codex, DASH zero-start release fix
+Branch: `cdm`; task 4.5.1 media smoke exposed a valid MPD rejected by the parser.
+Completed: parse equivalent zero Period starts such as `PT0.0S` while retaining the nonzero-start limit; added a failing-first regression.
+Verification: focused DASH parser passes; ffmpeg-generated loopback HLS and DASH downloads both produce playable video+audio outputs.
+Next: full Debug suite, then 4.5.1 documentation. No push.
