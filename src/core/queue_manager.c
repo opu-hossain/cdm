@@ -257,8 +257,9 @@ void queue_manager_remove(uint32_t id) {
   while (*prev_ptr != NULL) {
     Download *cur = *prev_ptr;
     if (cur->id == id) {
-      if (cur->status == DOWNLOAD_ACTIVE) {
-        atomic_store(&cur->cancel_requested, true);
+      if (cur->status == DOWNLOAD_ACTIVE || cur->worker_owned) {
+        if (cur->status == DOWNLOAD_ACTIVE)
+          atomic_store(&cur->cancel_requested, true);
         dm_mutex_unlock(&g_mutex);
         return;
       }
@@ -278,7 +279,7 @@ bool queue_manager_forget_locked(uint32_t id) {
   while (*prev_ptr != NULL) {
     Download *current = *prev_ptr;
     if (current->id == id) {
-      if (current->status == DOWNLOAD_ACTIVE)
+      if (current->status == DOWNLOAD_ACTIVE || current->worker_owned)
         return false;
       *prev_ptr = current->next;
       free_download(current);
@@ -292,7 +293,7 @@ bool queue_manager_forget_locked(uint32_t id) {
 bool queue_manager_can_forget_locked(uint32_t id) {
   for (Download *current = g_head; current; current = current->next) {
     if (current->id == id)
-      return current->status != DOWNLOAD_ACTIVE;
+      return current->status != DOWNLOAD_ACTIVE && !current->worker_owned;
   }
   return true;
 }

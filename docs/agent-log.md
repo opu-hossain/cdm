@@ -1187,3 +1187,9 @@ Branch: `cdm`; task 4.5.1 media smoke exposed a valid MPD rejected by the parser
 Completed: parse equivalent zero Period starts such as `PT0.0S` while retaining the nonzero-start limit; added a failing-first regression.
 Verification: focused DASH parser passes; ffmpeg-generated loopback HLS and DASH downloads both produce playable video+audio outputs.
 Next: full Debug suite, then 4.5.1 documentation. No push.
+
+## 2026-09-28 — Codex, scheduler terminal lifetime fix
+Branch: `cdm`; phase-4 ASan gate exposed scanner status/reason ordering and a terminal-state use-after-free.
+Completed: publish scanner reason before ERROR and retain a download until its scheduler worker is joined; added lifetime regression.
+Verification: ASan scheduler 20 consecutive passes; full ASan and Debug suites each pass 41/41.
+Next: complete 4.5.1 media wrap-up. No push.

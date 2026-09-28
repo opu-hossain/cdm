@@ -365,12 +365,20 @@ Test(scheduler, scanner_block_is_nonretryable_and_persisted) {
   Download *d = queue_manager_find_by_id(id);
   cr_assert_not_null(d);
   cr_assert_eq(d->retry_count, 0);
-  scheduler_tick();
-  cr_assert_eq(atomic_load(&engine_runs), 1);
   char error[256];
   cr_assert(queue_manager_get_error(id, error, sizeof(error)));
   cr_assert_str_eq(error, "Blocked by scanner");
   queue_manager_remove(id);
+  cr_assert_not_null(queue_manager_find_by_id(id),
+                     "worker still owns the download until it is joined");
+  scheduler_tick();
+  cr_assert_eq(atomic_load(&engine_runs), 1);
+  for (int i = 0; i < 1000 && queue_manager_find_by_id(id); i++) {
+    scheduler_tick();
+    queue_manager_remove(id);
+    dm_thread_sleep_ms(1);
+  }
+  cr_assert_null(queue_manager_find_by_id(id));
 }
 
 Test(scheduler, tick_starts_download) {

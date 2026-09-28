@@ -131,10 +131,10 @@ static int download_thread_fn(void *arg) {
   if (rc == -3 || rc == -4 || rc == -5 || rc == -6) {
     dl->retry_count = 0;
     dl->next_retry_at = 0;
-    queue_manager_update_status(dl->id, DOWNLOAD_ERROR);
-    db_update_status(dl->id, "ERROR");
     if (rc == -6)
       queue_manager_set_site_error(dl->id, "Blocked by scanner");
+    queue_manager_update_status(dl->id, DOWNLOAD_ERROR);
+    db_update_status(dl->id, "ERROR");
     ipc_broadcast_status(dl->id, rc == -6 ? "Blocked by scanner" :
                           rc == -5 ? "Fresh browser session required" : "Error",
                           dl->progress);
@@ -186,7 +186,11 @@ static void reap_finished_workers(void) {
     if (!worker->in_use || !atomic_load(&worker->done))
       continue;
     dm_thread_join(&worker->thread, NULL);
+    dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
+    dm_mutex_lock(mutex);
+    worker->download->worker_owned = false;
     worker->download = NULL;
+    dm_mutex_unlock(mutex);
     worker->download_id = 0;
     worker->in_use = false;
   }
@@ -295,6 +299,7 @@ void scheduler_tick(void) {
       next_dl->transfer_metrics =
           (DownloadTransferMetrics){.eta_seconds = UINT64_MAX};
       next_dl->status = DOWNLOAD_ACTIVE;
+      next_dl->worker_owned = true;
       next_dl->next_retry_at = 0; // not needed once running
     }
   }
@@ -332,6 +337,7 @@ void scheduler_tick(void) {
       /* rollback on thread creation failure */
       dm_mutex_lock(mutex);
       next_dl->status = DOWNLOAD_QUEUED;
+      next_dl->worker_owned = false;
       dm_mutex_unlock(mutex);
     }
   }
@@ -350,7 +356,11 @@ void scheduler_shutdown(void) {
     if (!worker->in_use)
       continue;
     dm_thread_join(&worker->thread, NULL);
+    dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
+    dm_mutex_lock(mutex);
+    worker->download->worker_owned = false;
     worker->download = NULL;
+    dm_mutex_unlock(mutex);
     worker->download_id = 0;
     worker->in_use = false;
   }

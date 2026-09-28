@@ -75,6 +75,7 @@ typedef struct Download {
   char last_modified[128];
   uint64_t total_size;
   DownloadStatus status;
+  bool worker_owned; // queue mutex; held until scheduler joins the worker
   int priority;
   float progress;
   struct Download *next;
