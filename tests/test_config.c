@@ -89,6 +89,32 @@ Test(config, clipboard_monitor_defaults_off_and_round_trips) {
   remove_home(home);
 }
 
+Test(config, theme_defaults_to_system_and_round_trips) {
+  char home[64];
+  isolated_home(home);
+  DownloadManagerConfig config;
+  config_get(&config);
+  cr_assert_str_eq(config.ui_theme, "system");
+  strcpy(config.ui_theme, "dark");
+  cr_assert(config_save(&config));
+  config_init(NULL);
+  config_get(&config);
+  cr_assert_str_eq(config.ui_theme, "dark");
+  strcpy(config.ui_theme, "invalid");
+  cr_assert_not(config_save(&config));
+  char path[256];
+  snprintf(path, sizeof(path), "%s/invalid-theme.toml", home);
+  FILE *file = fopen(path, "w");
+  cr_assert_not_null(file);
+  fputs("[ui]\ntheme = \"solarized\"\n", file);
+  fclose(file);
+  config_init(path);
+  config_get(&config);
+  cr_assert_str_eq(config.ui_theme, "system");
+  unlink(path);
+  remove_home(home);
+}
+
 Test(config, invalid_mode_and_missing_proxy_host_fall_back_to_none) {
   char home[64];
   isolated_home(home);

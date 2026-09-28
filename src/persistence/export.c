@@ -71,6 +71,7 @@ static cJSON *make_settings(bool secrets) {
             add_bool(actions, "allow_sleep", config.allow_sleep) &&
             add_bool(actions, "allow_command", config.allow_command) &&
             add_bool(ui, "clipboard_monitor", config.clipboard_monitor) &&
+            add_string(ui, "theme", config.ui_theme) &&
             add_bool(sites, "use_yt_dlp", config.use_yt_dlp) &&
             add_string(sites, "yt_dlp_path", config.yt_dlp_path) &&
             add_string(sites, "yt_dlp_format", config.yt_dlp_format) &&
@@ -279,15 +280,16 @@ static bool parse_settings(const cJSON *settings, DownloadManagerConfig *config,
   static const char *const tkeys[] = {"max_speed_bytes_per_sec"};
   static const char *const timekeys[] = {"connect_sec", "transfer_sec"};
   static const char *const akeys[] = {"allow_shutdown", "allow_sleep", "allow_command"};
-  static const char *const uikeys[] = {"clipboard_monitor"};
+  static const char *const uikeys[] = {"clipboard_monitor", "theme"};
   static const char *const skeys[] = {"use_yt_dlp", "yt_dlp_path", "yt_dlp_format"};
   static const char *const pkeys[] = {"mode", "url", "username", "password"};
   if (!known_keys(d, dkeys, 4) || !known_keys(r, rkeys, 3) ||
       !known_keys(t, tkeys, 1) || !known_keys(time, timekeys, 2) ||
-      !known_keys(a, akeys, 3) || !known_keys(ui, uikeys, 1) ||
+      !known_keys(a, akeys, 3) || !known_keys(ui, uikeys, 2) ||
       !known_keys(s, skeys, 3) || !known_keys(p, pkeys, 4))
     return false;
   config_get(config);
+  memcpy(config->ui_theme, "system", sizeof("system"));
   int proxy_mode = 0;
   bool ok = json_int(d, "max_concurrent", 1, 64,
                      &config->max_concurrent_downloads) &&
@@ -315,6 +317,8 @@ static bool parse_settings(const cJSON *settings, DownloadManagerConfig *config,
             json_bool(a, "allow_sleep", &config->allow_sleep) &&
             json_bool(a, "allow_command", &config->allow_command) &&
             json_bool(ui, "clipboard_monitor", &config->clipboard_monitor) &&
+            json_text(ui, "theme", config->ui_theme,
+                      sizeof(config->ui_theme), false) &&
             json_bool(s, "use_yt_dlp", &config->use_yt_dlp) &&
             json_text(s, "yt_dlp_path", config->yt_dlp_path,
                       sizeof(config->yt_dlp_path), true) &&

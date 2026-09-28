@@ -78,9 +78,23 @@ typedef struct {
   char batch_urls[8192];
   bool clipboard_monitor, clipboard_monitor_enabled, clipboard_offer_open;
   bool folder_explicit; // GUI main thread owns the destination choice
+  ThemeId theme_saved, theme_preview;
+  bool theme_needs_apply;
   char clipboard_seen[GUI_URL_CAP], clipboard_offer[GUI_URL_CAP];
   uint32_t clipboard_checked_at, clipboard_changed_at;
 } UiState;
+
+static ThemeId theme_from_text(const char *value) {
+  if (strcmp(value, "dark") == 0)
+    return THEME_DARK;
+  if (strcmp(value, "light") == 0)
+    return THEME_LIGHT;
+  return THEME_SYSTEM;
+}
+
+static const char *theme_to_text(ThemeId id) {
+  return id == THEME_DARK ? "dark" : id == THEME_LIGHT ? "light" : "system";
+}
 
 static void copy_text(char *out, size_t size, const char *text) {
   snprintf(out, size, "%s", text ? text : "");
@@ -394,6 +408,9 @@ static void open_settings(UiState *ui) {
   copy_text(ui->user_agent, sizeof(ui->user_agent), config.user_agent);
   ui->proxy_mode = config.proxy_mode;
   ui->clipboard_monitor = config.clipboard_monitor;
+  ui->theme_saved = theme_from_text(config.ui_theme);
+  ui->theme_preview = ui->theme_saved;
+  ui->theme_needs_apply = true;
   copy_text(ui->proxy_url, sizeof(ui->proxy_url), config.proxy_url);
   copy_text(ui->proxy_username, sizeof(ui->proxy_username),
             config.proxy_username);
@@ -1022,6 +1039,10 @@ static void settings_transfer(UiState *ui, bool importing, bool replace) {
 
 static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
                           float height) {
+  if (ui->theme_needs_apply) {
+    theme_apply(ctx, ui->theme_preview);
+    ui->theme_needs_apply = false;
+  }
   float h = height * .8f;
   if (h > 650)
     h = 650;
@@ -1046,6 +1067,16 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     nk_layout_row_dynamic(ctx, THEME_ROW_CAPTION, 1);
     nk_label_colored(ctx, "Ask before adding a copied URL.", NK_TEXT_LEFT,
                      MUTED);
+    nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
+    nk_label(ctx, "Theme", NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
+    const char *themes[] = {"System", "Light", "Dark"};
+    ThemeId selection = (ThemeId)nk_combo(ctx, themes, 3, ui->theme_preview,
+                                          30, nk_vec2(400, 110));
+    if (selection != ui->theme_preview) {
+      ui->theme_preview = selection;
+      theme_apply(ctx, selection);
+    }
     nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
     nk_label(ctx, "Default download directory", NK_TEXT_LEFT);
     nk_layout_row_begin(ctx, NK_STATIC, THEME_ROW_INPUT, 3);
@@ -1169,6 +1200,8 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     config.connect_timeout_sec = ui->connect_timeout;
     config.transfer_timeout_sec = ui->transfer_timeout;
     config.clipboard_monitor = ui->clipboard_monitor;
+    memcpy(config.ui_theme, theme_to_text(ui->theme_preview),
+           strlen(theme_to_text(ui->theme_preview)) + 1);
     if (ui->user_agent[0])
       copy_text(config.user_agent, sizeof(config.user_agent), ui->user_agent);
     config.proxy_mode = ui->proxy_mode;
@@ -1183,14 +1216,20 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     else if (!proxy_url_ok)
       copy_text(ui->settings_message, sizeof(ui->settings_message),
                 "Proxy URL needs a scheme and host.");
-    else if (config_save(&config) && gui_client_reload_config()) {
-      ui->clipboard_monitor_enabled = config.clipboard_monitor;
-      clipboard_baseline(ui);
-      ui->clipboard_offer_open = false;
-      copy_text(ui->folder, sizeof(ui->folder), ui->directory);
-      ui->disk_checked_at = UINT32_MAX;
-      ui->folder_explicit = false;
-      ui->settings_open = false;
+    else if (config_save(&config)) {
+      ui->theme_saved = ui->theme_preview;
+      if (!gui_client_reload_config()) {
+        copy_text(ui->settings_message, sizeof(ui->settings_message),
+                  "Settings saved, but the daemon did not reload them");
+      } else {
+        ui->clipboard_monitor_enabled = config.clipboard_monitor;
+        clipboard_baseline(ui);
+        ui->clipboard_offer_open = false;
+        copy_text(ui->folder, sizeof(ui->folder), ui->directory);
+        ui->disk_checked_at = UINT32_MAX;
+        ui->folder_explicit = false;
+        ui->settings_open = false;
+      }
     } else
       copy_text(ui->settings_message, sizeof(ui->settings_message),
                 "Could not save or apply settings");
@@ -2048,7 +2087,9 @@ int run_gui(void) {
     fonts[i] = gui_sdl_backend_font(backend, 11 + i);
     bold_fonts[i] = gui_sdl_backend_bold_font(backend, 11 + i);
   }
-  theme_apply(ctx, THEME_DEFAULT);
+  DownloadManagerConfig initial_config;
+  config_get(&initial_config);
+  theme_apply(ctx, theme_from_text(initial_config.ui_theme));
   if (!gui_controller_start()) {
     gui_sdl_backend_destroy(backend);
     gui_client_disconnect();
@@ -2181,6 +2222,10 @@ int run_gui(void) {
         draw_category_delete(ctx, &ui, width, height);
       else
         draw_details(ctx, &ui, width, height);
+    }
+    if (!ui.settings_open && ui.theme_preview != ui.theme_saved) {
+      theme_apply(ctx, ui.theme_saved);
+      ui.theme_preview = ui.theme_saved;
     }
     gui_sdl_backend_end_frame(backend);
     SDL_Delay(8);

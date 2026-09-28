@@ -51,6 +51,8 @@ static bool g_allow_sleep;
 static bool g_allow_command;
 /* GUI process reads and writes this only on its main thread. */
 static bool g_clipboard_monitor;
+/* Shared config snapshots and reload protect this setting with g_network_mutex. */
+static char g_ui_theme[8] = "system";
 static dm_mutex_t g_network_mutex;
 static once_flag g_network_once = ONCE_FLAG_INIT;
 
@@ -69,6 +71,7 @@ static void reset_defaults(void) {
   g_clipboard_monitor = false;
   ensure_network_mutex();
   dm_mutex_lock(&g_network_mutex);
+  memcpy(g_ui_theme, "system", sizeof("system"));
   g_proxy_mode = PROXY_NONE;
   g_proxy_url[0] = g_proxy_username[0] = g_proxy_password[0] = '\0';
   g_max_connections = DEFAULT_MAX_CONNECTIONS;
@@ -289,6 +292,14 @@ void config_init(const char *path) {
 
   toml_datum_t ui = toml_get(root, "ui");
   read_bool(ui, "clipboard_monitor", &g_clipboard_monitor);
+  char ui_theme[8] = {0};
+  read_string(ui, "theme", ui_theme, sizeof(ui_theme));
+  if (strcmp(ui_theme, "system") == 0 || strcmp(ui_theme, "light") == 0 ||
+      strcmp(ui_theme, "dark") == 0) {
+    dm_mutex_lock(&g_network_mutex);
+    memcpy(g_ui_theme, ui_theme, strlen(ui_theme) + 1);
+    dm_mutex_unlock(&g_network_mutex);
+  }
 
   toml_datum_t timeouts = toml_get(root, "timeouts");
   int connect_timeout = read_clamped_int(
@@ -390,6 +401,7 @@ void config_get(DownloadManagerConfig *out) {
   out->clipboard_monitor = g_clipboard_monitor;
   ensure_network_mutex();
   dm_mutex_lock(&g_network_mutex);
+  memcpy(out->ui_theme, g_ui_theme, sizeof(out->ui_theme));
   out->proxy_mode = g_proxy_mode;
   memcpy(out->proxy_url, g_proxy_url, sizeof(out->proxy_url));
   memcpy(out->proxy_username, g_proxy_username, sizeof(out->proxy_username));
@@ -426,6 +438,10 @@ bool config_validate(const DownloadManagerConfig *config) {
       !memchr(config->yt_dlp_path, '\0', sizeof(config->yt_dlp_path)) ||
       !config->yt_dlp_path[0] ||
       !memchr(config->yt_dlp_format, '\0', sizeof(config->yt_dlp_format)) ||
+      !memchr(config->ui_theme, '\0', sizeof(config->ui_theme)) ||
+      (strcmp(config->ui_theme, "system") != 0 &&
+       strcmp(config->ui_theme, "light") != 0 &&
+       strcmp(config->ui_theme, "dark") != 0) ||
       !config->yt_dlp_format[0] || config->connect_timeout_sec < 1 ||
       config->connect_timeout_sec > 600 ||
       config->transfer_timeout_sec < 1 ||
@@ -473,8 +489,9 @@ bool config_save(const DownloadManagerConfig *config) {
                       config->allow_sleep ? "true" : "false",
                       config->allow_command ? "true" : "false") >= 0;
   if (written)
-    written = fprintf(fp, "\n[ui]\nclipboard_monitor = %s\n",
-                      config->clipboard_monitor ? "true" : "false") >= 0;
+    written = fprintf(fp, "\n[ui]\nclipboard_monitor = %s\ntheme = \"%s\"\n",
+                      config->clipboard_monitor ? "true" : "false",
+                      config->ui_theme) >= 0;
   if (written)
     written = fprintf(fp, "\n[sites]\nuse_yt_dlp = %s\nyt_dlp_path = ",
                       config->use_yt_dlp ? "true" : "false") >= 0 &&

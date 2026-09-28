@@ -1081,3 +1081,10 @@ Completed: Linux system appearance via XDG Settings portal/GIO with light fallba
 Verification: no-bus fallback probe returns light; scripted AA contrast minima 4.61:1 dark and 6.11:1 light for button/chip ink, plus light text pairs >=4.5:1; full Debug CTest 40/40 pass. Desktop visual smoke unavailable.
 Open questions: native Windows/macOS preference lookup and live portal subscription remain; see docs/open-questions.md.
 Next: 5.2.3 theme dropdown. No push.
+
+## 2026-09-28 — Codex, task 5.2.3
+Branch: `cdm`; commit: `feat(gui): add theme dropdown in settings`.
+Completed: persisted `[ui] theme` with system/light/dark validation, startup selection, live Settings preview and Cancel restore; user-approved JSON export/import parity.
+Verification: test-first config round trip, invalid theme fallback and JSON import/export tests pass; full Debug CTest 40/40 pass. Interactive GUI smoke unavailable without display.
+Open questions: no new design questions; desktop visual check remains.
+Next: 5.3.1 i18n helper. No push.

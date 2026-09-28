@@ -55,6 +55,7 @@ def main(cdm):
             exported = json.loads(safe.read_text())
             assert exported["version"] == 1
             assert exported["settings"]["downloads"]["max_concurrent"] == 4
+            assert exported["settings"]["ui"]["theme"] == "system"
             assert len(exported["downloads"]) == 501
             assert exported["downloads"][0]["id"] == 501
             assert exported["downloads"][-1]["id"] == 1
@@ -98,6 +99,14 @@ def main(cdm):
             invalid_settings["settings"]["downloads"]["default_directory"] = "/outside"
             invalid_file = root / "invalid-settings.json"
             invalid_file.write_text(json.dumps(invalid_settings))
+            rejected = subprocess.run([cdm, "cli", "import", "--in", str(invalid_file),
+                                       "--replace", "--yes"], env=env,
+                                      capture_output=True, text=True, timeout=15)
+            assert rejected.returncode != 0, rejected
+            assert not list(config_dir.glob("downloads.db.backup.*"))
+            invalid_theme = json.loads(safe.read_text())
+            invalid_theme["settings"]["ui"]["theme"] = "solarized"
+            invalid_file.write_text(json.dumps(invalid_theme))
             rejected = subprocess.run([cdm, "cli", "import", "--in", str(invalid_file),
                                        "--replace", "--yes"], env=env,
                                       capture_output=True, text=True, timeout=15)
@@ -147,6 +156,7 @@ def main(cdm):
                            (999, "https://example.invalid/extra", str(root / "extra"), "DONE"))
             replacement = json.loads(safe.read_text())
             replacement["settings"]["downloads"]["max_concurrent"] = 5
+            replacement["settings"]["ui"]["theme"] = "dark"
             replace_file = root / "replace.json"
             replace_file.write_text(json.dumps(replacement))
             replaced = subprocess.run([cdm, "cli", "import", "--in", str(replace_file),
@@ -160,6 +170,7 @@ def main(cdm):
             with sqlite3.connect(config_dir / "downloads.db") as db:
                 assert db.execute("SELECT count(*) FROM downloads").fetchone()[0] == 501
             assert "max_concurrent = 5" in (config_dir / "config.toml").read_text()
+            assert 'theme = "dark"' in (config_dir / "config.toml").read_text()
         finally:
             daemon.send_signal(signal.SIGTERM)
             daemon.wait(timeout=5)
