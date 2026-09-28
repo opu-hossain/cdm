@@ -143,6 +143,25 @@ Test(config, locale_defaults_to_english_and_round_trips) {
   remove_home(home);
 }
 
+Test(config, scanner_defaults_disabled_and_round_trips) {
+  char home[64];
+  isolated_home(home);
+  DownloadManagerConfig config;
+  config_get(&config);
+  cr_assert_str_empty(config.scanner_command);
+  cr_assert_str_empty(config.scanner_args);
+  strcpy(config.scanner_command, "/bin/true");
+  strcpy(config.scanner_args, "--quiet --check");
+  cr_assert(config_save(&config));
+  config_init(NULL);
+  config_get(&config);
+  cr_assert_str_eq(config.scanner_command, "/bin/true");
+  cr_assert_str_eq(config.scanner_args, "--quiet --check");
+  memset(config.scanner_command, 'x', sizeof(config.scanner_command));
+  cr_assert_not(config_save(&config));
+  remove_home(home);
+}
+
 Test(config, invalid_mode_and_missing_proxy_host_fall_back_to_none) {
   char home[64];
   isolated_home(home);

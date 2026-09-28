@@ -286,7 +286,7 @@ static const struct { const char *key, *value; } builtin[] = {
   {"cli.error.list_size_unsupported", "Daemon does not support history rows with size"},
   {"cli.error.list_ipc", "Daemon does not support sized history pages or IPC failed"},
   {"cli.list.header", "id\tstatus\tpercent\tsize\tfilename"},
-  {"cli.warn.export_secrets", "Warning: export includes proxy credentials and stored HTTP headers/cookies; HTTP Basic passwords are never exported."},
+  {"cli.warn.export_secrets", "Warning: export includes proxy credentials, scanner command/arguments, and stored HTTP headers/cookies; HTTP Basic passwords are never exported."},
   {"cli.warn.export_history", "Warning: history URLs may contain private query values."},
   {"cli.error.export", "Could not export JSON (daemon version, IPC, or output path error)"},
   {"cli.exported", "Exported JSON to"},

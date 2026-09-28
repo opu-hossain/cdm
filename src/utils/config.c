@@ -54,6 +54,9 @@ static bool g_clipboard_monitor;
 /* Shared config snapshots and reload protect this setting with g_network_mutex. */
 static char g_ui_theme[8] = "system";
 static char g_ui_locale[8] = "en";
+/* Config reload writes and engine workers read under g_network_mutex. */
+static char g_scanner_command[1024];
+static char g_scanner_args[2048];
 static dm_mutex_t g_network_mutex;
 static once_flag g_network_once = ONCE_FLAG_INIT;
 
@@ -74,6 +77,8 @@ static void reset_defaults(void) {
   dm_mutex_lock(&g_network_mutex);
   memcpy(g_ui_theme, "system", sizeof("system"));
   memcpy(g_ui_locale, "en", sizeof("en"));
+  g_scanner_command[0] = '\0';
+  g_scanner_args[0] = '\0';
   g_proxy_mode = PROXY_NONE;
   g_proxy_url[0] = g_proxy_username[0] = g_proxy_password[0] = '\0';
   g_max_connections = DEFAULT_MAX_CONNECTIONS;
@@ -310,6 +315,17 @@ void config_init(const char *path) {
     dm_mutex_unlock(&g_network_mutex);
   }
 
+  toml_datum_t security = toml_get(root, "security");
+  char scanner_command[sizeof(g_scanner_command)] = {0};
+  char scanner_args[sizeof(g_scanner_args)] = {0};
+  read_string(security, "scanner_command", scanner_command,
+              sizeof(scanner_command));
+  read_string(security, "scanner_args", scanner_args, sizeof(scanner_args));
+  dm_mutex_lock(&g_network_mutex);
+  memcpy(g_scanner_command, scanner_command, sizeof(scanner_command));
+  memcpy(g_scanner_args, scanner_args, sizeof(scanner_args));
+  dm_mutex_unlock(&g_network_mutex);
+
   toml_datum_t timeouts = toml_get(root, "timeouts");
   int connect_timeout = read_clamped_int(
       timeouts, "connect_sec", DEFAULT_CONNECT_TIMEOUT_SEC, 1, 600);
@@ -412,6 +428,9 @@ void config_get(DownloadManagerConfig *out) {
   dm_mutex_lock(&g_network_mutex);
   memcpy(out->ui_theme, g_ui_theme, sizeof(out->ui_theme));
   memcpy(out->ui_locale, g_ui_locale, sizeof(out->ui_locale));
+  memcpy(out->scanner_command, g_scanner_command,
+         sizeof(out->scanner_command));
+  memcpy(out->scanner_args, g_scanner_args, sizeof(out->scanner_args));
   out->proxy_mode = g_proxy_mode;
   memcpy(out->proxy_url, g_proxy_url, sizeof(out->proxy_url));
   memcpy(out->proxy_username, g_proxy_username, sizeof(out->proxy_username));
@@ -455,6 +474,9 @@ bool config_validate(const DownloadManagerConfig *config) {
       !memchr(config->ui_locale, '\0', sizeof(config->ui_locale)) ||
       (strcmp(config->ui_locale, "en") != 0 &&
        strcmp(config->ui_locale, "es") != 0) ||
+      !memchr(config->scanner_command, '\0',
+              sizeof(config->scanner_command)) ||
+      !memchr(config->scanner_args, '\0', sizeof(config->scanner_args)) ||
       !config->yt_dlp_format[0] || config->connect_timeout_sec < 1 ||
       config->connect_timeout_sec > 600 ||
       config->transfer_timeout_sec < 1 ||
@@ -505,6 +527,12 @@ bool config_save(const DownloadManagerConfig *config) {
     written = fprintf(fp, "\n[ui]\nclipboard_monitor = %s\ntheme = \"%s\"\nlocale = \"%s\"\n",
                       config->clipboard_monitor ? "true" : "false",
                       config->ui_theme, config->ui_locale) >= 0;
+  if (written)
+    written = fputs("\n[security]\nscanner_command = ", fp) != EOF &&
+              write_toml_string(fp, config->scanner_command) &&
+              fputs("\nscanner_args = ", fp) != EOF &&
+              write_toml_string(fp, config->scanner_args) &&
+              fputc('\n', fp) != EOF;
   if (written)
     written = fprintf(fp, "\n[sites]\nuse_yt_dlp = %s\nyt_dlp_path = ",
                       config->use_yt_dlp ? "true" : "false") >= 0 &&

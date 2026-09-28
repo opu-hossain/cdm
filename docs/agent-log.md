@@ -1130,3 +1130,10 @@ Completed: user-approved config/GUI/CMake/export/startup scope; added `es` catal
 Verification: config/i18n, Spanish CLI export and native-host protocol tests pass; full Debug CTest 41/41 pass. GUI visual smoke unavailable without a display server.
 Open questions: other-platform catalog packaging and placeholder word order are tracked in docs/open-questions.md.
 Next: 5.4.1 antivirus scanner config. No push.
+
+## 2026-09-28 — Codex, task 5.4.1
+Branch: `cdm`; commit: `feat(config): add antivirus scanner command`.
+Completed: added disabled-by-default `[security] scanner_command` and `scanner_args`, mutex-protected config snapshots, and user-approved secret-only JSON backup parity with an updated export warning.
+Verification: test-first missing fields, config round trip and safe/private JSON export/import tests pass; full Debug CTest 41/41 pass.
+Open questions: scanner execution and argument grammar belong to 5.4.2.
+Next: 5.4.2 scanner execution after verification. No push.

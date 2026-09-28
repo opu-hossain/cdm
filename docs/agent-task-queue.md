@@ -80,7 +80,7 @@ with the user; skip to Phase 2 in the meantime.
   - [x] Native host user-facing copy
   - [x] Notifications user-facing copy
 - [x] **5.3.3** Add one locale — **S**
-- [ ] **5.4.1** Antivirus scanner config key — **S**
+- [x] **5.4.1** Antivirus scanner config key — **S**
 - [ ] **5.4.2** Run scanner after finalize — **S** — quarantine-move logic is mechanical once the config key exists
 - [ ] **5.5.1** Platform port plan document — **L** — synthesizes the whole codebase's platform-specific surface into a design document
 - [ ] **5.6.1** Phase 5 wrap-up — **S**

@@ -53,8 +53,9 @@ static cJSON *make_settings(bool secrets) {
   cJSON *ui = section(root, "ui");
   cJSON *sites = section(root, "sites");
   cJSON *proxy = section(root, "proxy");
+  cJSON *security = section(root, "security");
   bool ok = downloads && retry && throttle && timeouts && actions && ui &&
-            sites && proxy &&
+            sites && proxy && security &&
             add_number(downloads, "max_concurrent", config.max_concurrent_downloads) &&
             add_string(downloads, "default_directory", config.default_download_dir) &&
             add_number(downloads, "max_connections_per_download",
@@ -76,7 +77,11 @@ static cJSON *make_settings(bool secrets) {
             add_bool(sites, "use_yt_dlp", config.use_yt_dlp) &&
             add_string(sites, "yt_dlp_path", config.yt_dlp_path) &&
             add_string(sites, "yt_dlp_format", config.yt_dlp_format) &&
-            add_number(proxy, "mode", config.proxy_mode);
+            add_number(proxy, "mode", config.proxy_mode) &&
+            add_string(security, "scanner_command",
+                       secrets ? config.scanner_command : "") &&
+            add_string(security, "scanner_args",
+                       secrets ? config.scanner_args : "");
   if (ok && secrets)
     ok = add_string(proxy, "url", config.proxy_url) &&
          add_string(proxy, "username", config.proxy_username) &&
@@ -268,13 +273,14 @@ static bool parse_settings(const cJSON *settings, DownloadManagerConfig *config,
                            char directory[1024]) {
   static const char *const sections[] = {
       "downloads", "retry", "throttle", "timeouts", "post_actions", "ui",
-      "sites", "proxy"};
-  if (!known_keys(settings, sections, 8))
+      "sites", "proxy", "security"};
+  if (!known_keys(settings, sections, 9))
     return false;
   const cJSON *d = field(settings, "downloads"), *r = field(settings, "retry"),
               *t = field(settings, "throttle"), *time = field(settings, "timeouts"),
               *a = field(settings, "post_actions"), *ui = field(settings, "ui"),
-              *s = field(settings, "sites"), *p = field(settings, "proxy");
+              *s = field(settings, "sites"), *p = field(settings, "proxy"),
+              *security = field(settings, "security");
   static const char *const dkeys[] = {"max_concurrent", "default_directory",
       "max_connections_per_download", "user_agent"};
   static const char *const rkeys[] = {"max_attempts", "base_delay_sec", "max_delay_sec"};
@@ -284,14 +290,18 @@ static bool parse_settings(const cJSON *settings, DownloadManagerConfig *config,
   static const char *const uikeys[] = {"clipboard_monitor", "theme", "locale"};
   static const char *const skeys[] = {"use_yt_dlp", "yt_dlp_path", "yt_dlp_format"};
   static const char *const pkeys[] = {"mode", "url", "username", "password"};
+  static const char *const security_keys[] = {"scanner_command", "scanner_args"};
   if (!known_keys(d, dkeys, 4) || !known_keys(r, rkeys, 3) ||
       !known_keys(t, tkeys, 1) || !known_keys(time, timekeys, 2) ||
       !known_keys(a, akeys, 3) || !known_keys(ui, uikeys, 3) ||
-      !known_keys(s, skeys, 3) || !known_keys(p, pkeys, 4))
+      !known_keys(s, skeys, 3) || !known_keys(p, pkeys, 4) ||
+      (security && !known_keys(security, security_keys, 2)))
     return false;
   config_get(config);
   memcpy(config->ui_theme, "system", sizeof("system"));
   memcpy(config->ui_locale, "en", sizeof("en"));
+  config->scanner_command[0] = '\0';
+  config->scanner_args[0] = '\0';
   int proxy_mode = 0;
   bool ok = json_int(d, "max_concurrent", 1, 64,
                      &config->max_concurrent_downloads) &&
@@ -323,6 +333,10 @@ static bool parse_settings(const cJSON *settings, DownloadManagerConfig *config,
                       sizeof(config->ui_theme), false) &&
             json_text(ui, "locale", config->ui_locale,
                       sizeof(config->ui_locale), false) &&
+            json_text(security, "scanner_command", config->scanner_command,
+                      sizeof(config->scanner_command), false) &&
+            json_text(security, "scanner_args", config->scanner_args,
+                      sizeof(config->scanner_args), false) &&
             json_bool(s, "use_yt_dlp", &config->use_yt_dlp) &&
             json_text(s, "yt_dlp_path", config->yt_dlp_path,
                       sizeof(config->yt_dlp_path), true) &&

@@ -55,6 +55,8 @@ typedef struct {
   bool clipboard_monitor; // [ui], default false; GUI main thread owns it
   char ui_theme[8]; // [ui] system|light|dark; default system
   char ui_locale[8]; // [ui] en|es; default en; takes effect after restart
+  char scanner_command[1024]; // [security], empty disables scanning
+  char scanner_args[2048]; // [security], optional arguments; may be sensitive
 } DownloadManagerConfig;
 
 bool config_post_action_enabled(const char *action);

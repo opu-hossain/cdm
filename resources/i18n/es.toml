@@ -133,7 +133,7 @@
 "cli.error.list_size_unsupported" = "El daemon no admite filas de historial con tamaño"
 "cli.error.list_ipc" = "El daemon no admite páginas de historial con tamaño o falló el IPC"
 "cli.list.header" = "id\testado\tporcentaje\ttamaño\tnombre"
-"cli.warn.export_secrets" = "Aviso: la exportación incluye credenciales del proxy y cabeceras/cookies HTTP guardadas; nunca incluye contraseñas HTTP Basic."
+"cli.warn.export_secrets" = "Aviso: la exportación incluye credenciales del proxy, el comando y los argumentos del escáner, y cabeceras/cookies HTTP guardadas; nunca incluye contraseñas HTTP Basic."
 "cli.warn.export_history" = "Aviso: las URL del historial pueden contener datos privados en la consulta."
 "cli.error.export" = "No se pudo exportar JSON (versión del daemon, IPC o ruta de salida)"
 "cli.error.import_version" = "El daemon no admite la importación de JSON"
