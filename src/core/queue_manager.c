@@ -192,6 +192,7 @@ static uint32_t add_download(const char *url, const char *dest_path,
   d->dest_path[sizeof(d->dest_path) - 1] = '\0';
   atomic_store(&d->auto_filename, auto_filename);
   d->media_kind = opts ? opts->media_kind : DOWNLOAD_MEDIA_NONE;
+  d->site_grab = opts && opts->site_grab;
   d->requires_browser_context = opts && opts->browser_context;
 
   if (request_options_present(opts) || d->requires_browser_context) {
@@ -450,7 +451,8 @@ bool queue_manager_get_status(uint32_t id, DownloadStatus *out_status) {
 }
 
 bool queue_manager_get_media_kind(uint32_t id, DownloadMediaKind *out) {
-  if (!out) return false;
+  if (!out)
+    return false;
   ensure_mutex();
   dm_mutex_lock(&g_mutex);
   for (Download *d = g_head; d; d = d->next) {
@@ -462,6 +464,53 @@ bool queue_manager_get_media_kind(uint32_t id, DownloadMediaKind *out) {
   }
   dm_mutex_unlock(&g_mutex);
   return false;
+}
+bool queue_manager_get_site_grab(uint32_t id, bool *out) {
+  if (!out)
+    return false;
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  bool found = false;
+  for (Download *d = g_head; d; d = d->next)
+    if (d->id == id) {
+      *out = d->site_grab;
+      found = true;
+      break;
+    }
+  dm_mutex_unlock(&g_mutex);
+  return found;
+}
+bool queue_manager_get_error(uint32_t id, char *out, size_t capacity) {
+  if (!out || !capacity)
+    return false;
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  bool found = false;
+  for (Download *d = g_head; d; d = d->next)
+    if (d->id == id) {
+      size_t length = strlen(d->last_error);
+      if (length >= capacity)
+        length = capacity - 1;
+      memcpy(out, d->last_error, length);
+      out[length] = 0;
+      found = true;
+      break;
+    }
+  dm_mutex_unlock(&g_mutex);
+  return found;
+}
+void queue_manager_set_site_error(uint32_t id, const char *error) {
+  if (!error || strlen(error) >= 256)
+    return;
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  for (Download *d = g_head; d; d = d->next)
+    if (d->id == id) {
+      if (db_update_site_error(id, error) == 0)
+        strcpy(d->last_error, error);
+      break;
+    }
+  dm_mutex_unlock(&g_mutex);
 }
 
 bool queue_manager_get_runtime_snapshot(uint32_t id,

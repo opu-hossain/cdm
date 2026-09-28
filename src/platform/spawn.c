@@ -74,6 +74,15 @@ int spawn_ffmpeg_merge(const char *video, const char *audio, const char *output,
  (void)video;(void)audio;(void)output;(void)cancel;(void)pause;(void)timeout_sec;return -1;
 }
 
+/* TODO(platform): implement optional yt-dlp pipe spawning on Windows. */
+void spawn_site_tool_init(void) {}
+bool spawn_site_tool_available(void) { return false; }
+int spawn_site_tool(char *const argv[], const _Atomic bool *cancel,
+                    const _Atomic bool *pause, int timeout,
+                    SpawnLineCallback callback, void *userdata) {
+  (void)argv;(void)cancel;(void)pause;(void)timeout;(void)callback;(void)userdata;return -1;
+}
+
 int spawn_post_action(const char *action, const char *argument) {
   (void)action;
   (void)argument;
@@ -407,6 +416,109 @@ int spawn_ffmpeg_merge(const char *video, const char *audio, const char *output,
                        const _Atomic bool *cancel, const _Atomic bool *pause, int timeout_sec) {
   if (!audio || !*audio) return -1;
   return run_ffmpeg(video, audio, output, cancel, pause, timeout_sec);
+}
+
+#include "../utils/config.h"
+static once_flag site_once = ONCE_FLAG_INIT;
+static char site_executable[1024];
+static void locate_site_tool(void) {
+  DownloadManagerConfig config; config_get(&config);
+  const char *name = config.yt_dlp_path;
+  if (!name[0] || strlen(name) >= sizeof(site_executable)) return;
+  const char *path = strchr(name, '/') ? NULL : getenv("PATH");
+  for (const char *start = path ? path : "";;) {
+    const char *end = path ? strchr(start, ':') : NULL;
+    size_t length = path ? (end ? (size_t)(end - start) : strlen(start)) : 0;
+    char candidate[1024], resolved[PATH_MAX]; int n=-1;
+    if (path && length < sizeof(candidate))
+      n = length ? snprintf(candidate,sizeof(candidate),"%.*s/%s",(int)length,start,name)
+                 : snprintf(candidate,sizeof(candidate),"./%s",name);
+    else if (!path) n=snprintf(candidate,sizeof(candidate),"%s",name);
+    struct stat st;
+    if(n>=0&&(size_t)n<sizeof(candidate)&&realpath(candidate,resolved)&&
+       strlen(resolved)<sizeof(site_executable)&&stat(resolved,&st)==0&&
+       S_ISREG(st.st_mode)&&access(resolved,X_OK)==0) {strcpy(site_executable,resolved);return;}
+    if (!end) break;
+    start=end+1;
+  }
+}
+void spawn_site_tool_init(void) { call_once(&site_once, locate_site_tool); }
+bool spawn_site_tool_available(void) {spawn_site_tool_init();return site_executable[0]!=0;}
+static bool make_pipe(int fds[2]) {
+  if(pipe(fds)!=0)return false;
+  if(fcntl(fds[0],F_SETFD,FD_CLOEXEC)<0||fcntl(fds[1],F_SETFD,FD_CLOEXEC)<0||
+     fcntl(fds[0],F_SETFL,O_NONBLOCK)<0){close(fds[0]);close(fds[1]);return false;}
+  return true;
+}
+typedef struct { char line[1024]; size_t length; bool overflow; } SiteLine;
+static bool drain_pipe(int fd,SiteLine *state,bool stderr_line,
+                       SpawnLineCallback callback,void *userdata) {
+  char bytes[2048];ssize_t got=read(fd,bytes,sizeof(bytes));
+  if(got==0) {
+    if (!state->overflow && state->length && callback) {
+      state->line[state->length] = 0;
+      callback(state->line, stderr_line, userdata);
+    }
+    return false;
+  }
+  if(got<0)return errno==EAGAIN||errno==EINTR;
+  for(ssize_t i=0;i<got;i++) {
+    if(bytes[i]=='\n') {
+      if(!state->overflow&&state->length){state->line[state->length]=0;if(callback)callback(state->line,stderr_line,userdata);}
+      state->length=0;state->overflow=false;
+    } else if(bytes[i]!='\r') {
+      if(state->length+1<sizeof(state->line))state->line[state->length++]=bytes[i];
+      else state->overflow=true;
+    }
+  }
+  return true;
+}
+int spawn_site_tool(char *const argv[],const _Atomic bool *cancel,
+                    const _Atomic bool *pause,int timeout,
+                    SpawnLineCallback callback,void *userdata) {
+  if(!argv||timeout<1||!spawn_site_tool_available())return -1;
+  if(remux_interrupted(cancel,pause))return -2;
+  int output[2],error_pipe[2];
+  if(!make_pipe(output))return -1;
+  if(!make_pipe(error_pipe)){close(output[0]);close(output[1]);return -1;}
+  posix_spawn_file_actions_t actions;int err=posix_spawn_file_actions_init(&actions);
+  if(err){close(output[0]);close(output[1]);close(error_pipe[0]);close(error_pipe[1]);return -1;}
+  err=posix_spawn_file_actions_addopen(&actions,STDIN_FILENO,"/dev/null",O_RDONLY,0);
+  if(!err)err=posix_spawn_file_actions_adddup2(&actions,output[1],STDOUT_FILENO);
+  if(!err)err=posix_spawn_file_actions_adddup2(&actions,error_pipe[1],STDERR_FILENO);
+  if(!err)err=posix_spawn_file_actions_addclose(&actions,output[0]);
+  if(!err)err=posix_spawn_file_actions_addclose(&actions,error_pipe[0]);
+  if(!err)err=posix_spawn_file_actions_addclose(&actions,output[1]);
+  if(!err)err=posix_spawn_file_actions_addclose(&actions,error_pipe[1]);
+  pid_t pid=-1;
+  if(!err)err=posix_spawn(&pid,site_executable,&actions,NULL,argv,environ);
+  posix_spawn_file_actions_destroy(&actions);
+  close(output[1]);close(error_pipe[1]);
+  if(err){close(output[0]);close(error_pipe[0]);return -1;}
+  SiteLine lines[2]={0};int fds[]={output[0],error_pipe[0]};
+  bool open_fds[]={true,true},reaped=false;int status=0,result=0;
+  uint64_t last=monotonic_ms();
+  for(;;) {
+    if(!reaped){pid_t got=waitpid(pid,&status,WNOHANG);if(got==pid)reaped=true;else if(got<0&&errno!=EINTR){result=-1;break;}}
+    if(reaped&&!open_fds[0]&&!open_fds[1])break;
+    bool interrupted=remux_interrupted(cancel,pause);
+    uint64_t now=monotonic_ms();
+    if(interrupted||!now||!last||now-last>=(uint64_t)timeout*1000){result=interrupted?-2:124;break;}
+    struct pollfd pfds[2]={{.fd=open_fds[0]?fds[0]:-1,.events=POLLIN|POLLHUP},
+                             {.fd=open_fds[1]?fds[1]:-1,.events=POLLIN|POLLHUP}};
+    int ready=poll(pfds,2,100);
+    if(ready<0&&errno!=EINTR){result=-1;break;}
+    if(ready>0)for(int i=0;i<2;i++)if(open_fds[i]&&pfds[i].revents){
+      bool more=drain_pipe(fds[i],&lines[i],i!=0,callback,userdata);
+      if(!more){close(fds[i]);open_fds[i]=false;}else last=monotonic_ms();
+    }
+  }
+  if(result&&!reaped){kill(pid,SIGTERM);for(int i=0;i<5;i++){
+    dm_thread_sleep_ms(100);pid_t got=waitpid(pid,&status,WNOHANG);if(got==pid){reaped=true;break;}
+  }if(!reaped){kill(pid,SIGKILL);pid_t got;do{got=waitpid(pid,&status,0);}while(got<0&&errno==EINTR);}}
+  for(int i=0;i<2;i++)if(open_fds[i])close(fds[i]);
+  if(result)return result;
+  return WIFEXITED(status)?WEXITSTATUS(status):WIFSIGNALED(status)?128+WTERMSIG(status):-1;
 }
 
 #endif

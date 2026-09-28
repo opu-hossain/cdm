@@ -291,7 +291,7 @@ Test(db, version_four_fixture_migrates_to_named_queues) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 12);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 13);
   sqlite3_finalize(statement);
   cr_assert_eq(sqlite3_prepare_v2(reader,
       "SELECT name,extensions,default_dir FROM categories WHERE id=1",
@@ -391,7 +391,7 @@ Test(db, version_five_migrates_and_categories_round_trip) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 12);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 13);
   sqlite3_finalize(statement);
   sqlite3_close(reader);
   db_close();
@@ -426,7 +426,7 @@ Test(db, legacy_schema_migrates_transactionally) {
   cr_assert_eq(sqlite3_prepare_v2(reader, "PRAGMA user_version", -1,
                                   &statement, NULL), SQLITE_OK);
   cr_assert_eq(sqlite3_step(statement), SQLITE_ROW);
-  cr_assert_eq(sqlite3_column_int(statement, 0), 12);
+  cr_assert_eq(sqlite3_column_int(statement, 0), 13);
   sqlite3_finalize(statement);
 
   cr_assert_eq(sqlite3_prepare_v2(
@@ -501,4 +501,16 @@ Test(db, media_completion_persists_and_deletes_companion) {
  cr_assert_eq(db_complete_media_outputs(404,video,audio,20),0);
  DbDownloadRow row={0};cr_assert_eq(db_list_all_downloads(&row,1),1);cr_assert_str_eq(row.status,"DONE");cr_assert_eq(row.total_size,20);
  cr_assert_eq(db_delete_download(404,1),0);cr_assert_eq(access(video,F_OK),-1);cr_assert_eq(access(audio,F_OK),-1);rmdir(directory);
+}
+
+Test(db, site_grab_flag_and_sanitized_error_survive_restore) {
+  RequestOptions options={0};options.site_grab=true;
+  cr_assert_eq(db_insert_download(405,"https://example.invalid/watch","/tmp/cdm-site-test.mp4",&options),0);
+  cr_assert_eq(db_update_site_error(405,"exit 7: synthetic failure"),0);
+  cr_assert_eq(db_update_status(405,"ERROR"),0);
+  cr_assert_eq(db_restore_queue(),0);
+  Download *download=queue_manager_find_by_id(405);
+  cr_assert_not_null(download);cr_assert(download->site_grab);
+  cr_assert_str_eq(download->last_error,"exit 7: synthetic failure");
+  queue_manager_remove(405);cr_assert_eq(db_delete_download(405,0),0);
 }

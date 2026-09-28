@@ -31,6 +31,7 @@ typedef enum {
 /* Request options (supplied by the user) */
 typedef struct {
   DownloadMediaKind media_kind;
+  bool site_grab; // opt-in external site extractor, internal only
   char cookie[4097];
   char referrer[2049];
   char user_agent[257]; // ephemeral browser override only
@@ -64,6 +65,8 @@ typedef enum {
 typedef struct Download {
   uint32_t id;
   DownloadMediaKind media_kind; // immutable after queue publication
+  bool site_grab; // immutable after queue publication; persisted
+  char last_error[256]; // queue mutex; redacted diagnostic
   uint32_t queue_id; // 1 = default queue; 0 maps to default for old rows
   time_t created_at;
   char url[2048];
@@ -175,6 +178,9 @@ int queue_manager_count_by_status_locked(DownloadStatus s);
 /** Read a download status without exposing the queue entry pointer. */
 bool queue_manager_get_status(uint32_t id, DownloadStatus *out_status);
 bool queue_manager_get_media_kind(uint32_t id, DownloadMediaKind *out);
+bool queue_manager_get_site_grab(uint32_t id, bool *out);
+bool queue_manager_get_error(uint32_t id, char *out, size_t capacity);
+void queue_manager_set_site_error(uint32_t id, const char *error);
 bool queue_manager_get_runtime_snapshot(uint32_t id,
                                         DownloadRuntimeSnapshot *out);
 

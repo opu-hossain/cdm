@@ -1032,3 +1032,10 @@ Completed: approved dispatch/persistence scope; reuse HLS asset pool/resume chec
 Verification: test-first loopback/real-ffmpeg smoke covers merge, missing/failed tool, retained paths, failed-audio restart reuse, pause/cancel and lost context; IPC/DB/coordinator regressions and full Debug build/CTest 37/37 pass, no new warnings.
 Open questions: Windows staging remains TODO(platform); companion path UI and crash-orphan discovery recorded; existing phase gates remain open.
 Next: 4.4.1 optional yt-dlp integration; requested startup/dispatch/IPC/build scope. No push.
+
+## 2026-09-28 — Codex, task 4.4.1
+Branch: `cdm`; commit: `feat(engine): optional yt-dlp integration for site downloads`.
+Completed: approved end-to-end scope; disabled-by-default config, HTTPS site allowlist, opt-in browser confirmation, context-free persisted job, cached spawn, rate cap, parsed progress and redacted error, unique durable output.
+Verification: test-first parser/spawn/config/DB/IPC and mock executable success/failure fixtures; full Debug build/CTest 39/39 pass, no new warnings.
+Open questions: Windows implementation, aggregate rate cap and crash-orphan recovery documented; existing TSan/browser gates remain open.
+Next: 4.5.1 Phase 4 wrap-up. No push.

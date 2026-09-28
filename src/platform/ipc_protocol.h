@@ -56,9 +56,11 @@ typedef enum {
   MSG_BROWSER_OFFER_V2 = 56, // JSON request context; legacy raw offer reply
   MSG_BROWSER_CONTEXT_INFO_V1 = 57, // uint32 offer ID -> uint32 presence bits
   MSG_BROWSER_KIND_INFO_V1 = 58, // uint32 offer ID -> uint32 IpcBrowserMediaKind
+  MSG_BROWSER_SITE_CAPABILITY_V1 = 59, // uint32 offer ID -> uint32 eligible
+  MSG_BROWSER_CONFIRM_SITE_V1 = 60, // v2 confirm payload/reply; opt-in site tool
 } MsgType;
 
-#define IPC_PROTOCOL_VERSION 10
+#define IPC_PROTOCOL_VERSION 11
 #define IPC_BROWSER_HAS_COOKIE 1u
 #define IPC_BROWSER_HAS_USER_AGENT 2u
 #define IPC_BROWSER_HAS_REFERER 4u

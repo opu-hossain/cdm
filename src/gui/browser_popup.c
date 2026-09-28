@@ -58,6 +58,8 @@ typedef struct {
   uint16_t daemon_version;
   uint32_t context_flags;
   uint32_t media_kind;
+  bool site_available;
+  bool use_site_tool;
   bool duplicate;
   char filename[IPC_BROWSER_FILENAME_MAX];
   char folder[IPC_MAX_PATH_LEN];
@@ -175,12 +177,14 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
   if (state->context_flags) {
     nk_layout_row_dynamic(ctx, 18, 1);
     nk_label_colored(ctx,
-        state->context_flags & IPC_BROWSER_HAS_COOKIE
+        state->use_site_tool ? "Site tool uses the page URL; browser headers are ignored"
+        : state->context_flags & IPC_BROWSER_HAS_COOKIE
             ? "Includes browser cookies" : "Includes browser request headers",
         NK_TEXT_LEFT, MUTED);
     nk_layout_row_dynamic(ctx, 18, 1);
     nk_label_colored(ctx,
-        (state->context_flags & (IPC_BROWSER_HAS_USER_AGENT | IPC_BROWSER_HAS_REFERER)) ==
+        state->use_site_tool ? "Only the page URL is sent to yt-dlp"
+        : (state->context_flags & (IPC_BROWSER_HAS_USER_AGENT | IPC_BROWSER_HAS_REFERER)) ==
             (IPC_BROWSER_HAS_USER_AGENT | IPC_BROWSER_HAS_REFERER)
             ? "User-Agent and Referer available"
             : state->context_flags & IPC_BROWSER_HAS_USER_AGENT
@@ -188,6 +192,12 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
                 : state->context_flags & IPC_BROWSER_HAS_REFERER
                     ? "Referer available" : "Confirm to use this browser session",
         NK_TEXT_LEFT, MUTED);
+  }
+  if (state->site_available) {
+    nk_bool checked = state->use_site_tool;
+    nk_layout_row_dynamic(ctx, 28, 1);
+    nk_checkbox_label(ctx, "Use yt-dlp for this site", &checked);
+    state->use_site_tool = checked != 0;
   }
   nk_layout_row_dynamic(ctx, 20, 1);
   nk_label_colored(ctx, state->error, NK_TEXT_LEFT,
@@ -209,7 +219,10 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
                "Choose a valid folder and filename.");
     } else {
       IpcAddResponse response = {0};
-      int result = state->daemon_version >= 3
+      int result = state->use_site_tool
+          ? ipc_browser_confirm_site_v1(daemon, state->offer.offer_id,
+                                        state->full_path, &response)
+          : state->daemon_version >= 3
           ? ipc_browser_confirm_v2(daemon, state->offer.offer_id,
                                    state->full_path, &response)
           : ipc_browser_confirm(daemon, state->offer.offer_id,
@@ -475,6 +488,12 @@ int run_browser_popup(uint32_t offer_id) {
     ipc_client_disconnect(daemon);
     return 1;
   }
+  if (daemon_version >= 11 &&
+      ipc_browser_site_capability_v1(daemon, offer_id,
+                                     &state.site_available) != 0) {
+    ipc_client_disconnect(daemon);
+    return 1;
+  }
   snprintf(state.filename, sizeof(state.filename), "%s",
            state.offer.filename);
   if (state.media_kind == IPC_BROWSER_MEDIA_HLS) {
@@ -494,6 +513,7 @@ int run_browser_popup(uint32_t offer_id) {
   file_ensure_directory(state.folder);
   int height = state.context_flags ? 418 : 370;
   if (state.media_kind) height += 24;
+  if (state.site_available) height += 28;
   GuiSdlBackendConfig settings = {.width = 480, .height = height,
                                   .title = "cdm — Browser download",
                                   .font_size = 13};

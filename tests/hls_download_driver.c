@@ -19,7 +19,9 @@ int main(int argc, char **argv) {
   Download *d = queue_manager_find_by_id(1);
   if (!d) {
     RequestOptions options = {0};
-    options.media_kind = argc == 6 && strncmp(argv[5], "dash", 4) == 0
+    options.site_grab = argc == 6 && strcmp(argv[5], "site") == 0;
+    options.media_kind = options.site_grab ? DOWNLOAD_MEDIA_NONE
+                         : argc == 6 && strncmp(argv[5], "dash", 4) == 0
                              ? DOWNLOAD_MEDIA_DASH
                              : DOWNLOAD_MEDIA_HLS;
     if (argc == 6 && (strcmp(argv[5], "context") == 0 ||
@@ -36,7 +38,7 @@ int main(int argc, char **argv) {
     d = queue_manager_find_by_id(id);
     d->reserved_file = true;
   }
-  if (!d || (d->media_kind != DOWNLOAD_MEDIA_HLS &&
+  if (!d || (!d->site_grab && d->media_kind != DOWNLOAD_MEDIA_HLS &&
              d->media_kind != DOWNLOAD_MEDIA_DASH))
     return 5;
   if (argc == 6 &&

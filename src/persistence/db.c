@@ -121,7 +121,9 @@ int db_init(const char *db_path) {
       "  category_id INTEGER NOT NULL DEFAULT 1 REFERENCES categories(id),"
       "  requires_browser_context INTEGER NOT NULL DEFAULT 0,"
       "  media_kind INTEGER NOT NULL DEFAULT 0 CHECK(media_kind BETWEEN 0 AND 3),"
-      "  companion_path TEXT NOT NULL DEFAULT ''"
+      "  companion_path TEXT NOT NULL DEFAULT '',"
+      "  site_grab INTEGER NOT NULL DEFAULT 0 CHECK(site_grab IN (0,1)),"
+      "  last_error TEXT NOT NULL DEFAULT ''"
       ");"
       ""
       "CREATE TABLE IF NOT EXISTS chunks ("
@@ -147,7 +149,7 @@ int db_init(const char *db_path) {
                                           "last_modified", "auto_filename",
                                           "auth_user", "auth_password",
                                           "queue_id", "schedule_paused",
-                                          "category_id", "requires_browser_context", "media_kind", "companion_path"};
+                                          "category_id", "requires_browser_context", "media_kind", "companion_path", "site_grab", "last_error"};
   static const char *migration_types[] = {"TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "INTEGER DEFAULT 0", "INTEGER DEFAULT 0",
@@ -159,6 +161,8 @@ int db_init(const char *db_path) {
                                           "INTEGER NOT NULL DEFAULT 1 REFERENCES categories(id)",
                                           "INTEGER NOT NULL DEFAULT 0",
                                           "INTEGER NOT NULL DEFAULT 0 CHECK(media_kind BETWEEN 0 AND 3)",
+                                          "TEXT NOT NULL DEFAULT ''",
+                                          "INTEGER NOT NULL DEFAULT 0 CHECK(site_grab IN (0,1))",
                                           "TEXT NOT NULL DEFAULT ''"};
 
   char *migration_error = NULL;
@@ -269,7 +273,7 @@ int db_init(const char *db_path) {
   }
   sqlite3_finalize(fk_check);
 
-  rc = sqlite3_exec(g_db, "PRAGMA user_version = 12; COMMIT;", NULL, NULL,
+  rc = sqlite3_exec(g_db, "PRAGMA user_version = 13; COMMIT;", NULL, NULL,
                     &migration_error);
   if (rc != SQLITE_OK) {
     LOG_ERROR("could not commit database migration: %s",
@@ -816,8 +820,8 @@ static int insert_download(uint32_t id, const char *url,
       "(id, url, dest_path, status, created_at, cookie, referrer, "
       "extra_headers, expected_sha256, speed_limit_bps, reserved_file, "
       "auto_filename, auth_user, auth_password, queue_id, category_id, "
-      "requires_browser_context, media_kind) "
-      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+      "requires_browser_context, media_kind, site_grab) "
+      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
     LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
@@ -846,6 +850,7 @@ static int insert_download(uint32_t id, const char *url,
   sqlite3_bind_int64(stmt, 15, (sqlite3_int64)category.id);
   sqlite3_bind_int(stmt, 16, ephemeral ? 1 : 0);
   sqlite3_bind_int(stmt, 17, opts ? (int)opts->media_kind : 0);
+  sqlite3_bind_int(stmt, 18, opts && opts->site_grab ? 1 : 0);
 
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
@@ -884,6 +889,15 @@ int db_complete_media_outputs(uint32_t id, const char *path, const char *compani
   int result = sqlite3_step(stmt), changed = sqlite3_changes(g_db);
   sqlite3_finalize(stmt);
   return result == SQLITE_DONE && changed == 1 ? 0 : -1;
+}
+int db_update_site_error(uint32_t id, const char *redacted_error) {
+ if (!db_ready() || !redacted_error || strlen(redacted_error)>=256) return -1;
+ sqlite3_stmt *stmt=NULL;
+ if(sqlite3_prepare_v2(g_db,"UPDATE downloads SET last_error=? WHERE id=?",-1,&stmt,NULL)!=SQLITE_OK)return -1;
+ sqlite3_bind_text(stmt,1,redacted_error,-1,SQLITE_STATIC);
+ sqlite3_bind_int64(stmt,2,(sqlite3_int64)id);
+ int rc=sqlite3_step(stmt),changed=sqlite3_changes(g_db);sqlite3_finalize(stmt);
+ return rc==SQLITE_DONE&&changed==1?0:-1;
 }
 int db_update_media_output(uint32_t id, const char *path, uint64_t size) {
   return db_complete_media_outputs(id, path, "", size);
@@ -1302,7 +1316,7 @@ int db_restore_queue(void) {
                     "speed_limit_bps, reserved_file, auto_filename, etag, "
                     "last_modified, auth_user, auth_password, "
                     "COALESCE(queue_id,1), created_at, schedule_paused, "
-                    "requires_browser_context, media_kind "
+                    "requires_browser_context, media_kind, site_grab, last_error "
                     "FROM downloads WHERE status != 'DONE'";
 
   sqlite3_stmt *stmt = NULL;
@@ -1325,6 +1339,9 @@ int db_restore_queue(void) {
     d->schedule_paused = sqlite3_column_int(stmt, 19) != 0;
     d->requires_browser_context = sqlite3_column_int(stmt, 20) != 0;
     d->media_kind = (DownloadMediaKind)sqlite3_column_int(stmt, 21);
+    d->site_grab = sqlite3_column_int(stmt, 22) != 0;
+    const char *stored_error = (const char *)sqlite3_column_text(stmt, 23);
+    if (stored_error) strncpy(d->last_error, stored_error, sizeof(d->last_error)-1);
 
     const char *url = (const char *)sqlite3_column_text(stmt, 1);
     const char *path = (const char *)sqlite3_column_text(stmt, 2);

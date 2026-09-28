@@ -3,12 +3,14 @@
 #include "../src/persistence/db.h"
 #include "../src/platform/thread.h"
 #include "../src/utils/log.h"
+#include "../src/utils/config.h"
 #include <criterion/criterion.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <threads.h>
 #include <unistd.h>
 
@@ -1005,4 +1007,35 @@ Test(ipc, dash_confirmation_persists_media_kind) {
  Download *d=queue_manager_find_by_id(response.id);cr_assert_not_null(d);cr_assert_eq(d->media_kind,DOWNLOAD_MEDIA_DASH);
  queue_manager_remove(response.id);cr_assert_eq(db_restore_queue(),0);d=queue_manager_find_by_id(response.id);cr_assert_not_null(d);cr_assert_eq(d->media_kind,DOWNLOAD_MEDIA_DASH);queue_manager_remove(response.id);
  ipc_client_disconnect(client);atomic_store(&browser_server_running,false);thrd_join(server,NULL);ipc_server_stop();db_close();unlink(path);unsetenv("DOWNLOADMGR_ROOT");rmdir(directory);
+}
+
+Test(ipc, opt_in_site_confirmation_discards_browser_context) {
+  char root[]="/tmp/cdm-site-ipc-XXXXXX";cr_assert_not_null(mkdtemp(root));
+  char executable[256],config_path[256],destination[256];
+  int n=snprintf(executable,sizeof(executable),"%s/yt-dlp",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(executable));
+  n=snprintf(config_path,sizeof(config_path),"%s/config.toml",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(config_path));
+  n=snprintf(destination,sizeof(destination),"%s/output.mp4",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(destination));
+  FILE *tool=fopen(executable,"wb");cr_assert_not_null(tool);cr_assert_gt(fputs("#!/bin/sh\nexit 0\n",tool),0);cr_assert_eq(fclose(tool),0);cr_assert_eq(chmod(executable,0700),0);
+  FILE *cfg=fopen(config_path,"wb");cr_assert_not_null(cfg);cr_assert_gt(fprintf(cfg,"[sites]\nuse_yt_dlp = true\nyt_dlp_path = \"%s\"\n",executable),0);cr_assert_eq(fclose(cfg),0);
+  cr_assert_eq(setenv("HOME",root,1),0);cr_assert_eq(setenv("DOWNLOADMGR_ROOT",root,1),0);config_init(config_path);
+  cr_assert_eq(db_init(":memory:"),0);cr_assert_eq(ipc_server_start(),0);atomic_store(&browser_server_running,true);
+  thrd_t server;cr_assert_eq(thrd_create(&server,browser_server_thread,NULL),thrd_success);
+  int client=ipc_client_connect_compatible(-1,NULL);cr_assert_geq(client,0);
+  const char denied[]="{\"request_id\":\"site-denied\",\"url\":\"https://example.invalid/watch\"}";
+  MsgHeader denied_header={.length=sizeof(denied)-1,.type=MSG_BROWSER_OFFER_V2};
+  cr_assert_eq(ipc_write_exact(client,&denied_header,sizeof(denied_header)),0);
+  cr_assert_eq(ipc_write_exact(client,denied,denied_header.length),0);
+  IpcBrowserOffer denied_offer={0};cr_assert_eq(ipc_read_exact(client,&denied_offer,sizeof(denied_offer)),0);
+  bool denied_eligible=true;cr_assert_eq(ipc_browser_site_capability_v1(client,denied_offer.offer_id,&denied_eligible),0);cr_assert_not(denied_eligible);
+  IpcAddResponse denied_response={0};cr_assert_eq(ipc_browser_confirm_site_v1(client,denied_offer.offer_id,destination,&denied_response),-1);cr_assert_eq(denied_response.result,IPC_RESULT_ERROR);
+  char json[512];n=snprintf(json,sizeof(json),"{\"request_id\":\"site-one\",\"url\":\"https://www.%s/watch\",\"cookie\":\"synthetic=1\"}","youtube.com");cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(json));
+  MsgHeader header={.length=(uint32_t)n,.type=MSG_BROWSER_OFFER_V2};cr_assert_eq(ipc_write_exact(client,&header,sizeof(header)),0);cr_assert_eq(ipc_write_exact(client,json,header.length),0);
+  IpcBrowserOffer offer={0};cr_assert_eq(ipc_read_exact(client,&offer,sizeof(offer)),0);cr_assert_neq(offer.offer_id,0);
+  bool eligible=false;cr_assert_eq(ipc_browser_site_capability_v1(client,offer.offer_id,&eligible),0);cr_assert(eligible);
+  IpcAddResponse response={0};cr_assert_eq(ipc_browser_confirm_site_v1(client,offer.offer_id,destination,&response),0);
+  Download *d=queue_manager_find_by_id(response.id);cr_assert_not_null(d);cr_assert(d->site_grab);cr_assert_not(d->requires_browser_context);cr_assert_null(d->request);
+  IpcDownloadDetails details={0};cr_assert_eq(db_get_download_details(d->id,&details),0);cr_assert_eq(details.cookie[0],0);
+  queue_manager_remove(d->id);cr_assert_eq(db_restore_queue(),0);d=queue_manager_find_by_id(response.id);cr_assert_not_null(d);cr_assert(d->site_grab);
+  queue_manager_remove(d->id);ipc_client_disconnect(client);atomic_store(&browser_server_running,false);thrd_join(server,NULL);ipc_server_stop();db_close();
+  unlink(destination);unlink(executable);unlink(config_path);unsetenv("DOWNLOADMGR_ROOT");char downloads[256];n=snprintf(downloads,sizeof(downloads),"%s/Downloads",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(downloads));rmdir(downloads);rmdir(root);
 }

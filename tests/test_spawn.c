@@ -114,3 +114,29 @@ Test(spawn, ffmpeg_absence_is_cached) {
   cr_assert(!spawn_ffmpeg_available());
 }
 #endif
+
+#ifndef _WIN32
+#include "../src/utils/config.h"
+static void capture_site_line(const char *line, bool is_error, void *userdata) {
+  char (*seen)[2][128] = userdata;
+  size_t index = is_error ? 1 : 0;
+  size_t length = strlen(line);
+  cr_assert_lt(length, sizeof((*seen)[index]));
+  memcpy((*seen)[index], line, length + 1);
+}
+Test(spawn, site_tool_caches_path_and_streams_lines) {
+  char root[]="/tmp/cdm-site-tool-XXXXXX";cr_assert_not_null(mkdtemp(root));
+  char executable[128],config_path[128];int n=snprintf(executable,sizeof(executable),"%s/yt-dlp",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(executable));
+  n=snprintf(config_path,sizeof(config_path),"%s/config.toml",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(config_path));
+  ffmpeg_script(executable,"#!/bin/sh\nprintf 'CDM|10|20|5|2|50%%\\n'\nprintf 'synthetic failure' >&2\nexit 7\n");
+  FILE *cfg=fopen(config_path,"wb");cr_assert_not_null(cfg);cr_assert_gt(fprintf(cfg,"[sites]\nuse_yt_dlp = true\nyt_dlp_path = \"%s\"\n",executable),0);cr_assert_eq(fclose(cfg),0);
+  cr_assert_eq(setenv("HOME",root,1),0);config_init(config_path);spawn_site_tool_init();cr_assert(spawn_site_tool_available());
+  cr_assert_eq(setenv("PATH","/nonexistent",1),0);cr_assert(spawn_site_tool_available());
+  _Atomic bool cancel=false,pause=false;char seen[2][128]={{0}};char *args[]={"yt-dlp","--newline","https://example.invalid/a",NULL};
+  cr_assert_eq(spawn_site_tool(args,&cancel,&pause,2,capture_site_line,&seen),7);
+  cr_assert_str_eq(seen[0],"CDM|10|20|5|2|50%");cr_assert_str_eq(seen[1],"synthetic failure");
+  atomic_store(&pause,true);cr_assert_eq(spawn_site_tool(args,&cancel,&pause,2,capture_site_line,&seen),-2);
+  int status;cr_assert_eq(waitpid(-1,&status,WNOHANG),-1);cr_assert_eq(errno,ECHILD);
+  unlink(config_path);unlink(executable);rmdir(root);
+}
+#endif

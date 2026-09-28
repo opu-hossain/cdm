@@ -4,6 +4,7 @@
 #include "ipc_socket.h"
 
 #include "../core/queue_manager.h"
+#include "../engine/site_grab.h"
 #include "../persistence/db.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
@@ -12,6 +13,7 @@
 #include "../vendor/cJSON.h"
 #include "file_io.h"
 #include "thread.h"
+#include "spawn.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -372,6 +374,11 @@ static IpcBrowserProgress browser_progress_snapshot(uint32_t id,
     event.progress = 1.0f;
   if (error)
     snprintf(event.error, sizeof(event.error), "%s", error);
+  if (error && snapshot.status == DOWNLOAD_ERROR) {
+    char detail[sizeof(event.error)] = {0};
+    if (queue_manager_get_error(id, detail, sizeof(detail)) && detail[0])
+      memcpy(event.error, detail, sizeof(event.error));
+  }
   return event;
 }
 
@@ -488,12 +495,14 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_GET_DETAILS_V2:
   case MSG_BROWSER_GET_OFFER:
   case MSG_BROWSER_KIND_INFO_V1:
+  case MSG_BROWSER_SITE_CAPABILITY_V1:
   case MSG_BROWSER_CONTEXT_INFO_V1:
   case MSG_BROWSER_DISMISS:
   case MSG_BROWSER_SUBSCRIBE_PROGRESS:
     return header->length == sizeof(uint32_t);
   case MSG_BROWSER_CONFIRM:
   case MSG_BROWSER_CONFIRM_V2:
+  case MSG_BROWSER_CONFIRM_SITE_V1:
     return header->length >= sizeof(uint32_t) * 2 &&
            header->length <= sizeof(uint32_t) * 2 + IPC_MAX_PATH_LEN - 1;
   case MSG_REMOVE_DOWNLOAD:
@@ -827,6 +836,19 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     ipc_write_exact(client_fd, &kind, sizeof(kind));
     break;
   }
+  case MSG_BROWSER_SITE_CAPABILITY_V1: {
+    uint32_t id = 0, eligible = 0;
+    if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0) return;
+    BrowserOfferSlot *slot = browser_find_offer(id);
+    DownloadManagerConfig config; config_get(&config);
+    if (slot && slot->offer.state == IPC_BROWSER_WAITING &&
+        (slot->media_kind == IPC_BROWSER_MEDIA_NONE ||
+         slot->media_kind == IPC_BROWSER_MEDIA_VIDEO) &&
+        config.use_yt_dlp && spawn_site_tool_available() &&
+        site_grab_url_allowed(slot->offer.url)) eligible = 1;
+    ipc_write_exact(client_fd, &eligible, sizeof(eligible));
+    break;
+  }
   case MSG_BROWSER_CONTEXT_INFO_V1: {
     uint32_t id = 0, flags = 0;
     if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0) return;
@@ -840,7 +862,8 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     break;
   }
   case MSG_BROWSER_CONFIRM:
-  case MSG_BROWSER_CONFIRM_V2: {
+  case MSG_BROWSER_CONFIRM_V2:
+  case MSG_BROWSER_CONFIRM_SITE_V1: {
     char payload[sizeof(uint32_t) * 2 + IPC_MAX_PATH_LEN];
     uint32_t download_id = 0;
     bool duplicate = false;
@@ -864,9 +887,21 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
                   slot->media_kind == IPC_BROWSER_MEDIA_HLS ||
                   slot->media_kind == IPC_BROWSER_MEDIA_DASH ||
                   slot->media_kind == IPC_BROWSER_MEDIA_VIDEO)) {
+        bool site = hdr->type == MSG_BROWSER_CONFIRM_SITE_V1;
+        DownloadManagerConfig config; config_get(&config);
+        if (site && (!config.use_yt_dlp || !spawn_site_tool_available() ||
+                     !site_grab_url_allowed(slot->offer.url) ||
+                     (slot->media_kind != IPC_BROWSER_MEDIA_NONE &&
+                      slot->media_kind != IPC_BROWSER_MEDIA_VIDEO)))
+          goto confirm_response;
         RequestOptions opts = slot->context;
-        opts.media_kind = (DownloadMediaKind)slot->media_kind;
-        if (!opts.browser_context)
+        if (site) {
+          browser_clear(&opts, sizeof(opts));
+          opts.site_grab = true;
+        } else {
+          opts.media_kind = (DownloadMediaKind)slot->media_kind;
+        }
+        if (!site && !opts.browser_context)
           strcpy(opts.referrer, slot->offer.referrer);
         char normalized[IPC_MAX_URL_LEN];
         int found = 0;
@@ -874,7 +909,10 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
           found = db_find_active_by_url(normalized, &download_id);
         if (found == 1) {
           DownloadMediaKind existing_kind;
+          bool existing_site = false;
           if (!queue_manager_get_media_kind(download_id, &existing_kind) ||
+              !queue_manager_get_site_grab(download_id, &existing_site) ||
+              existing_site != site ||
               ((existing_kind == DOWNLOAD_MEDIA_HLS || existing_kind == DOWNLOAD_MEDIA_DASH ||
              opts.media_kind == DOWNLOAD_MEDIA_HLS || opts.media_kind == DOWNLOAD_MEDIA_DASH) &&
              existing_kind != opts.media_kind)) {
@@ -901,7 +939,9 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         }
       }
     }
-    if (hdr->type == MSG_BROWSER_CONFIRM_V2) {
+  confirm_response:
+    if (hdr->type == MSG_BROWSER_CONFIRM_V2 ||
+        hdr->type == MSG_BROWSER_CONFIRM_SITE_V1) {
       IpcAddResponse response = {
           .result = duplicate ? IPC_RESULT_REJECTED
                               : download_id ? IPC_RESULT_OK : IPC_RESULT_ERROR,
@@ -2126,6 +2166,16 @@ int ipc_browser_kind_info_v1(int sock, uint32_t offer_id, uint32_t *kind) {
     return -1;
   return ipc_read_exact(sock, kind, sizeof(*kind));
 }
+int ipc_browser_site_capability_v1(int sock, uint32_t offer_id, bool *eligible) {
+  uint32_t value = 0;
+  if (!eligible || !offer_id ||
+      browser_write_request(sock, MSG_BROWSER_SITE_CAPABILITY_V1, &offer_id,
+                            sizeof(offer_id)) != 0 ||
+      ipc_read_exact(sock, &value, sizeof(value)) != 0)
+    return -1;
+  *eligible = value != 0;
+  return 0;
+}
 
 static int browser_confirm_request(int sock, MsgType type, uint32_t offer_id,
                                    const char *dest_path, IpcAddResponse *out) {
@@ -2142,7 +2192,8 @@ static int browser_confirm_request(int sock, MsgType type, uint32_t offer_id,
   if (browser_write_request(sock, type, payload,
                             (uint32_t)(sizeof(uint32_t) * 2 + len)) != 0)
     return -1;
-  if (type == MSG_BROWSER_CONFIRM_V2) {
+  if (type == MSG_BROWSER_CONFIRM_V2 ||
+      type == MSG_BROWSER_CONFIRM_SITE_V1) {
     if (ipc_read_exact(sock, out, sizeof(*out)) != 0)
       return -1;
   } else {
@@ -2167,6 +2218,11 @@ int ipc_browser_confirm(int sock, uint32_t offer_id, const char *dest_path,
 int ipc_browser_confirm_v2(int sock, uint32_t offer_id, const char *dest_path,
                            IpcAddResponse *out) {
   return browser_confirm_request(sock, MSG_BROWSER_CONFIRM_V2, offer_id,
+                                 dest_path, out);
+}
+int ipc_browser_confirm_site_v1(int sock, uint32_t offer_id,
+                                const char *dest_path, IpcAddResponse *out) {
+  return browser_confirm_request(sock, MSG_BROWSER_CONFIRM_SITE_V1, offer_id,
                                  dest_path, out);
 }
 

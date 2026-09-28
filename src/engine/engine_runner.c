@@ -13,6 +13,7 @@
 #include "../utils/path.h"
 #include "finalize.h"
 #include "hls.h"
+#include "site_grab.h"
 #include "dash.h"
 #include "segmenter.h"
 #include "worker_pool.h"
@@ -173,6 +174,8 @@ int engine_run_download(struct Download *d) {
   const RequestOptions *request = d->request;
   if (d->requires_browser_context && (!request || !request->browser_context))
     return -5;
+  if (d->site_grab)
+    return site_grab_run_download(d);
   if (d->media_kind == DOWNLOAD_MEDIA_HLS)
     return hls_run_download(d);
   if (d->media_kind == DOWNLOAD_MEDIA_DASH)

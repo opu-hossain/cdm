@@ -24,7 +24,11 @@ void tray_set_progress(uint64_t received, uint64_t total) {
   atomic_store(&tray_total, total);
 }
 
+#ifdef __linux__
+int __wrap_spawn_post_action(const char *action, const char *argument) {
+#else
 int spawn_post_action(const char *action, const char *argument) {
+#endif
   cr_assert_str_eq(action, "command");
   cr_assert_str_eq(argument, "/bin/true");
   atomic_fetch_add(&post_action_runs, 1);

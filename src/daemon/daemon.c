@@ -210,6 +210,7 @@ int run_daemon(void) {
 
   config_init(NULL);
   spawn_media_tools_init();
+  spawn_site_tool_init();
 
   /* Guard against multiple instances. */
   if (ipc_server_is_running()) {

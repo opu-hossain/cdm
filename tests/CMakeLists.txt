@@ -51,6 +51,9 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         PkgConfig::CRITERION
     )
     if(TEST_NAME STREQUAL test_scheduler)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_link_options(${TEST_NAME} PRIVATE -Wl,--wrap=spawn_post_action)
+        endif()
         # Expose Criterion case names in verbose CTest output.
         add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME} --verbose)
     else()

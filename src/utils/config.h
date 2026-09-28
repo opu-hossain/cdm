@@ -49,6 +49,9 @@ typedef struct {
   bool allow_shutdown;
   bool allow_sleep;
   bool allow_command;
+  bool use_yt_dlp; // [sites], default false
+  char yt_dlp_path[1024]; // startup executable path or PATH name
+  char yt_dlp_format[128]; // default bestvideo+bestaudio/best
   bool clipboard_monitor; // [ui], default false; GUI main thread owns it
 } DownloadManagerConfig;
 

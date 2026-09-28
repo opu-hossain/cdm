@@ -42,6 +42,15 @@ int spawn_ffmpeg_remux(const char *input, const char *output,
 int spawn_ffmpeg_merge(const char *video, const char *audio, const char *output,
                        const _Atomic bool *cancel, const _Atomic bool *pause, int timeout_sec);
 
+/* Optional yt-dlp tool. Startup caches a resolved executable path; no shell.
+ * Worker callback owns stdout/stderr lines while this call blocks. */
+typedef void (*SpawnLineCallback)(const char *line, bool stderr_line, void *userdata);
+void spawn_site_tool_init(void);
+bool spawn_site_tool_available(void);
+int spawn_site_tool(char *const argv[], const _Atomic bool *cancel,
+                    const _Atomic bool *pause, int inactivity_timeout_sec,
+                    SpawnLineCallback callback, void *userdata);
+
 /* Launch an explicitly enabled queue action without an implicit shell. */
 int spawn_post_action(const char *action, const char *argument);
 

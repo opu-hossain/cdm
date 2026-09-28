@@ -1,5 +1,20 @@
 # Open Questions
 
+## Task 4.4.1 — Optional site extractor constraints
+
+The site extractor is explicit opt-in, disabled by default, and limited to HTTPS
+URLs on YouTube, Vimeo, and Dailymotion hostnames. It passes only the URL to a
+startup-resolved yt-dlp executable; captured browser cookies and headers are
+discarded. The URL is visible in the child process argument list while running.
+The configured global speed cap is applied to each yt-dlp process, so multiple
+concurrent site jobs can exceed an aggregate cap. A future shared limiter would
+need cross-process accounting. A crash between publishing the completed artifact
+and the SQLite checkpoint can leave an orphaned file; a future recovery pass
+should identify it using the private `.siteparts` marker. Changing the configured
+yt-dlp path requires a daemon restart because executable resolution is cached.
+`TODO(platform)` in `src/platform/spawn.c` and `src/engine/site_grab.c` tracks
+Windows process launching and secure staging. No site credentials are stored.
+
 ## Task 2.2.1 — Equal schedule bounds and platform clock (partly resolved)
 
 Decision (user, 2026-09-25): Reject equal nonempty start/stop times; empty
