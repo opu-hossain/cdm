@@ -247,6 +247,7 @@ add_executable(cdm
     src/native_host/browser_install.c
     src/gui/gui_controller.c
     src/gui/gui_nuklear.c
+    src/gui/gui_popup.c
     src/gui/theme.c
     src/gui/gui_client.c
     src/gui/gui_model.c

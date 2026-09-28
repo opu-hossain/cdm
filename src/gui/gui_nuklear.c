@@ -24,6 +24,7 @@
 #define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
 #define NK_INCLUDE_FONT_BAKING
 #include "nuklear.h"
+#include "gui_popup.h"
 #include "theme.h"
 
 #define GUI_URL_CAP 2048
@@ -834,12 +835,10 @@ static void show_details(UiState *ui, uint32_t id) {
 static void draw_menu(struct nk_context *ctx, UiState *ui, GuiRow *rows,
                       int count, float width, float height) {
   GuiRow *row = find_row(rows, count, ui->menu_id);
-  if (!row) {
+  if (!row && (!ui->menu_id || !ctx->current->popup.active)) {
     ui->menu_id = 0;
     return;
   }
-  bool done = is_status(row, "DONE");
-  bool paused = is_status(row, "PAUSED");
   float mh = 266;
   float x = ui->menu_pos.x, y = ui->menu_pos.y;
   if (x + 180 > width)
@@ -849,13 +848,13 @@ static void draw_menu(struct nk_context *ctx, UiState *ui, GuiRow *rows,
   struct nk_rect bounds = nk_rect(x, y, 180, mh);
   bool just_opened = ui->menu_just_opened;
   ui->menu_just_opened = false;
-  if (!just_opened && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT) &&
-      !nk_input_is_mouse_hovering_rect(&ctx->input, bounds)) {
-    ui->menu_id = 0;
-    return;
-  }
-  if (nk_popup_begin(ctx, NK_POPUP_STATIC, "download-menu",
-                     NK_WINDOW_NO_SCROLLBAR, nk_rect(x, y, 180, mh))) {
+  bool dismiss = !row ||
+                 (!just_opened &&
+                  nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT) &&
+                  !nk_input_is_mouse_hovering_rect(&ctx->input, bounds));
+  if (gui_popup_begin_or_dismiss(ctx, "download-menu", bounds, dismiss)) {
+    bool done = is_status(row, "DONE");
+    bool paused = is_status(row, "PAUSED");
     nk_layout_space_begin(ctx, NK_STATIC, mh, 12);
     fill(ctx, screen_rect(ctx, 0, 0, 180, mh), 8, SURFACE2);
     outline(ctx, screen_rect(ctx, .5f, .5f, 179, mh - 1), 8);
@@ -1753,7 +1752,8 @@ static void draw_category_menu(struct nk_context *ctx, UiState *ui,
   for (int i = 0; i < count; ++i)
     if (categories[i].id == ui->category_menu_id)
       selected = &categories[i];
-  if (!selected || selected->id == 1) {
+  if ((!selected || selected->id == 1) &&
+      !ctx->current->popup.active) {
     ui->category_menu_open = false;
     return;
   }
@@ -1765,13 +1765,11 @@ static void draw_category_menu(struct nk_context *ctx, UiState *ui,
   struct nk_rect bounds = nk_rect(x, y, 174, 76);
   bool just_opened = ui->category_menu_just_opened;
   ui->category_menu_just_opened = false;
-  if (!just_opened && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT) &&
-      !nk_input_is_mouse_hovering_rect(&ctx->input, bounds)) {
-    ui->category_menu_open = false;
-    return;
-  }
-  if (nk_popup_begin(ctx, NK_POPUP_STATIC, "category-menu",
-                     NK_WINDOW_NO_SCROLLBAR, bounds)) {
+  bool dismiss = !selected || selected->id == 1 ||
+                 (!just_opened &&
+                  nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT) &&
+                  !nk_input_is_mouse_hovering_rect(&ctx->input, bounds));
+  if (gui_popup_begin_or_dismiss(ctx, "category-menu", bounds, dismiss)) {
     nk_layout_space_begin(ctx, NK_STATIC, 76, 2);
     fill(ctx, screen_rect(ctx, 0, 0, 174, 76), 8, SURFACE2);
     if (button(ctx, 5, 5, 164, 30, tr("gui.edit"), true, false)) {

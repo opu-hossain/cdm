@@ -17,6 +17,7 @@ set(TEST_SOURCES
     test_worker_pool.c
     test_path.c
     test_gui_controller.c
+    test_gui_popup.c
     test_config.c
     test_i18n.c
     test_url.c
@@ -36,6 +37,10 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             ${CMAKE_SOURCE_DIR}/src/gui/gui_controller.c
             ${CMAKE_SOURCE_DIR}/src/gui/gui_client.c
             ${CMAKE_SOURCE_DIR}/src/gui/gui_model.c
+        )
+    elseif(TEST_NAME STREQUAL test_gui_popup)
+        target_sources(${TEST_NAME} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/gui/gui_popup.c
         )
     elseif(TEST_NAME STREQUAL test_tray AND DOWNLOADMGR_ENABLE_TRAY
            AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
