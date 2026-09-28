@@ -1,6 +1,7 @@
 #include "../utils/config.h"
 #include "../utils/log.h"
 #include "../utils/path.h"
+#include "../persistence/export.h"
 #include "../platform/diskspace.h"
 #include "../vendor/tinyfiledialogs.h"
 #include "gui_backend_sdl.h"
@@ -1027,6 +1028,52 @@ static void modal_end(struct nk_context *ctx) {
   nk_end(ctx);
 }
 
+static void settings_transfer(UiState *ui, bool importing, bool replace) {
+  const char *filters[] = {"*.json"};
+  char *chosen = importing
+      ? tinyfd_openFileDialog("Import cdm JSON", NULL, 1, filters,
+                              "JSON files", 0)
+      : tinyfd_saveFileDialog("Export cdm JSON", "cdm-export.json", 1,
+                              filters, "JSON files");
+  if (!chosen)
+    return;
+  char *source = importing ? realpath(chosen, NULL) : NULL;
+  if (importing && !source) {
+    copy_text(ui->settings_message, sizeof(ui->settings_message),
+              "Could not open the selected import file");
+    tinyfd_notifyPopup("cdm import", ui->settings_message, "error");
+    return;
+  }
+  if (replace && !tinyfd_messageBox("Replace cdm data",
+          "Replace local history and settings? A database backup will be made.",
+          "yesno", "warning", 0)) {
+    free(source);
+    return;
+  }
+  uint16_t version = 1;
+  int sock = ipc_client_connect_compatible(-1, &version);
+  bool ok = false;
+  if (sock >= 0) {
+    if (importing) {
+      IpcResult result = IPC_RESULT_ERROR;
+      ok = version >= 12 &&
+           ipc_send_import_json_v1(sock, source, replace, &result) == 0 &&
+           result == IPC_RESULT_OK;
+    } else
+      ok = export_json_file(sock, version, chosen, true, false) == 0;
+    ipc_client_disconnect(sock);
+  }
+  free(source);
+  if (ok && importing && replace) {
+    config_init(NULL);
+    open_settings(ui);
+  }
+  const char *message = ok ? (importing ? "Import completed" : "Export completed")
+                           : (importing ? "Import failed" : "Export failed");
+  copy_text(ui->settings_message, sizeof(ui->settings_message), message);
+  tinyfd_notifyPopup("cdm", message, ok ? "info" : "error");
+}
+
 static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
                           float height) {
   float h = height * .8f;
@@ -1136,6 +1183,17 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     }
     if (nk_button_label(ctx, "Clear password"))
       ui->proxy_password[0] = '\0';
+    section(ctx, "IMPORT / EXPORT");
+    nk_layout_space_begin(ctx, NK_STATIC, 34, 1);
+    if (button(ctx, 0, 0, 390, 32, "Export settings and history...", true, false))
+      settings_transfer(ui, false, false);
+    nk_layout_space_end(ctx);
+    nk_layout_space_begin(ctx, NK_STATIC, 34, 2);
+    if (button(ctx, 0, 0, 190, 32, "Import missing...", true, false))
+      settings_transfer(ui, true, false);
+    if (button(ctx, 200, 0, 190, 32, "Replace from file...", true, false))
+      settings_transfer(ui, true, true);
+    nk_layout_space_end(ctx);
     nk_group_end(ctx);
   }
   nk_style_pop_style_item(ctx);

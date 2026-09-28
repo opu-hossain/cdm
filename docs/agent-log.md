@@ -1060,3 +1060,10 @@ Completed: user-approved daemon-owned IPC v12/v13; strict schema validation, mer
 Verification: test-first local daemon round-trip includes media dispatch/context markers, malformed/newer/unsafe rejection, merge preservation, replace backup/config checks and active-job refusal; full Debug CTest 40/40 pass.
 Open questions: imported paths/chunks and cross-home relocation limitations recorded; phase sanitizer/browser gates remain open.
 Next: 5.1.3 GUI import/export buttons. No push.
+
+## 2026-09-28 — Codex, task 5.1.3
+Branch: `cdm`; commit: `feat(gui): add import and export controls`.
+Completed: Settings dialog now offers secret-free JSON export, merge import and confirmed replace import; native result notification and settings refresh follow success.
+Verification: GUI compiles; targeted GUI/config/import CTest and full Debug CTest 40/40 pass. Interactive GUI smoke is unavailable without a display server.
+Open questions: none for this task; phase gates remain open.
+Next: 5.2.1 theme extraction. No push.
