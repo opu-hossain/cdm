@@ -38,6 +38,11 @@ docs/ui/verification/
 # Local task notes
 AGENT_TASK.md
 AGENT_PROMPT.md
+PLAN.md
+PROJECT_CONTEXT.md
+docs/agent-log.md
+docs/agent-task-brief-template.md
+docs/agent-task-queue.md
 
 # Editor and OS files
 *.swp

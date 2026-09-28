@@ -1,4 +1,4 @@
-# cdm daemon IPC (base reference plus protocol v8 browser context)
+# cdm daemon IPC (protocol v13)
 
 Source of truth: `src/platform/ipc_protocol.h`, `src/platform/ipc_socket.h`, and `src/platform/ipc_socket.c`. The transport is a per-user Unix stream socket (`XDG_RUNTIME_DIR/cdm.sock`, otherwise `$HOME/.local/share/cdm/ipc.sock`, otherwise `/tmp/cdm_<uid>.sock`). The socket is created with mode `0600` (`src/platform/ipc_socket.c:81`, `src/platform/ipc_socket.c:903`). The daemon accepts at most 16 clients (`src/platform/ipc_socket.c:32`).
 
@@ -6,7 +6,7 @@ Source of truth: `src/platform/ipc_protocol.h`, `src/platform/ipc_socket.h`, and
 
 Every **request** and asynchronous **event** begins with the unchanged v1 `MsgHeader`: `uint32_t length` (payload bytes, excluding the header), then `MsgType type` (C enum; four bytes on the supported ABI). The current header is eight bytes. Integers, `float`, and raw structs use native byte order, size, alignment, and padding; this is a local, same-ABI protocol, not a portable network format. Strings in length-prefixed fields are byte sequences without a wire NUL: `uint32_t length`, then exactly that many bytes. Fixed `char[]` fields in raw structs are NUL-terminated when populated. Request payloads over `IPC_MAX_FRAME_SIZE = 16384` bytes or with an invalid type/length are rejected by closing the connection (`src/platform/ipc_socket.c:397`). **Command replies have no `MsgHeader`**; their layouts are listed below. Event frames do have a header.
 
-`MSG_HELLO` (41) is a v1-framed empty request. Its unframed reply is native `uint16_t IPC_PROTOCOL_VERSION`, currently **9**. `ipc_client_connect_compatible()` uses a bounded HELLO exchange; if an old daemon closes or fails the exchange, the client reconnects and treats it as v1. A version below 2 uses v1 messages. Clients must check for version 5 before sending queue commands or a nondefault `queue_id` in type 42; older daemons may ignore that JSON key. Existing message payloads must remain byte-compatible; add a new type/versioned payload for new fields, never append fields to an existing wire struct.
+`MSG_HELLO` (41) is a v1-framed empty request. Its unframed reply is native `uint16_t IPC_PROTOCOL_VERSION`, currently **13**. `ipc_client_connect_compatible()` uses a bounded HELLO exchange; if an old daemon closes or fails the exchange, the client reconnects and treats it as v1. A version below 2 uses v1 messages. Clients must check for version 5 before sending queue commands or a nondefault `queue_id` in type 42; older daemons may ignore that JSON key. Existing message payloads must remain byte-compatible; add a new type/versioned payload for new fields, never append fields to an existing wire struct.
 
 ## Message registry
 
@@ -47,8 +47,23 @@ Types 1–17 are legacy. Type 7 exists in the enum but has no producer or reques
 | 47 | `MSG_QUEUE_UPDATE` | Raw `Queue` with existing ID → `uint8_t IpcResult`. |
 | 48 | `MSG_QUEUE_DELETE` | `uint32_t id` → `uint8_t IpcResult`. Queue 1 is protected. |
 | 49 | `MSG_QUEUE_REORDER` | `uint32_t id`, `int32_t priority` → `uint8_t IpcResult`. |
+| 50 | `MSG_ADD_DOWNLOAD_V3` | Type 42's three strings and response; options JSON additionally accepts `auto_directory` for category routing. |
+| 51 | `MSG_CATEGORY_LIST_V1` | Empty → `uint32_t count`, then that many raw `IpcCategoryV1` records; `UINT32_MAX` means error. At most 256 categories. |
+| 52 | `MSG_CATEGORY_CREATE_V1` | Raw `IpcCategoryV1` with ID 0 → `uint8_t IpcResult`, `uint32_t new_id`. |
+| 53 | `MSG_CATEGORY_UPDATE_V1` | Raw `IpcCategoryV1` with ID >1 → `uint8_t IpcResult`. |
+| 54 | `MSG_CATEGORY_DELETE_V1` | `uint32_t id` (>1) → `uint8_t IpcResult`; assigned downloads move to Default. |
+| 55 | `MSG_LIST_PAGE_WITH_CATEGORY_V1` | Type 36 page request/reply, with native `uint32_t category_id` after each row's `uint64_t total_size`. |
+| 56 | `MSG_BROWSER_OFFER_V2` | Type 12 JSON plus optional bounded Cookie/User-Agent/Referer context → legacy raw `IpcBrowserOffer`. |
+| 57 | `MSG_BROWSER_CONTEXT_INFO_V1` | `uint32_t offer_id` → `uint32_t` Cookie/User-Agent/Referer presence bits (1/2/4). |
+| 58 | `MSG_BROWSER_KIND_INFO_V1` | `uint32_t offer_id` → `uint32_t IpcBrowserMediaKind` (0 none, 1 HLS, 2 DASH, 3 video). |
+| 59 | `MSG_BROWSER_SITE_CAPABILITY_V1` | `uint32_t offer_id` → `uint32_t eligible` (0/1); checks pending offer, config, tool availability, and site allowlist. |
+| 60 | `MSG_BROWSER_CONFIRM_SITE_V1` | Type 14 confirm request → raw `IpcAddResponse`; explicitly selects the site tool. |
+| 61 | `MSG_IMPORT_JSON_V1` | Mode byte (1 merge, 2 replace), then non-NUL path bytes → `uint8_t IpcResult`; accepted frame length is 2–1024 bytes. |
+| 62 | `MSG_EXPORT_PAGE_V1` | Type 35 page request/header/rows plus each row's `uint64_t total_size`, then `uint32_t category_id`, `media_kind`, `site_grab`, and `requires_browser_context`. |
 
-`Queue` is defined in `src/core/download_record.h`: `uint32_t id`, NUL-terminated `name[128]`, `int priority` (IPC accepts 0–1000), `int max_concurrent` (0 = unlimited, otherwise 1–64), `schedule_start[6]` and `schedule_stop[6]` (`HH:MM` or empty), `post_action[16]`, `post_action_arg[512]`, and `int64_t created_at` (Unix seconds). These commands require protocol v5. List order is priority descending, then creation time and ID ascending. Each successful mutation emits type 6 (or paired type 33/type 6 for v2 subscribers) with download ID 0 and status `QUEUES_CHANGED`. A named queue deletion reassigns live downloads to default queue 1; persisted references become NULL and restore maps them to 1. `queue_id` is a JSON option only in type 42; an invalid/nonexistent queue returns `REJECTED` without adding a download. The raw Queue payload follows the existing local native ABI convention.
+`Queue` is defined in `src/core/download_record.h`: `uint32_t id`, NUL-terminated `name[128]`, `int priority` (IPC accepts 0–1000), `int max_concurrent` (0 = unlimited, otherwise 1–64), `schedule_start[6]` and `schedule_stop[6]` (`HH:MM` or empty), `post_action[16]`, `post_action_arg[512]`, and `int64_t created_at` (Unix seconds). These commands require protocol v5. List order is priority descending, then creation time and ID ascending. Each successful mutation emits type 6 (or paired type 33/type 6 for v2 subscribers) with download ID 0 and status `QUEUES_CHANGED`. A named queue deletion reassigns live downloads to default queue 1; persisted references become NULL and restore maps them to 1. `queue_id` is a JSON option in types 42 and 50; an invalid/nonexistent queue returns `REJECTED` without adding a download. The raw Queue payload follows the existing local native ABI convention.
+
+`IpcCategoryV1` in `src/platform/ipc_protocol.h` has native `uint32_t id`, NUL-terminated `name[128]`, `extensions[512]`, `default_dir[1024]`, and `int64_t created_at` (Unix seconds). Category and export messages are available only after negotiating their protocol versions; the current daemon advertises v13. JSON import is daemon-owned and writes the local SQLite history transactionally; ordinary JSON export is performed by the client using type 62 pages plus local settings.
 
 `IpcResult`: `OK=0`, `NOT_FOUND=1`, `REJECTED=2`, `ERROR=3` (`src/platform/ipc_protocol.h`). `MSG_LIST_ALL` and `MSG_LIST_PAGE` rows are **field-by-field**, not raw `DownloadListRecord`: `uint32_t id`, length-prefixed `url`, `dest_path`, `status`, and `float progress` (0–1). Type 36 uses that row layout plus `uint64_t total_size` at the end. `IPC_LIST_ALL_MAX=200` and `IPC_LIST_PAGE_MAX=500` are defined in `src/platform/ipc_socket.h`; listing uses database order, currently newest first (`src/platform/ipc_socket.c`, `src/persistence/db.c`). Old v2 daemons do not know types 35/36 and close the socket when sent one; reconnect and use type 9 when talking to such a daemon. The CLI requires type 36 to report daemon-recorded size and reports an unsupported-daemon error if it is unavailable. `MSG_GET_DETAILS` success data is length-prefixed `cookie`, `referrer`, `extra_headers`, `expected_sha256` strings, followed by `uint64_t speed_limit_bps` (bytes/second). Add options JSON accepts those same keys; `extra_headers` is newline-delimited. Malformed JSON is ignored rather than rejecting the download (`src/platform/ipc_socket.c`). URL capacity is 2048 bytes including NUL, destination 1024 including NUL (`src/platform/ipc_protocol.h`).
 
@@ -82,7 +97,7 @@ values reject NUL/CR/LF and invalid UTF-8; the total request remains capped at
 Type 57 (`MSG_BROWSER_CONTEXT_INFO_V1`) takes a native `uint32_t offer_id`
 and replies with native `uint32_t` presence bits (Cookie=1, User-Agent=2,
 Referer=4; zero if absent/cleared). Neither response exposes captured values.
-The daemon advertises v8; use types 56/57 only after negotiation. Types 1–55
+Types 56/57 were introduced in v8; use them only after negotiation. Types 1–55
 retain their existing layouts. See `docs/browser-context.md` for ownership,
 restart, and cleanup rules.
 

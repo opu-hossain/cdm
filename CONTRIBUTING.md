@@ -5,7 +5,7 @@ cdm currently builds and packages for Linux. Windows and macOS are not yet suppo
 ## Development dependencies
 
 - A C11 compiler (GCC or Clang), CMake 3.20+, Python 3, and pkg-config.
-- Development files for libcurl 7.60+, SQLite 3.24+, libnotify, SDL2, libepoxy, and OpenGL.
+- Development files for libcurl 7.60+, SQLite 3.24+, libnotify, SDL2, libepoxy, OpenGL, GLib/GIO, OpenSSL Crypto, and libxml2 2.9+.
 - Criterion when configuring with `-DBUILD_TESTING=ON`.
 - Git to clone the repository.
 
@@ -33,7 +33,7 @@ The XDG autostart entry is installed under `/etc/xdg/autostart`, so a system-wid
 
 ## Build packages
 
-Configure with `-DCMAKE_INSTALL_PREFIX=/usr` before making distro packages. `CMakeLists.txt` defines the DEB and RPM generators; the Arch PKGBUILD uses `makepkg`. Package output names follow `.release.toml`, currently `0.2.0-rc1`.
+Configure with `-DCMAKE_INSTALL_PREFIX=/usr` before making distro packages. `CMakeLists.txt` defines the DEB and RPM generators; the Arch PKGBUILD uses `makepkg`. Package output names follow `.release.toml`, currently `0.3.0-rc1`. Build DEB/RPM packages on the target distro so their automatic library dependencies match that distro; see the [release checklist](docs/RELEASE_CHECKLIST.md).
 
 ```sh
 cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_TESTING=OFF

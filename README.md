@@ -8,12 +8,14 @@ The current source builds Linux DEB and RPM packages and includes an Arch PKGBUI
 
 ## Features
 
-- HTTP and HTTPS downloads with segmented transfer and resume.
-- A SQLite queue that survives daemon restarts.
-- CLI commands to add, pause, resume, and cancel downloads.
-- An SDL2/Nuklear GUI for downloads and settings.
+- HTTP and HTTPS downloads with segmented transfer, resume validators, speed limits, SHA-256 verification, and proxy support.
+- SQLite-backed downloads, named queues, schedules, categories, and gated post-actions that survive daemon restarts.
+- CLI commands to add, pause, resume, cancel, list, export, and import downloads and settings.
+- An SDL2/Nuklear GUI with queue/category controls, batch add, history, System/Light/Dark themes, and English/Spanish text.
 - A per-user daemon with XDG login autostart controls.
-- Optional Chrome, Chromium, and Firefox URL handoff through a native messaging host.
+- Optional Chrome, Chromium, and Firefox handoff through a native messaging host, with filters, context menus, and per-origin consent for browser context.
+- Finite HLS and DASH VOD downloads, optional ffmpeg output processing, and an explicit opt-in yt-dlp site tool.
+- Optional Linux tray, clipboard review, desktop notifications, and a disabled-by-default antivirus scanner.
 
 ## Install a locally built package
 
@@ -52,11 +54,11 @@ cdm cli add https://example.org/file.zip ~/Downloads
 cdm daemon status
 ```
 
-`cdm cli add` accepts a URL and an optional destination **directory**. It derives a unique filename from the URL. `cdm cli pause ID`, `cdm cli resume ID`, and `cdm cli cancel ID` control queued downloads. Configuration is read from `~/.local/share/cdm/config.toml` on Linux; absent values use built-in defaults.
+`cdm cli add` accepts a URL and an optional destination **directory**. It derives a unique filename from the URL or response headers. `cdm cli pause ID`, `cdm cli resume ID`, and `cdm cli cancel ID` control queued downloads; `cdm cli list` pages through history. `cdm cli export` and `cdm cli import` manage JSON backups. Configuration is read from `~/.local/share/cdm/config.toml` on Linux; absent values use built-in defaults.
 
 ## Browser integration
 
-The optional extensions hand supported URL-only GET downloads to cdm. Browser cancellation is best effort, and per-user native-host registration is required. See [browser integration](docs/browser-integration.md) for limitations and setup.
+The optional extensions hand supported GET downloads to cdm. Per-origin consent can include bounded Cookie, User-Agent and Referer context; Authorization headers, POST bodies and Blob/data URLs are unsupported. Browser cancellation is best effort, and per-user native-host registration is required. See [browser integration](docs/browser-integration.md) for limitations and setup.
 
 ## Daemon lifecycle
 

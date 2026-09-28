@@ -58,7 +58,7 @@ headers, User-Agent and Referer before enqueueing. The site URL remains in the
 child's process arguments while it runs. HLS/DASH browser context is origin
 bound and cannot be silently forwarded across redirects.
 
-The database is at schema version 13. Protocol HELLO reports version 11;
+The database is at schema version 13. Protocol HELLO currently reports version 13;
 media kind lookup uses message 58, site capability uses 59, and explicit site
 confirmation uses 60. Existing raw-wire layouts were not extended. A current
 popup should negotiate HELLO before using these messages.
