@@ -77,7 +77,7 @@ with the user; skip to Phase 2 in the meantime.
 - [ ] **5.3.2** Extract strings (one commit per subsystem) — **S** — repetitive, many small commits, good parallel-subagent candidate since each subsystem file is disjoint
   - [x] CLI user-facing copy
   - [x] GUI user-facing copy
-  - [ ] Native host user-facing copy
+  - [x] Native host user-facing copy
   - [ ] Notifications user-facing copy
 - [ ] **5.3.3** Add one locale — **S**
 - [ ] **5.4.1** Antivirus scanner config key — **S**

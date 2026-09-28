@@ -26,6 +26,22 @@ static MissingKey *g_missing;
 
 /* English UI copy stays available when no locale catalog is installed. */
 static const struct { const char *key, *value; } builtin[] = {
+  {"host.error.invalid_site_exclusions", "invalid site exclusion list"},
+  {"host.error.invalid_excluded_hostname", "invalid excluded hostname"},
+  {"host.error.invalid_offer", "invalid or unsupported download offer"},
+  {"host.error.invalid_json", "invalid JSON"},
+  {"host.error.invalid_url_or_mode", "invalid download offer URL or mode"},
+  {"host.error.invalid_or_oversized_offer", "invalid or oversized download offer"},
+  {"host.error.too_many_pending", "too many pending downloads"},
+  {"host.error.daemon_start", "cdm daemon could not start"},
+  {"host.error.daemon_unavailable", "cdm daemon is unavailable"},
+  {"host.error.media_unsupported", "daemon does not support media offers"},
+  {"host.error.context_unsupported", "daemon does not support browser context"},
+  {"host.error.offer_rejected", "daemon rejected download offer"},
+  {"host.error.popup_missing", "cannot locate cdm popup binary"},
+  {"host.error.popup_launch", "could not launch cdm popup"},
+  {"host.error.daemon_disconnected", "cdm daemon disconnected"},
+  {"host.error.offer_expired", "download offer expired"},
   {"gui.file_size", "File size"},
   {"gui.already_downloading", "Already downloading"},
   {"gui.of", "of"},

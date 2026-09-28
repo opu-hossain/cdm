@@ -5,6 +5,7 @@
 #include "../platform/spawn.h"
 #include "../platform/thread.h"
 #include "../utils/config.h"
+#include "../utils/i18n.h"
 #include "../utils/log.h"
 #include "../vendor/cJSON.h"
 
@@ -302,13 +303,13 @@ static bool configure_exclusions(const cJSON *root) {
   const cJSON *sites = cJSON_GetObjectItemCaseSensitive(root, "sites");
   int count = cJSON_GetArraySize(sites);
   if (!cJSON_IsArray(sites) || count > HOST_MAX_EXCLUSIONS)
-    return send_error(NULL, "invalid site exclusion list");
+    return send_error(NULL, tr("host.error.invalid_site_exclusions"));
   char replacement[HOST_MAX_EXCLUSIONS][256] = {{0}};
   for (int i = 0; i < count; i++) {
     const cJSON *site = cJSON_GetArrayItem(sites, i);
     if (!cJSON_IsString(site) || !site->valuestring ||
         !normalize_site(site->valuestring, replacement[i]))
-      return send_error(NULL, "invalid excluded hostname");
+      return send_error(NULL, tr("host.error.invalid_excluded_hostname"));
   }
   memcpy(g_excluded_sites, replacement, sizeof(replacement));
   g_excluded_count = (size_t)count;
@@ -437,13 +438,13 @@ static bool handle_message(const char *json) {
   for (const char *p = json; *p; p++) {
     if (*p == '\\' && p[1]) {
       if (p[1] == 'u' && strncmp(p + 2, "0000", 4) == 0)
-        return send_error(NULL, "invalid or unsupported download offer");
+        return send_error(NULL, tr("host.error.invalid_offer"));
       p++; // An escaped backslash does not start a Unicode escape.
     }
   }
   cJSON *root = cJSON_Parse(json);
   if (!root)
-    return send_error(NULL, "invalid JSON");
+    return send_error(NULL, tr("host.error.invalid_json"));
   const cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
   if (cJSON_IsString(type) && strcmp(type->valuestring, "set_site_exclusions") == 0) {
     bool ok = configure_exclusions(root);
@@ -456,7 +457,7 @@ static bool handle_message(const char *json) {
   if (!parse_offer(root, &offered, &context, &media_kind)) {
     const cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "request_id");
     bool ok = send_error(cJSON_IsString(id) ? id->valuestring : NULL,
-                         "invalid or unsupported download offer");
+                         tr("host.error.invalid_offer"));
     clear_context(&context);
     clear_context_fields(root);
     cJSON_Delete(root);
@@ -468,7 +469,7 @@ static bool handle_message(const char *json) {
       (excluded && (!automatic || cJSON_IsTrue(automatic)))) {
     bool ok = excluded == 1 && (!automatic || cJSON_IsTrue(automatic))
                   ? send_skipped(offered.request_id)
-                  : send_error(offered.request_id, "invalid download offer URL or mode");
+                  : send_error(offered.request_id, tr("host.error.invalid_url_or_mode"));
     clear_context(&context);
     clear_context_fields(root);
     cJSON_Delete(root);
@@ -486,34 +487,34 @@ static bool handle_message(const char *json) {
     /* Check the 16 KiB daemon frame before starting or contacting it. */
     if (!context_json || strlen(context_json) > IPC_MAX_FRAME_SIZE) {
       clear_json(context_json);
-      return send_error(offered.request_id, "invalid or oversized download offer");
+      return send_error(offered.request_id, tr("host.error.invalid_or_oversized_offer"));
     }
   }
 
   HostOffer *slot = find_offer_slot(offered.request_id);
   if (!slot) {
     clear_json(context_json);
-    return send_error(offered.request_id, "too many pending downloads");
+    return send_error(offered.request_id, tr("host.error.too_many_pending"));
   }
   if (!ensure_daemon_running()) {
     clear_json(context_json);
-    return send_error(offered.request_id, "cdm daemon could not start");
+    return send_error(offered.request_id, tr("host.error.daemon_start"));
   }
   uint16_t daemon_version = 1;
   int daemon = ipc_client_connect_compatible(1500, &daemon_version);
   if (daemon < 0) {
     clear_json(context_json);
-    return send_error(offered.request_id, "cdm daemon is unavailable");
+    return send_error(offered.request_id, tr("host.error.daemon_unavailable"));
   }
   if (media_kind && daemon_version < 10) {
     ipc_client_disconnect(daemon);
     clear_json(context_json);
-    return send_error(offered.request_id, "daemon does not support media offers");
+    return send_error(offered.request_id, tr("host.error.media_unsupported"));
   }
   if (has_context && daemon_version < 8) {
     ipc_client_disconnect(daemon);
     clear_json(context_json);
-    return send_error(offered.request_id, "daemon does not support browser context");
+    return send_error(offered.request_id, tr("host.error.context_unsupported"));
   }
   IpcBrowserOffer registered = {0};
   int result = use_json ? forward_context_offer(daemon, context_json, &registered)
@@ -521,7 +522,7 @@ static bool handle_message(const char *json) {
   clear_json(context_json);
   ipc_client_disconnect(daemon);
   if (result != 0)
-    return send_error(offered.request_id, "daemon rejected download offer");
+    return send_error(offered.request_id, tr("host.error.offer_rejected"));
   bool launch = slot->offer.offer_id != registered.offer_id &&
                 registered.state == IPC_BROWSER_WAITING;
   slot->offer = registered;
@@ -533,10 +534,10 @@ static bool handle_message(const char *json) {
   if (launch) {
     char popup_path[1024];
     if (!cdm_executable(popup_path, sizeof(popup_path))) {
-      return send_error(offered.request_id, "cannot locate cdm popup binary");
+      return send_error(offered.request_id, tr("host.error.popup_missing"));
     }
     if (spawn_browser_popup_detached(popup_path, registered.offer_id) != 0)
-      return send_error(offered.request_id, "could not launch cdm popup");
+      return send_error(offered.request_id, tr("host.error.popup_launch"));
   }
   return true;
 }
@@ -553,7 +554,7 @@ static bool poll_offers(void) {
     for (size_t i = 0; i < HOST_MAX_OFFERS; i++) {
       if (g_offers[i].offer.offer_id) {
         notified = send_error(g_offers[i].offer.request_id,
-                              "cdm daemon disconnected") && notified;
+                              tr("host.error.daemon_disconnected")) && notified;
         memset(&g_offers[i], 0, sizeof(g_offers[i]));
       }
     }
@@ -566,7 +567,7 @@ static bool poll_offers(void) {
       continue;
     IpcBrowserOffer current = {0};
     if (ipc_browser_get_offer(daemon, slot->offer.offer_id, &current) != 0) {
-      ok = send_error(slot->offer.request_id, "download offer expired");
+      ok = send_error(slot->offer.request_id, tr("host.error.offer_expired"));
       memset(slot, 0, sizeof(*slot));
       continue;
     }

@@ -55,6 +55,10 @@ Test(i18n, builtin_gui_english_is_available_without_a_catalog) {
   cr_assert_str_eq(tr("gui.browser.review"), "Review download");
 }
 
+Test(i18n, builtin_native_host_error_is_available_without_a_catalog) {
+  cr_assert_str_eq(tr("host.error.invalid_json"), "invalid JSON");
+}
+
 Test(i18n, rejects_non_string_values_without_publishing) {
   char path[] = "/tmp/cdm-i18n-XXXXXX";
   int fd = mkstemp(path);

@@ -1109,3 +1109,10 @@ Completed: routed main window, browser popup, controller errors and window title
 Verification: test-first fallback failure, catalog override and focused GUI/i18n tests pass; full Debug CTest 41/41 pass. GUI visual smoke unavailable without a display server.
 Open questions: formatted fragments retain English word order; locale review may need named placeholders.
 Next: 5.3.2 native-host string extraction. No push.
+
+## 2026-09-28 — Codex, task 5.3.2 (native host)
+Branch: `cdm`; commit: `refactor(host): route browser errors through tr`.
+Completed: routed 16 browser-visible native-host error messages through stable keys with built-in English fallbacks; JSON field names, states and message types stay literal.
+Verification: test-first missing fallback, focused i18n/native messaging protocol tests pass; full Debug CTest 41/41 pass. Protocol test covers host framing and English fallback.
+Open questions: native host catalog loading is deferred to 5.3.3.
+Next: 5.3.2 notifications string extraction. No push.
