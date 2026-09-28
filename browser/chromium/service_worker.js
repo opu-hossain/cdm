@@ -143,7 +143,7 @@ function connectHost() {
     } else if (message.type === "offer_registered") {
       clearError();
     } else if (message.type === "offer_state") {
-      if (["complete", "dismissed", "error"].includes(message.state)) {
+      if (["complete", "dismissed", "canceled", "error"].includes(message.state)) {
         pending.delete(message.request_id);
       }
       if (message.state === "error") showError(message.error || "download failed");

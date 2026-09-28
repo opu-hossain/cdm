@@ -401,7 +401,7 @@ static bool send_state(const IpcBrowserOffer *offer,
   if (progress) {
     if (strcmp(progress->status, "DONE") == 0) state = "complete";
     else if (strcmp(progress->status, "ERROR") == 0) state = "error";
-    else if (strcmp(progress->status, "CANCELED") == 0) state = "error";
+    else if (strcmp(progress->status, "CANCELED") == 0) state = "canceled";
     else if (strcmp(progress->status, "ACTIVE") == 0) state = "started";
   }
   cJSON_AddStringToObject(reply, "type", "offer_state");

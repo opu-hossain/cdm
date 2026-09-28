@@ -53,6 +53,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.check_context():
             return
+        if self.path.startswith("/cancel.bin"):
+            time.sleep(2)
         start, end = 0, len(CONTENT) - 1
         requested = self.headers.get("Range")
         if requested and requested.startswith("bytes="):
@@ -159,6 +161,37 @@ def main(cdm: str, native_host: str) -> None:
                         break
             assert "complete" in states, states
             assert destination.read_bytes() == CONTENT
+
+            cancel_offer = json.dumps({
+                "type": "download_offer", "request_id": "cancel-flow",
+                "url": f"http://127.0.0.1:{server.server_port}/cancel.bin",
+                "filename": "cancel.bin", "browser": "chromium",
+            }).encode()
+            host.stdin.write(struct.pack("=I", len(cancel_offer)) + cancel_offer)
+            host.stdin.flush()
+            reply = native_reply(host, time.monotonic() + 10)
+            assert reply["type"] == "offer_registered", reply
+            cancel_path = str(root_path / "cancel.bin").encode()
+            payload = struct.pack("=II", reply["offer_id"], len(cancel_path)) + cancel_path
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(5)
+                client.connect(str(socket_path))
+                client.sendall(struct.pack("=II", len(payload), 14) + payload)
+                cancel_id = struct.unpack("=I", client.recv(4))[0]
+                assert cancel_id > 0
+                client.sendall(struct.pack("=III", 4, 4, cancel_id))
+                assert client.recv(1) == b"\0"
+            deadline = time.monotonic() + 20
+            while True:
+                event = native_reply(host, deadline)
+                if event["type"] == "error":
+                    assert event["error"] == "could not launch cdm popup", event
+                    continue
+                if event.get("request_id") == "cancel-flow" and event.get("state") in (
+                    "canceled", "error", "complete"
+                ):
+                    assert event["state"] == "canceled", event
+                    break
 
             contextual = json.dumps({
                 "type": "download_offer", "request_id": "context-flow",
