@@ -56,6 +56,7 @@ def main(cdm):
             assert exported["version"] == 1
             assert exported["settings"]["downloads"]["max_concurrent"] == 4
             assert exported["settings"]["ui"]["theme"] == "system"
+            assert exported["settings"]["ui"]["locale"] == "en"
             assert len(exported["downloads"]) == 501
             assert exported["downloads"][0]["id"] == 501
             assert exported["downloads"][-1]["id"] == 1
@@ -157,6 +158,7 @@ def main(cdm):
             replacement = json.loads(safe.read_text())
             replacement["settings"]["downloads"]["max_concurrent"] = 5
             replacement["settings"]["ui"]["theme"] = "dark"
+            replacement["settings"]["ui"]["locale"] = "es"
             replace_file = root / "replace.json"
             replace_file.write_text(json.dumps(replacement))
             replaced = subprocess.run([cdm, "cli", "import", "--in", str(replace_file),
@@ -171,6 +173,12 @@ def main(cdm):
                 assert db.execute("SELECT count(*) FROM downloads").fetchone()[0] == 501
             assert "max_concurrent = 5" in (config_dir / "config.toml").read_text()
             assert 'theme = "dark"' in (config_dir / "config.toml").read_text()
+            assert 'locale = "es"' in (config_dir / "config.toml").read_text()
+            spanish_export = subprocess.run(
+                [cdm, "cli", "export", "--out", str(root / "spanish.json")],
+                env=env, capture_output=True, text=True, timeout=15)
+            assert spanish_export.returncode == 0, spanish_export
+            assert "JSON exportado a" in spanish_export.stdout, spanish_export
         finally:
             daemon.send_signal(signal.SIGTERM)
             daemon.wait(timeout=5)

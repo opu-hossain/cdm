@@ -115,6 +115,34 @@ Test(config, theme_defaults_to_system_and_round_trips) {
   remove_home(home);
 }
 
+Test(config, locale_defaults_to_english_and_round_trips) {
+  char home[64];
+  isolated_home(home);
+  DownloadManagerConfig config;
+  config_get(&config);
+  cr_assert_str_eq(config.ui_locale, "en");
+  strcpy(config.ui_locale, "es");
+  cr_assert(config_save(&config));
+  config_init(NULL);
+  config_get(&config);
+  cr_assert_str_eq(config.ui_locale, "es");
+  strcpy(config.ui_locale, "../es");
+  cr_assert_not(config_save(&config));
+  char path[256];
+  int written = snprintf(path, sizeof(path), "%s/invalid-locale.toml", home);
+  cr_assert_geq(written, 0);
+  cr_assert_lt((size_t)written, sizeof(path));
+  FILE *file = fopen(path, "w");
+  cr_assert_not_null(file);
+  cr_assert_gt(fputs("[ui]\nlocale = \"xx\"\n", file), 0);
+  cr_assert_eq(fclose(file), 0);
+  config_init(path);
+  config_get(&config);
+  cr_assert_str_eq(config.ui_locale, "en");
+  unlink(path);
+  remove_home(home);
+}
+
 Test(config, invalid_mode_and_missing_proxy_host_fall_back_to_none) {
   char home[64];
   isolated_home(home);

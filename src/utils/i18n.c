@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "i18n.h"
 #include "log.h"
+#include "../platform/spawn.h"
 #include "../platform/thread.h"
 #include "../vendor/tomlc17.h"
 #include <stdio.h>
@@ -26,6 +27,10 @@ static MissingKey *g_missing;
 
 /* English UI copy stays available when no locale catalog is installed. */
 static const struct { const char *key, *value; } builtin[] = {
+  {"gui.locale", "Language"},
+  {"gui.locale_english", "English"},
+  {"gui.locale_spanish", "Spanish"},
+  {"gui.locale_restart_required", "Restart cdm to apply the language."},
   {"notify.download_complete", "Download Complete"},
   {"notify.download_failed", "Download Failed"},
   {"host.error.invalid_site_exclusions", "invalid site exclusion list"},
@@ -110,7 +115,7 @@ static const struct { const char *key, *value; } builtin[] = {
   {"gui.export_completed", "Export completed"},
   {"gui.import_failed", "Import failed"},
   {"gui.export_failed", "Export failed"},
-  {"gui.saved_to_config_toml_and_applied_immediately", "Saved to config.toml and applied immediately."},
+  {"gui.settings_save_note", "Changes are saved to config.toml."},
   {"gui.general", "GENERAL"},
   {"gui.monitor_clipboard_for_urls", "Monitor clipboard for URLs"},
   {"gui.ask_before_adding_a_copied_url", "Ask before adding a copied URL."},
@@ -320,6 +325,44 @@ static const char *builtin_value(const char *key) {
     if (strcmp(builtin[i].key, key) == 0)
       return builtin[i].value;
   return NULL;
+}
+
+bool tr_load_locale(const char *locale) {
+  if (!locale || strcmp(locale, "en") == 0)
+    return locale != NULL;
+  if (strcmp(locale, "es") != 0)
+    return false;
+  char executable[1024] = {0};
+  get_self_exe_path(executable, sizeof(executable));
+  /* TODO(platform): locate installed catalogs beside Windows/macOS bundles. */
+  char *slash = strrchr(executable, '/');
+  if (slash) {
+    *slash = '\0';
+    char path[1200];
+    int written = snprintf(path, sizeof(path), "%s/i18n/es.toml", executable);
+    if (written > 0 && (size_t)written < sizeof(path) &&
+        tr_load_catalog(path))
+      return true;
+    written = snprintf(path, sizeof(path),
+                       "%s/../share/cdm/i18n/es.toml", executable);
+    if (written > 0 && (size_t)written < sizeof(path) &&
+        tr_load_catalog(path))
+      return true;
+    written = snprintf(path, sizeof(path), "%s/../i18n/es.toml", executable);
+    if (written > 0 && (size_t)written < sizeof(path) &&
+        tr_load_catalog(path))
+      return true;
+  }
+#ifdef CDM_INSTALLED_I18N_DIR
+  char installed[1200];
+  int written = snprintf(installed, sizeof(installed),
+                         "%s/es.toml", CDM_INSTALLED_I18N_DIR);
+  if (written > 0 && (size_t)written < sizeof(installed) &&
+      tr_load_catalog(installed))
+    return true;
+#endif
+  LOG_WARN("Could not load Spanish catalog; using built-in English text");
+  return false;
 }
 
 static void init_mutex(void) { dm_mutex_init(&g_mutex); }

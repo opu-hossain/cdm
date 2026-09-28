@@ -66,6 +66,18 @@ Test(i18n, builtin_notification_titles_are_available_without_a_catalog) {
   cr_assert_str_eq(tr("notify.download_failed"), "Download Failed");
 }
 
+Test(i18n, spanish_catalog_loads_with_english_fallback) {
+  cr_assert(tr_load_locale("es"));
+  cr_assert_str_eq(tr("gui.settings.title"), "Configuración");
+  cr_assert_str_eq(tr("cli.usage.main"),
+                   "Uso: cdm cli <comando> [argumentos...]");
+  cr_assert_str_eq(tr("host.error.invalid_json"), "JSON no válido");
+  cr_assert_str_eq(tr("notify.download_complete"), "Descarga completada");
+  cr_assert_str_eq(tr("gui.core_download_manager"),
+                   "Core Download Manager");
+  cr_assert_not(tr_load_locale("../es"));
+}
+
 Test(i18n, rejects_non_string_values_without_publishing) {
   char path[] = "/tmp/cdm-i18n-XXXXXX";
   int fd = mkstemp(path);

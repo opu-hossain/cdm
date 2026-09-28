@@ -43,6 +43,16 @@ def main(host: str) -> None:
     assert messages[1]["type"] == "error"
     assert messages[1]["request_id"] == "second"
 
+    with tempfile.TemporaryDirectory(prefix="cdm-host-locale-") as root:
+        config_dir = Path(root) / ".local" / "share" / "cdm"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.toml").write_text('[ui]\nlocale = "es"\n')
+        locale_env = os.environ.copy()
+        locale_env["HOME"] = root
+        result = subprocess.run([host], input=frame(b"{bad json"),
+                                env=locale_env, capture_output=True, timeout=5)
+        assert decode_frames(result.stdout)[0]["error"] == "JSON no válido"
+
     result = subprocess.run(
         [host], input=struct.pack("=I", 1024 * 1024 + 1),
         capture_output=True, timeout=5

@@ -298,3 +298,10 @@ values, so a locale cannot reorder values within a sentence. Should a later
 i18n task add named placeholders with checked substitution before translating
 such messages? The current extraction leaves these formats in their English
 word order while avoiding catalog-controlled printf formats.
+
+## Task 5.3.3 — Locale packaging on other platforms
+
+TODO(platform): `tr_load_locale()` resolves a Linux build-tree or installed
+`share/cdm/i18n` catalog. A Windows/macOS package needs a bundle-relative
+catalog location and corresponding installer wiring before locale switching
+works there.

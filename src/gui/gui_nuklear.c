@@ -80,6 +80,7 @@ typedef struct {
   bool clipboard_monitor, clipboard_monitor_enabled, clipboard_offer_open;
   bool folder_explicit; // GUI main thread owns the destination choice
   ThemeId theme_saved, theme_preview;
+  int locale_selection; // GUI main thread; 0 = English, 1 = Spanish
   bool theme_needs_apply;
   char clipboard_seen[GUI_URL_CAP], clipboard_offer[GUI_URL_CAP];
   uint32_t clipboard_checked_at, clipboard_changed_at;
@@ -413,6 +414,7 @@ static void open_settings(UiState *ui) {
   ui->clipboard_monitor = config.clipboard_monitor;
   ui->theme_saved = theme_from_text(config.ui_theme);
   ui->theme_preview = ui->theme_saved;
+  ui->locale_selection = strcmp(config.ui_locale, "es") == 0 ? 1 : 0;
   ui->theme_needs_apply = true;
   copy_text(ui->proxy_url, sizeof(ui->proxy_url), config.proxy_url);
   copy_text(ui->proxy_username, sizeof(ui->proxy_username),
@@ -1077,7 +1079,7 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     return;
   }
   text_at(ctx, 20, 70, w - 40, 20,
-          tr("gui.saved_to_config_toml_and_applied_immediately"), 11, MUTED, SURFACE);
+          tr("gui.settings_save_note"), 11, MUTED, SURFACE);
   bool proxy_url_ok = true;
   nk_layout_space_push(ctx, nk_rect(20, 108, w - 40, h - 188));
   nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
@@ -1101,6 +1103,16 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
       ui->theme_preview = selection;
       theme_apply(ctx, selection);
     }
+    nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
+    nk_label(ctx, tr("gui.locale"), NK_TEXT_LEFT);
+    nk_layout_row_dynamic(ctx, THEME_ROW_INPUT, 1);
+    const char *locales[] = {tr("gui.locale_english"),
+                             tr("gui.locale_spanish")};
+    ui->locale_selection = nk_combo(ctx, locales, 2, ui->locale_selection,
+                                    30, nk_vec2(400, 90));
+    nk_layout_row_dynamic(ctx, THEME_ROW_CAPTION, 1);
+    nk_label_colored(ctx, tr("gui.locale_restart_required"), NK_TEXT_LEFT,
+                     MUTED);
     nk_layout_row_dynamic(ctx, THEME_ROW_LABEL, 1);
     nk_label(ctx, tr("gui.default_download_directory"), NK_TEXT_LEFT);
     nk_layout_row_begin(ctx, NK_STATIC, THEME_ROW_INPUT, 3);
@@ -1226,6 +1238,7 @@ static void draw_settings(struct nk_context *ctx, UiState *ui, float width,
     config.clipboard_monitor = ui->clipboard_monitor;
     memcpy(config.ui_theme, theme_to_text(ui->theme_preview),
            strlen(theme_to_text(ui->theme_preview)) + 1);
+    memcpy(config.ui_locale, ui->locale_selection ? "es" : "en", 3);
     if (ui->user_agent[0])
       copy_text(config.user_agent, sizeof(config.user_agent), ui->user_agent);
     config.proxy_mode = ui->proxy_mode;

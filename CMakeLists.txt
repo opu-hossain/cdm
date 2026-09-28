@@ -192,6 +192,11 @@ downloadmgr_enable_warnings(downloadmgr_core)
 downloadmgr_enable_sanitizer(downloadmgr_core)
 
 target_include_directories(downloadmgr_core PRIVATE src)
+target_compile_definitions(downloadmgr_core PRIVATE
+    CDM_INSTALLED_I18N_DIR="${CMAKE_INSTALL_FULL_DATADIR}/cdm/i18n")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/i18n")
+configure_file(resources/i18n/es.toml
+               "${CMAKE_CURRENT_BINARY_DIR}/i18n/es.toml" COPYONLY)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 target_link_libraries(downloadmgr_core PUBLIC PkgConfig::LIBXML2)
 if(UNIX)
@@ -360,6 +365,8 @@ install(FILES ${_browser_bundles}
         DESTINATION "${CMAKE_INSTALL_DATADIR}/cdm/browser")
 install(DIRECTORY resources/native-messaging/
         DESTINATION "${CMAKE_INSTALL_DATADIR}/cdm/browser/manifests")
+install(DIRECTORY resources/i18n/
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/cdm/i18n")
 install(FILES docs/browser-integration.md
         DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/cdm")
 install(FILES docs/daemon-autostart.md

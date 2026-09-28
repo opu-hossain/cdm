@@ -1123,3 +1123,10 @@ Completed: user-approved scheduler scope; routed success/failure desktop notific
 Verification: test-first missing fallback, catalog override and focused scheduler/i18n tests pass; full Debug CTest 41/41 pass.
 Open questions: formatted text ordering from earlier 5.3.2 subsystems remains open.
 Next: 5.3.3 locale and startup wiring. No push.
+
+## 2026-09-28 — Codex, task 5.3.3
+Branch: `cdm`; commit: `feat(i18n): add Spanish locale and selection`.
+Completed: user-approved config/GUI/CMake/export/startup scope; added `es` catalog for 290/291 keys, with the brand name using English fallback, `[ui] locale`, restart note, and JSON backup parity.
+Verification: config/i18n, Spanish CLI export and native-host protocol tests pass; full Debug CTest 41/41 pass. GUI visual smoke unavailable without a display server.
+Open questions: other-platform catalog packaging and placeholder word order are tracked in docs/open-questions.md.
+Next: 5.4.1 antivirus scanner config. No push.

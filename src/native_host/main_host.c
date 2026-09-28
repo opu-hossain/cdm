@@ -610,6 +610,9 @@ static bool poll_offers(void) {
 int main(void) {
   log_init(NULL, LOG_WARN); /* Native Messaging reserves stdout for JSON. */
   config_init(NULL);
+  DownloadManagerConfig locale_config;
+  config_get(&locale_config);
+  tr_load_locale(locale_config.ui_locale);
   setvbuf(stdin, NULL, _IONBF, 0);
   for (;;) {
     fd_set input;

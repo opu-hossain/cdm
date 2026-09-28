@@ -13,6 +13,7 @@
 #include "../platform/spawn.h"
 #include "../platform/tray.h"
 #include "../utils/config.h"
+#include "../utils/i18n.h"
 #include "../utils/log.h"
 #include "../utils/notify.h"
 
@@ -209,6 +210,9 @@ int run_daemon(void) {
              "~/.local/share/cdm");
 
   config_init(NULL);
+  DownloadManagerConfig locale_config;
+  config_get(&locale_config);
+  tr_load_locale(locale_config.ui_locale);
   spawn_media_tools_init();
   spawn_site_tool_init();
 
