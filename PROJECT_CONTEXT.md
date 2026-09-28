@@ -50,6 +50,8 @@ This is a source and local-test snapshot, not a claim that every runtime path wo
 | Batch add | `cdm cli add --file PATH` reads one URL per line, ignoring blank/comment lines, and reports each result; exit 0 means all accepted, 1 means partial failures, 2 means input/read failure. GUI has a multiline review dialog (`src/cli/cli.c`, `src/gui/gui_nuklear.c`). |
 | Categories | `categories` table with Default `id=1`; extensions are comma-separated lowercase tokens. `category_for_filename()` chooses a matching category with the longest extension-list string, otherwise Default. Automatic destination routing happens before reservation; an explicitly chosen folder bypasses routing. `downloads.category_id` is persisted and reassigned to 1 transactionally on category deletion. GUI sidebar lists DB categories, adds/edits/deletes via IPC, and pages its 256-category maximum; category counts/filtering use only loaded history rows (`src/core/queue_manager.c:26`, `src/platform/ipc_socket.c:652`, `src/persistence/db.c:328`, `:421`, `src/gui/gui_nuklear.c:523`). |
 
+Phase 2 wrap-up records passing Debug/ASan fixtures and a documented Criterion/TSan tooling exception. Category editing, schedules, tray, and clipboard review still require visual acceptance on the release desktop; `docs/RELEASE_CHECKLIST.md` tracks that user test.
+
 
 ```mermaid
 flowchart LR

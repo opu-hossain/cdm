@@ -34,7 +34,7 @@ These notes describe the current source and packaging configuration. This draft 
 - `cdm cli add --file PATH` and a GUI multiline dialog support batch entry. CLI results are reported per line with 0/1/2 exit status for success, partial failure, or input failure.
 - Categories persist names, extension lists, and default folders. Automatic destinations route by extension; explicit folders bypass routing. The GUI sidebar lists and edits stored categories. Downloads retain a category ID, and deleting a category moves its downloads to Default.
 - IPC HELLO now reports version 7. Queue commands use types 45–49; automatic-directory add uses type 50; category CRUD and assigned-category history use types 51–55. Previous message layouts remain unchanged. SQLite schema is version 9.
-- Local debug build and full CTest passed 33/33 on 2026-09-25. A separate ASan build passed 33/33. The TSan build compiled, but its full suite passed 13/33: 20 Criterion targets failed before assertions with arena initialization errors or crashes inside `libcriterion.so.3`. This does not establish a cdm data race; a compatible Criterion/TSan test environment is needed to complete that gate. Graphical category editing was not visually exercised in this environment.
+- Local phase-2 Debug and ASan builds each passed 33/33 CTest targets on 2026-09-25; the current tree passes 41/41 in Debug and ASan. Criterion test processes abort before assertions under TSan even in a one-assertion standalone reproduction; non-Criterion TSan integration targets pass. The user accepted this as a tooling exception for wrap-up, without claiming race-free unit coverage. Graphical category editing remains a manual release acceptance check.
 
 ## Unreleased — phase 1 transfer parity
 

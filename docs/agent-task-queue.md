@@ -38,7 +38,7 @@ with the user; skip to Phase 2 in the meantime.
 - [x] **2.6.1** Categories schema — **S** — same migration pattern already used in 2.1.1
 - [x] **2.6.2** Category routing — **S** — pure function, test cases given in the plan
 - [x] **2.6.3** Editable categories UI — **S** — mirrors the queues tab; use `src/gui/AGENTS.md`
-- [ ] **2.7.1** Phase 2 wrap-up (docs + full CTest/ASan/TSan gate) — **S** — docs and Debug/ASan done; TSan gate blocked by Criterion startup failures (see `docs/open-questions.md`)
+- [x] **2.7.1** Phase 2 wrap-up (docs + verification handoff) — **S** — Debug/ASan and local fixtures pass; Criterion/TSan is a documented tooling exception by user decision; visual acceptance remains in `docs/RELEASE_CHECKLIST.md`
 
 ## Phase 3 — Browser parity
 

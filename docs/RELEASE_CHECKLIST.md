@@ -15,6 +15,7 @@ This checklist is for the current Linux release candidate. A checked item must r
 - [ ] Run `cdm daemon status`, `disable`, and `enable` in an isolated user environment; verify the output and exit codes in [daemon startup](daemon-autostart.md).
 - [ ] Start `cdm daemon` twice and verify one serving PID; restart after `SIGKILL` to check stale socket recovery.
 - [ ] Verify the installed GUI, `cdm cli` commands, and native browser host from a clean prefix.
+- [ ] On a release desktop, inspect queue schedules/actions, category editing, tray controls, clipboard review, and both GUI themes. Confirm dialogs before destructive actions.
 - [ ] Confirm `/etc/xdg/autostart/cdm-daemon.desktop`, the desktop launcher, browser extension files, and native-host binary are installed.
 
 ## Package checks

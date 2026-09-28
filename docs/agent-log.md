@@ -1169,3 +1169,9 @@ Branch: `cdm`; phase wrap-up gates remain under review.
 Completed: synchronized README install examples, release checklist and Arch PKGBUILD to `.release.toml` version `0.3.0-rc1`.
 Verification: Release build and CTest 41/41 pass; DEB and RPM artifacts build in `/tmp`. Target-distro installation is still unverified.
 Next: finish runtime/package smoke and update phase gate records. No push.
+
+## 2026-09-28 — Codex, task 2.7.1
+Branch: `cdm`; phase-2 wrap-up recorded without a phase merge.
+Completed: aligned project context and release notes with current queue/automation verification and the user's Criterion/TSan tooling exception.
+Verification: current Debug/ASan 41/41, Release 41/41; staged GUI starts offscreen. Visual queue/tray/category acceptance remains on the release checklist.
+Next: 3.5.1 browser wrap-up. No push.
