@@ -46,6 +46,30 @@ The release helper builds an Arch package from this checkout and leaves it in `p
 sudo pacman -U "$(find packaging/arch -maxdepth 1 -name 'cdm-*.pkg.tar.zst' ! -name '*-debug-*' -print -quit)"
 ```
 
+## Install from source
+
+Install the build dependencies for your Linux distribution first. The package
+lists and helper scripts are in [CONTRIBUTING.md](CONTRIBUTING.md#development-dependencies).
+These commands install cdm system-wide under `/usr/local`; the install also
+writes `/etc/xdg/autostart/cdm-daemon.desktop`, so it needs administrator access.
+
+```sh
+git clone https://github.com/opu-hossain/cdm.git
+cd cdm
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_TESTING=OFF
+cmake --build build -j
+sudo cmake --install build
+/usr/local/bin/cdm daemon status
+/usr/local/bin/cdm gui
+```
+
+Run the daemon and GUI as your normal user, without `sudo`. A graphical session
+with XDG autostart starts the daemon at the next login; the CLI and GUI can also
+start it on demand. Browser integration needs a separate extension install and
+per-user native-host registration; see [browser integration](docs/browser-integration.md).
+To build and run the test suite before installing, follow
+[CONTRIBUTING.md](CONTRIBUTING.md#clone-build-and-test).
+
 ## Quick start
 
 ```sh
@@ -63,10 +87,6 @@ The optional extensions hand supported GET downloads to cdm. Per-origin consent 
 ## Daemon lifecycle
 
 Graphical sessions with XDG autostart start the packaged daemon at login. `cdm daemon status`, `cdm daemon disable`, and `cdm daemon enable` control the current user's autostart setting. See [daemon startup at login](docs/daemon-autostart.md) for behavior and exit codes.
-
-## Build from source
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for dependencies, build commands, and tests.
 
 ## Roadmap
 
