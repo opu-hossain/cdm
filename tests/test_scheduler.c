@@ -14,6 +14,7 @@
 static _Atomic int active_workers;
 static _Atomic bool hold_workers;
 static _Atomic bool fail_workers;
+static _Atomic bool block_by_scanner;
 static _Atomic int engine_runs;
 static _Atomic int post_action_runs;
 static _Atomic uint64_t tray_received;
@@ -50,6 +51,8 @@ int engine_run_download(struct Download *d) {
   if (atomic_load(&d->pause_requested) ||
       atomic_load(&d->cancel_requested) || atomic_load(&fail_workers))
     return -1;
+  if (atomic_load(&block_by_scanner))
+    return -6;
   return 0;
 }
 
@@ -58,6 +61,7 @@ static void setup_scheduler(void) {
   atomic_store(&active_workers, 0);
   atomic_store(&hold_workers, false);
   atomic_store(&fail_workers, false);
+  atomic_store(&block_by_scanner, false);
   atomic_store(&engine_runs, 0);
   atomic_store(&post_action_runs, 0);
   atomic_store(&tray_received, UINT64_MAX);
@@ -340,6 +344,32 @@ Test(scheduler, automatic_retries_stop_at_terminal_error) {
   DownloadStatus final_status = DOWNLOAD_QUEUED;
   cr_assert(queue_manager_get_status(id, &final_status));
   cr_assert_eq(final_status, DOWNLOAD_ERROR);
+  queue_manager_remove(id);
+}
+
+Test(scheduler, scanner_block_is_nonretryable_and_persisted) {
+  const char *url = "http://127.0.0.1/scanner-block";
+  const char *path = "/tmp/cdm-scanner-block-fixture";
+  uint32_t id = queue_manager_add(url, path, NULL);
+  cr_assert_neq(id, 0);
+  cr_assert_eq(db_insert_download(id, url, path, NULL), 0);
+  atomic_store(&block_by_scanner, true);
+  scheduler_tick();
+  DownloadStatus status = DOWNLOAD_ACTIVE;
+  for (int i = 0; i < 1000; i++) {
+    if (queue_manager_get_status(id, &status) && status == DOWNLOAD_ERROR)
+      break;
+    dm_thread_sleep_ms(1);
+  }
+  cr_assert_eq(status, DOWNLOAD_ERROR);
+  Download *d = queue_manager_find_by_id(id);
+  cr_assert_not_null(d);
+  cr_assert_eq(d->retry_count, 0);
+  scheduler_tick();
+  cr_assert_eq(atomic_load(&engine_runs), 1);
+  char error[256];
+  cr_assert(queue_manager_get_error(id, error, sizeof(error)));
+  cr_assert_str_eq(error, "Blocked by scanner");
   queue_manager_remove(id);
 }
 

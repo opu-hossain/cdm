@@ -5,6 +5,7 @@
 #define ENGINE_FINALIZE_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,6 +25,10 @@ extern "C" {
  */
 int engine_finalize(const char *dest_path, uint64_t expected_size,
                     const char *expected_sha256_hex);
+
+/* Move a rejected published output into its destination's private
+ * .quarantine directory without replacing an existing entry. */
+int engine_quarantine_output(const char *path, char *out, size_t out_size);
 
 #ifdef __cplusplus
 }

@@ -55,7 +55,7 @@ def main(driver):
                 assert rc == 0, error
                 with sqlite3.connect(folder / "db.sqlite") as db:
                     row = db.execute("select dest_path, companion_path, total_size, status, media_kind from downloads").fetchone()
-                assert row[3:] == ("DONE", 2), row
+                assert row[3:] == ("QUEUED", 2), row
                 return row
             missing = root / "missing"
             row = run(missing, "/definitely/missing")

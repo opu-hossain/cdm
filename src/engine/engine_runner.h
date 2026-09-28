@@ -27,6 +27,7 @@ struct Download;
  *          or needs cleanup)
  *         -4 on missing resume file (non-retryable — stale ranges are cleared)
  *         -5 on lost ephemeral browser context (fresh browser offer required)
+ *         -6 when the scanner blocks a published output (non-retryable)
  */
 int engine_run_download(struct Download *d);
 

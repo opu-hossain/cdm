@@ -10,6 +10,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <errno.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define HASH_READ_BUF_SIZE 65536
 
@@ -102,4 +106,46 @@ int engine_finalize(const char *dest_path, uint64_t expected_size,
   }
 
   return 0;
+}
+
+int engine_quarantine_output(const char *path, char *out, size_t out_size) {
+  if (!path || !out || !out_size)
+    return -1;
+  const char *slash = strrchr(path, '/');
+  const char *name = slash ? slash + 1 : path;
+  if (!*name)
+    return -1;
+  char directory[1024];
+  size_t parent_len = slash ? (size_t)(slash - path) : 0;
+  const char *parent = slash ? (parent_len ? path : "/") : ".";
+  size_t copy_len = slash ? (parent_len ? parent_len : 1) : 1;
+  if (copy_len + sizeof("/.quarantine") > sizeof(directory))
+    return -1;
+  memcpy(directory, parent, copy_len);
+  directory[copy_len] = '\0';
+  if (copy_len > 1 || directory[0] != '/')
+    strcat(directory, "/");
+  strcat(directory, ".quarantine");
+  if (mkdir(directory, 0700) != 0 && errno != EEXIST)
+    return -1;
+  struct stat st;
+  if (lstat(directory, &st) != 0 || !S_ISDIR(st.st_mode) ||
+      (st.st_mode & 0077) != 0)
+    return -1;
+  for (unsigned int suffix = 0; suffix < 1000000; suffix++) {
+    int n = suffix ? snprintf(out, out_size, "%s/%s.%u", directory,
+                              name, suffix)
+                   : snprintf(out, out_size, "%s/%s", directory, name);
+    if (n < 0 || (size_t)n >= out_size)
+      return -1;
+    if (link(path, out) == 0) {
+      if (unlink(path) == 0)
+        return 0;
+      unlink(out);
+      return -1;
+    }
+    if (errno != EEXIST)
+      return -1;
+  }
+  return -1;
 }

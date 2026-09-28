@@ -113,6 +113,40 @@ Test(spawn, ffmpeg_absence_is_cached) {
   cr_assert_eq(setenv("PATH", "/usr/bin:/bin", 1), 0);
   cr_assert(!spawn_ffmpeg_available());
 }
+
+Test(spawn, scanner_uses_quoted_argv_and_reports_failure) {
+  char root[] = "/tmp/cdm-scanner-spawn-XXXXXX";
+  cr_assert_not_null(mkdtemp(root));
+  char executable[256], target[256];
+  int written = snprintf(executable, sizeof(executable), "%s/checker", root);
+  cr_assert_geq(written, 0);
+  cr_assert_lt((size_t)written, sizeof(executable));
+  written = snprintf(target, sizeof(target), "%s/file with space", root);
+  cr_assert_geq(written, 0);
+  cr_assert_lt((size_t)written, sizeof(target));
+  ffmpeg_script(executable,
+      "#!/bin/sh\n[ \"$1\" = 'two words' ] && [ \"$2\" = --quiet ] && "
+      "[ \"$3\" = \"$CDM_SCANNER_TEST_FILE\" ]\n");
+  cr_assert_eq(setenv("CDM_SCANNER_TEST_FILE", target, 1), 0);
+  _Atomic bool cancel = false, pause = false;
+  cr_assert_eq(spawn_scanner(executable, "'two words' --quiet", target,
+                             &cancel, &pause, 2), 0);
+  cr_assert_eq(spawn_scanner(executable, "'unterminated", target,
+                             &cancel, &pause, 2), -1);
+  unlink(executable);
+  ffmpeg_script(executable, "#!/bin/sh\nexit 7\n");
+  cr_assert_eq(spawn_scanner(executable, "", target,
+                             &cancel, &pause, 2), 7);
+  unlink(executable);
+  ffmpeg_script(executable, "#!/bin/sh\nsleep 5\n");
+  cr_assert_eq(spawn_scanner(executable, "", target,
+                             &cancel, &pause, 1), 124);
+  atomic_store(&cancel, true);
+  cr_assert_eq(spawn_scanner(executable, "", target,
+                             &cancel, &pause, 2), -2);
+  unlink(executable);
+  rmdir(root);
+}
 #endif
 
 #ifndef _WIN32

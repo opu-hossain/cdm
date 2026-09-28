@@ -77,6 +77,8 @@ int db_insert_reserved_download_auto(uint32_t id, const char *url,
  * File deletion happens after the database transaction commits. */
 int db_delete_download(uint32_t id, int delete_file);
 int db_complete_media_outputs(uint32_t id, const char *path, const char *companion, uint64_t size);
+int db_get_companion_path(uint32_t id, char *out, size_t out_size);
+int db_update_output_paths(uint32_t id, const char *path, const char *companion);
 int db_update_site_error(uint32_t id, const char *redacted_error);
 int db_update_media_output(uint32_t id, const char *path, uint64_t size);
 int db_update_resolved_destination(uint32_t id, const char *dest_path);

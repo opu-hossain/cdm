@@ -27,7 +27,7 @@ def main(driver):
         tool.write_text("#!/bin/sh\nprevious=\nrate=\nfor value do\n  if [ \"$previous\" = -o ]; then output=$value; fi\n  if [ \"$previous\" = -r ]; then rate=$value; fi\n  previous=$value\ndone\n[ \"$rate\" = 1024 ] || exit 6\noutput=${output%%\\%*}mp4\n/bin/printf 'synthetic payload' > \"$output\"\nprintf 'CDM|17|17|4|0|100%%\\n'\n")
         tool.chmod(0o700)
         rc, row, work = run("success")
-        assert rc == 0 and row[1:] == (1, "DONE", 17, "", ""), row
+        assert rc == 0 and row[1:] == (1, "QUEUED", 17, "", ""), row
         assert Path(row[0]).suffix == ".mp4"
         assert Path(row[0]).read_bytes() == b"synthetic payload"
         assert not (work / "chosen.webm").exists()

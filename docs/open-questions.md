@@ -305,3 +305,9 @@ TODO(platform): `tr_load_locale()` resolves a Linux build-tree or installed
 `share/cdm/i18n` catalog. A Windows/macOS package needs a bundle-relative
 catalog location and corresponding installer wiring before locale switching
 works there.
+
+## Task 5.4.2 — Windows scanner execution
+
+`src/platform/spawn.c` has `TODO(platform)` for the scanner. A Windows port
+needs argv-safe `CreateProcess` quoting, process timeout/cancellation, and
+child reaping before scanner configuration can be enabled there.

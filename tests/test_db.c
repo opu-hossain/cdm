@@ -511,7 +511,7 @@ Test(db, media_completion_persists_and_deletes_companion) {
  RequestOptions options={.media_kind=DOWNLOAD_MEDIA_DASH};
  cr_assert_eq(db_insert_download(404,"https://example.invalid/main.mpd",video,&options),0);
  cr_assert_eq(db_complete_media_outputs(404,video,audio,20),0);
- DbDownloadRow row={0};cr_assert_eq(db_list_all_downloads(&row,1),1);cr_assert_str_eq(row.status,"DONE");cr_assert_eq(row.total_size,20);
+ DbDownloadRow row={0};cr_assert_eq(db_list_all_downloads(&row,1),1);cr_assert_str_eq(row.status,"QUEUED");cr_assert_eq(row.total_size,20);
  cr_assert_eq(db_delete_download(404,1),0);cr_assert_eq(access(video,F_OK),-1);cr_assert_eq(access(audio,F_OK),-1);rmdir(directory);
 }
 

@@ -51,6 +51,13 @@ int spawn_site_tool(char *const argv[], const _Atomic bool *cancel,
                     const _Atomic bool *pause, int inactivity_timeout_sec,
                     SpawnLineCallback callback, void *userdata);
 
+/* No shell. scanner_args supports quotes/backslashes; file_path is last argv.
+ * 0 clean, positive child exit (124 timeout), -1 launch/parse error,
+ * -2 cancel or pause. */
+int spawn_scanner(const char *command, const char *scanner_args,
+                  const char *file_path, const _Atomic bool *cancel,
+                  const _Atomic bool *pause, int timeout_sec);
+
 /* Launch an explicitly enabled queue action without an implicit shell. */
 int spawn_post_action(const char *action, const char *argument);
 

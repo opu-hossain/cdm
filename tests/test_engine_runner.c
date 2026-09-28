@@ -5,6 +5,7 @@
 #include "../src/persistence/db.h"
 #include "../src/platform/curl_client.h"
 #include "../src/platform/file_io.h"
+#include "../src/utils/config.h"
 #include <criterion/criterion.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -19,6 +20,7 @@ static int fallback_scenario;
 static int fallback_call;
 static bool filename_scenario;
 static bool validator_scenario;
+static int hls_result = -1;
 static const uint64_t fallback_size = 4ULL * 1024ULL * 1024ULL;
 
 static void fill_file(const char *path, char value, uint64_t length) {
@@ -38,7 +40,7 @@ static int hls_calls;
 int hls_run_download(Download *d) {
   cr_assert_eq(d->media_kind, DOWNLOAD_MEDIA_HLS);
   hls_calls++;
-  return -1;
+  return hls_result;
 }
 void hls_discard_state(const char *destination) { (void)destination; }
 void dash_discard_state(const char *destination) { (void)destination; }
@@ -155,8 +157,59 @@ static void setup_engine_test(void) {
   fallback_call = 0;
   filename_scenario = false;
   validator_scenario = false;
+  hls_result = -1;
   setenv("DOWNLOADMGR_ROOT", "/tmp", 1);
   db_init(":memory:"); // use in‑memory DB to avoid "out of memory" errors
+}
+
+Test(engine_runner, scanner_blocks_and_quarantines_primary_and_companion) {
+  char dir[] = "/tmp/cdm-engine-scan-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  char script[256], primary[256], companion[256], config_path[256];
+  int n = snprintf(script, sizeof(script), "%s/scanner", dir);
+  cr_assert_geq(n, 0); cr_assert_lt((size_t)n, sizeof(script));
+  n = snprintf(primary, sizeof(primary), "%s/video.ts", dir);
+  cr_assert_geq(n, 0); cr_assert_lt((size_t)n, sizeof(primary));
+  n = snprintf(companion, sizeof(companion), "%s/audio.aac", dir);
+  cr_assert_geq(n, 0); cr_assert_lt((size_t)n, sizeof(companion));
+  n = snprintf(config_path, sizeof(config_path), "%s/config.toml", dir);
+  cr_assert_geq(n, 0); cr_assert_lt((size_t)n, sizeof(config_path));
+  FILE *fp = fopen(script, "wb");
+  cr_assert_not_null(fp);
+  cr_assert_geq(fputs("#!/bin/sh\nexit 7\n", fp), 0);
+  cr_assert_eq(fclose(fp), 0);
+  cr_assert_eq(chmod(script, 0700), 0);
+  fp = fopen(config_path, "wb");
+  cr_assert_not_null(fp);
+  cr_assert_geq(fprintf(fp, "[security]\nscanner_command = \"%s\"\n", script), 0);
+  cr_assert_eq(fclose(fp), 0);
+  config_init(config_path);
+  unlink(config_path);
+  fp = fopen(primary, "wb"); cr_assert_not_null(fp);
+  cr_assert_geq(fputs("video", fp), 0); cr_assert_eq(fclose(fp), 0);
+  fp = fopen(companion, "wb"); cr_assert_not_null(fp);
+  cr_assert_geq(fputs("audio", fp), 0); cr_assert_eq(fclose(fp), 0);
+  Download d = {.id = 900, .media_kind = DOWNLOAD_MEDIA_HLS};
+  strcpy(d.url, "http://127.0.0.1/media");
+  strcpy(d.dest_path, primary);
+  cr_assert_eq(db_insert_download(d.id, d.url, primary, NULL), 0);
+  cr_assert_eq(db_complete_media_outputs(d.id, primary, companion, 10), 0);
+  hls_result = 0;
+  cr_assert_eq(engine_run_download(&d), -6);
+  cr_assert_neq(access(primary, F_OK), 0);
+  cr_assert_neq(access(companion, F_OK), 0);
+  cr_assert_neq(access(d.dest_path, F_OK), -1);
+  char stored_companion[1024];
+  cr_assert_eq(db_get_companion_path(d.id, stored_companion,
+                                     sizeof(stored_companion)), 0);
+  cr_assert_neq(access(stored_companion, F_OK), -1);
+  DbDownloadRow rows[1] = {0};
+  cr_assert_eq(db_list_all_downloads(rows, 1), 1);
+  cr_assert_str_eq(rows[0].dest_path, d.dest_path);
+  unlink(d.dest_path); unlink(stored_companion);
+  n = snprintf(primary, sizeof(primary), "%s/.quarantine", dir);
+  cr_assert_geq(n, 0); cr_assert_lt((size_t)n, sizeof(primary));
+  rmdir(primary); unlink(script); rmdir(dir);
 }
 
 static void teardown_engine_test(void) {

@@ -83,6 +83,15 @@ int spawn_site_tool(char *const argv[], const _Atomic bool *cancel,
   (void)argv;(void)cancel;(void)pause;(void)timeout;(void)callback;(void)userdata;return -1;
 }
 
+int spawn_scanner(const char *command, const char *scanner_args,
+                  const char *file_path, const _Atomic bool *cancel,
+                  const _Atomic bool *pause, int timeout_sec) {
+  (void)command; (void)scanner_args; (void)file_path;
+  (void)cancel; (void)pause; (void)timeout_sec;
+  /* TODO(platform): safely spawn and reap configured scanner on Windows. */
+  return -1;
+}
+
 int spawn_post_action(const char *action, const char *argument) {
   (void)action;
   (void)argument;
@@ -150,6 +159,16 @@ static int split_command(char *text, char *argv[32]) {
     *write++ = '\0';
   }
   argv[count] = NULL;
+  return count;
+}
+
+static int split_scanner_args(char *text, char *argv[32]) {
+  char *parts[32] = {0};
+  int count = split_command(text, parts);
+  if (count < 0 || count > 29)
+    return -1;
+  for (int i = 0; i < count; i++)
+    argv[i + 1] = parts[i];
   return count;
 }
 
@@ -357,6 +376,69 @@ static uint64_t monotonic_ms(void) {
   struct timespec time;
   if (clock_gettime(CLOCK_MONOTONIC, &time) != 0) return 0;
   return (uint64_t)time.tv_sec * 1000 + (uint64_t)time.tv_nsec / 1000000;
+}
+
+int spawn_scanner(const char *command, const char *scanner_args,
+                  const char *file_path, const _Atomic bool *cancel,
+                  const _Atomic bool *pause, int timeout_sec) {
+  if (!command || !*command || !scanner_args || !file_path || !*file_path ||
+      timeout_sec < 1)
+    return -1;
+  if (remux_interrupted(cancel, pause))
+    return -2;
+  if (strlen(scanner_args) >= 2048)
+    return -1;
+  char args[2048];
+  memcpy(args, scanner_args, strlen(scanner_args) + 1);
+  char *argv[32] = {(char *)command};
+  int count = split_scanner_args(args, argv);
+  if (count < 0)
+    return -1;
+  argv[count + 1] = (char *)file_path;
+  argv[count + 2] = NULL;
+
+  posix_spawn_file_actions_t actions;
+  if (posix_spawn_file_actions_init(&actions) != 0)
+    return -1;
+  int error = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO,
+                                                "/dev/null", O_RDONLY, 0);
+  if (!error) error = posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO,
+                                                        "/dev/null", O_WRONLY, 0);
+  if (!error) error = posix_spawn_file_actions_addopen(&actions, STDERR_FILENO,
+                                                        "/dev/null", O_WRONLY, 0);
+  pid_t pid = -1;
+  if (!error) error = posix_spawnp(&pid, command, &actions, NULL, argv, environ);
+  posix_spawn_file_actions_destroy(&actions);
+  if (error)
+    return -1;
+  uint64_t start = monotonic_ms();
+  int status = 0;
+  for (;;) {
+    pid_t got = waitpid(pid, &status, WNOHANG);
+    if (got == pid)
+      return WIFEXITED(status) ? WEXITSTATUS(status) :
+             WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1;
+    if (got < 0 && errno == EINTR)
+      continue;
+    if (got < 0)
+      return -1;
+    bool interrupted = remux_interrupted(cancel, pause);
+    uint64_t now = monotonic_ms();
+    if (interrupted || !start || !now || now - start >= (uint64_t)timeout_sec * 1000) {
+      int result = interrupted ? -2 : 124;
+      kill(pid, SIGTERM);
+      for (int i = 0; i < 5; i++) {
+        dm_thread_sleep_ms(100);
+        got = waitpid(pid, &status, WNOHANG);
+        if (got == pid)
+          return result;
+      }
+      kill(pid, SIGKILL);
+      do { got = waitpid(pid, &status, 0); } while (got < 0 && errno == EINTR);
+      return result;
+    }
+    dm_thread_sleep_ms(100);
+  }
 }
 
 static int run_ffmpeg(const char *input, const char *audio, const char *output,

@@ -1137,3 +1137,10 @@ Completed: added disabled-by-default `[security] scanner_command` and `scanner_a
 Verification: test-first missing fields, config round trip and safe/private JSON export/import tests pass; full Debug CTest 41/41 pass.
 Open questions: scanner execution and argument grammar belong to 5.4.2.
 Next: 5.4.2 scanner execution after verification. No push.
+
+## 2026-09-28 — Codex, task 5.4.2
+Branch: `cdm`; commit: `feat(engine): run configured antivirus scanner after finalize`.
+Completed: argv-safe, cancellable scanner with timeout; all HTTP/media/site published outputs are scanned, including DASH companion audio. Rejected outputs move to private `.quarantine`; scheduler persists nonretryable `Blocked by scanner`.
+Verification: mock scanner exit/argv/timeout, quarantine collision, media companion and scheduler tests pass; full Debug CTest 41/41 pass. No display required.
+Open questions: Windows scanner process helper is tracked in docs/open-questions.md.
+Next: 5.5.1 platform port plan. No push.

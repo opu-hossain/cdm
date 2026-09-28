@@ -8,6 +8,7 @@
 #include "../platform/curl_client.h"
 #include "../platform/file_io.h"
 #include "../platform/thread.h"
+#include "../platform/spawn.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
 #include "../utils/path.h"
@@ -170,16 +171,74 @@ static void clear_resume_state(struct Download *d, bool also_delete_file) {
 
 /* Public API */
 
+static int scan_published_outputs(struct Download *d) {
+  DownloadManagerConfig config;
+  config_get(&config);
+  if (!config.scanner_command[0])
+    return 0;
+  char primary[sizeof(d->dest_path)];
+  char companion[sizeof(d->dest_path)] = {0};
+  dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
+  dm_mutex_lock(mutex);
+  memcpy(primary, d->dest_path, sizeof(primary));
+  dm_mutex_unlock(mutex);
+  bool metadata_failed = db_get_companion_path(d->id, companion,
+                                                sizeof(companion)) != 0;
+  if (metadata_failed)
+    LOG_ERROR("Download %u: scanner could not load output metadata", d->id);
+  const char *outputs[] = {primary, companion};
+  for (size_t i = 0; i < 2; i++) {
+    if (!outputs[i][0] && !metadata_failed)
+      continue;
+    int result = metadata_failed ? -1 :
+                 spawn_scanner(config.scanner_command, config.scanner_args,
+                               outputs[i], &d->cancel_requested,
+                               &d->pause_requested, 120);
+    LOG_INFO("Download %u: scanner command %s exited %d", d->id,
+             config.scanner_command, result);
+    if (result == -2)
+      return -1;
+    if (result == 0)
+      continue;
+    char moved_primary[sizeof(primary)];
+    char moved_companion[sizeof(companion)] = {0};
+    memcpy(moved_primary, primary, sizeof(primary));
+    if (engine_quarantine_output(primary, moved_primary,
+                                 sizeof(moved_primary)) != 0) {
+      LOG_ERROR("Download %u: could not quarantine primary output", d->id);
+      memcpy(moved_primary, primary, sizeof(primary));
+    }
+    if (companion[0] && engine_quarantine_output(companion, moved_companion,
+                                                 sizeof(moved_companion)) != 0) {
+      LOG_ERROR("Download %u: could not quarantine companion output", d->id);
+      memcpy(moved_companion, companion, sizeof(companion));
+    }
+    dm_mutex_lock(mutex);
+    if (db_update_output_paths(d->id, moved_primary, moved_companion) != 0)
+      LOG_ERROR("Download %u: could not persist quarantine paths", d->id);
+    memcpy(d->dest_path, moved_primary, sizeof(d->dest_path));
+    dm_mutex_unlock(mutex);
+    return -6;
+  }
+  return 0;
+}
+
 int engine_run_download(struct Download *d) {
   const RequestOptions *request = d->request;
   if (d->requires_browser_context && (!request || !request->browser_context))
     return -5;
-  if (d->site_grab)
-    return site_grab_run_download(d);
-  if (d->media_kind == DOWNLOAD_MEDIA_HLS)
-    return hls_run_download(d);
-  if (d->media_kind == DOWNLOAD_MEDIA_DASH)
-    return dash_run_download(d);
+  if (d->site_grab) {
+    int rc = site_grab_run_download(d);
+    return rc == 0 ? scan_published_outputs(d) : rc;
+  }
+  if (d->media_kind == DOWNLOAD_MEDIA_HLS) {
+    int rc = hls_run_download(d);
+    return rc == 0 ? scan_published_outputs(d) : rc;
+  }
+  if (d->media_kind == DOWNLOAD_MEDIA_DASH) {
+    int rc = dash_run_download(d);
+    return rc == 0 ? scan_published_outputs(d) : rc;
+  }
 
   if (d->chunk_count > 0 && access(d->dest_path, F_OK) != 0 &&
       errno == ENOENT) {
@@ -328,7 +387,7 @@ int engine_run_download(struct Download *d) {
         return -2;
       }
       LOG_INFO("Download complete: %s\n", d->dest_path);
-      return 0;
+      return scan_published_outputs(d);
     }
   } else {
     DownloadManagerConfig config;
@@ -473,5 +532,5 @@ int engine_run_download(struct Download *d) {
   }
 
   LOG_INFO("Download complete: %s\n", d->dest_path);
-  return 0;
+  return scan_published_outputs(d);
 }

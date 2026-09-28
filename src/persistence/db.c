@@ -882,7 +882,8 @@ int db_insert_reserved_download_auto(uint32_t id, const char *url,
 
 int db_complete_media_outputs(uint32_t id, const char *path, const char *companion, uint64_t size) {
   if (!db_ready() || !path || !companion || strlen(path) >= 1024 || strlen(companion) >= 1024 || size > INT64_MAX) return -1;
-  const char *sql = "UPDATE downloads SET dest_path=?, companion_path=?, total_size=?, auto_filename=0, status='DONE' WHERE id=?";
+  /* Publication is not completion: the scheduler marks DONE after scanning. */
+  const char *sql = "UPDATE downloads SET dest_path=?, companion_path=?, total_size=?, auto_filename=0 WHERE id=?";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
   sqlite3_bind_text(stmt, 1, path, -1, SQLITE_STATIC);
@@ -892,6 +893,42 @@ int db_complete_media_outputs(uint32_t id, const char *path, const char *compani
   int result = sqlite3_step(stmt), changed = sqlite3_changes(g_db);
   sqlite3_finalize(stmt);
   return result == SQLITE_DONE && changed == 1 ? 0 : -1;
+}
+int db_get_companion_path(uint32_t id, char *out, size_t out_size) {
+  if (!db_ready() || !out || out_size == 0)
+    return -1;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db, "SELECT companion_path FROM downloads WHERE id=?",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id);
+  int rc = sqlite3_step(stmt);
+  const unsigned char *value = rc == SQLITE_ROW ? sqlite3_column_text(stmt, 0) : NULL;
+  size_t len = value ? strlen((const char *)value) : 0;
+  if (rc != SQLITE_ROW || len >= out_size) {
+    sqlite3_finalize(stmt);
+    return -1;
+  }
+  memcpy(out, value, len + 1);
+  sqlite3_finalize(stmt);
+  return 0;
+}
+int db_update_output_paths(uint32_t id, const char *path, const char *companion) {
+  if (!db_ready() || !path || !companion || strlen(path) >= 1024 ||
+      strlen(companion) >= 1024)
+    return -1;
+  sqlite3_stmt *stmt = NULL;
+  if (sqlite3_prepare_v2(g_db,
+      "UPDATE downloads SET dest_path=?, companion_path=? WHERE id=?",
+      -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_text(stmt, 1, path, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, companion, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 3, (sqlite3_int64)id);
+  int rc = sqlite3_step(stmt);
+  int changed = sqlite3_changes(g_db);
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_DONE && changed == 1 ? 0 : -1;
 }
 int db_update_site_error(uint32_t id, const char *redacted_error) {
  if (!db_ready() || !redacted_error || strlen(redacted_error)>=256) return -1;
