@@ -173,4 +173,41 @@ Test(spawn, site_tool_caches_path_and_streams_lines) {
   int status;cr_assert_eq(waitpid(-1,&status,WNOHANG),-1);cr_assert_eq(errno,ECHILD);
   unlink(config_path);unlink(executable);rmdir(root);
 }
+
+Test(spawn, site_tool_capture_bounds_output_and_reaps_child) {
+  char root[] = "/tmp/cdm-site-probe-XXXXXX";
+  cr_assert_not_null(mkdtemp(root));
+  char executable[256], config_path[256];
+  int n = snprintf(executable, sizeof(executable), "%s/yt-dlp", root);
+  cr_assert_geq(n, 0); cr_assert_lt((size_t)n, sizeof(executable));
+  n = snprintf(config_path, sizeof(config_path), "%s/config.toml", root);
+  cr_assert_geq(n, 0); cr_assert_lt((size_t)n, sizeof(config_path));
+  ffmpeg_script(executable, "#!/bin/sh\nprintf '%s' '{\"title\":\"Fixture\"}'\n");
+  FILE *cfg = fopen(config_path, "wb");
+  cr_assert_not_null(cfg);
+  cr_assert_gt(fprintf(cfg, "[sites]\nuse_yt_dlp = true\nyt_dlp_path = \"%s\"\n",
+                       executable), 0);
+  cr_assert_eq(fclose(cfg), 0);
+  cr_assert_eq(setenv("HOME", root, 1), 0);
+  config_init(config_path);
+  _Atomic bool cancel = false;
+  char output[64]; size_t length = 0;
+  char *args[] = {"yt-dlp", "--dump-single-json", "--", "https://example.invalid/fixture", NULL};
+  cr_assert_eq(spawn_site_tool_capture(args, &cancel, 2, output,
+                                       sizeof(output), &length), 0);
+  cr_assert_eq(length, strlen("{\"title\":\"Fixture\"}"));
+  cr_assert_str_eq(output, "{\"title\":\"Fixture\"}");
+  cr_assert_eq(spawn_site_tool_capture(args, &cancel, 2, output, 8, &length), 125);
+  unlink(executable);
+  ffmpeg_script(executable, "#!/bin/sh\nexec /bin/sleep 30\n");
+  cr_assert_eq(spawn_site_tool_capture(args, &cancel, 1, output,
+                                       sizeof(output), &length), 124);
+  atomic_store(&cancel, true);
+  cr_assert_eq(spawn_site_tool_capture(args, &cancel, 2, output,
+                                       sizeof(output), &length), -2);
+  int status;
+  cr_assert_eq(waitpid(-1, &status, WNOHANG), -1);
+  cr_assert_eq(errno, ECHILD);
+  unlink(config_path); unlink(executable); rmdir(root);
+}
 #endif

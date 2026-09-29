@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "site_grab.h"
+#include "../vendor/cJSON.h"
 #include <ctype.h>
 #include <curl/curl.h>
 #include <errno.h>
@@ -7,6 +8,165 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define SITE_PROBE_JSON_LIMIT (256u * 1024u)
+
+static bool probe_text(const char *text, size_t length) {
+  for (size_t i = 0; i < length;) {
+    unsigned char c = (unsigned char)text[i++];
+    if (c < 0x80) {
+      if (c < 0x20 || c == 0x7f) return false;
+      continue;
+    }
+    unsigned int value, remaining, minimum;
+    if (c >= 0xc2 && c <= 0xdf) {
+      value = c & 31u; remaining = 1; minimum = 0x80;
+    } else if (c >= 0xe0 && c <= 0xef) {
+      value = c & 15u; remaining = 2; minimum = 0x800;
+    } else if (c >= 0xf0 && c <= 0xf4) {
+      value = c & 7u; remaining = 3; minimum = 0x10000;
+    } else return false;
+    if (remaining > length - i) return false;
+    while (remaining--) {
+      c = (unsigned char)text[i++];
+      if ((c & 0xc0) != 0x80) return false;
+      value = (value << 6) | (c & 63u);
+    }
+    if (value < minimum || value > 0x10ffff ||
+        (value >= 0xd800 && value <= 0xdfff)) return false;
+  }
+  return true;
+}
+
+static bool probe_token(const char *text, size_t limit) {
+  size_t length = strlen(text);
+  if (!length || length >= limit) return false;
+  for (size_t i = 0; i < length; i++) {
+    char c = text[i];
+    bool alphanumeric = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9');
+    if (!alphanumeric && (i == 0 || (c != '_' && c != '-' && c != '.')))
+      return false;
+  }
+  return true;
+}
+
+static bool probe_integer(const cJSON *item, uint64_t maximum, uint64_t *out) {
+  *out = 0;
+  if (!item || cJSON_IsNull(item)) return true;
+  if (!cJSON_IsNumber(item) || !isfinite(item->valuedouble) ||
+      item->valuedouble < 0 || item->valuedouble > (double)maximum ||
+      floor(item->valuedouble) != item->valuedouble) return false;
+  *out = (uint64_t)item->valuedouble;
+  return true;
+}
+
+static uint32_t probe_rank(const SiteGrabFormat *format) {
+  return format->has_video ? 1u + format->height * 2u +
+    (format->has_audio ? 1u : 0u) : 0u;
+}
+
+bool site_grab_parse_probe_json(const char *json, size_t length, SiteGrabProbe *out) {
+  if (!json || !out || !length || length > SITE_PROBE_JSON_LIMIT || json[length])
+    return false;
+  memset(out, 0, sizeof(*out));
+  cJSON *root = cJSON_ParseWithLengthOpts(json, length + 1, NULL, true);
+  if (!cJSON_IsObject(root)) { cJSON_Delete(root); return false; }
+  const cJSON *title = cJSON_GetObjectItemCaseSensitive(root, "title");
+  const cJSON *formats = cJSON_GetObjectItemCaseSensitive(root, "formats");
+  if (!cJSON_IsString(title) || !title->valuestring || !cJSON_IsArray(formats)) {
+    cJSON_Delete(root); return false;
+  }
+  size_t title_length = strlen(title->valuestring);
+  if (!title_length || !probe_text(title->valuestring, title_length)) {
+    cJSON_Delete(root); return false;
+  }
+  size_t kept = title_length < sizeof(out->title) ? title_length : sizeof(out->title) - 1;
+  if (kept < title_length)
+    while (kept && ((unsigned char)title->valuestring[kept] & 0xc0u) == 0x80u) kept--;
+  memcpy(out->title, title->valuestring, kept);
+  out->title[kept] = '\0';
+  int count = cJSON_GetArraySize(formats);
+  for (int i = 0; i < count; i++) {
+    const cJSON *item = cJSON_GetArrayItem(formats, i);
+    const cJSON *id = cJSON_GetObjectItemCaseSensitive(item, "format_id");
+    const cJSON *ext = cJSON_GetObjectItemCaseSensitive(item, "ext");
+    const cJSON *video = cJSON_GetObjectItemCaseSensitive(item, "vcodec");
+    const cJSON *audio = cJSON_GetObjectItemCaseSensitive(item, "acodec");
+    if (!cJSON_IsString(id) || !id->valuestring ||
+        !probe_token(id->valuestring, sizeof(out->formats[0].id)) ||
+        !cJSON_IsString(ext) || !ext->valuestring ||
+        !probe_token(ext->valuestring, sizeof(out->formats[0].ext)) ||
+        !cJSON_IsString(video) || !video->valuestring ||
+        !cJSON_IsString(audio) || !audio->valuestring) continue;
+    bool has_video = strcmp(video->valuestring, "none") != 0;
+    bool has_audio = strcmp(audio->valuestring, "none") != 0;
+    if (!has_video && !has_audio) continue;
+    uint64_t width, height, exact, estimate;
+    if (!probe_integer(cJSON_GetObjectItemCaseSensitive(item, "width"), 16384, &width) ||
+        !probe_integer(cJSON_GetObjectItemCaseSensitive(item, "height"), 16384, &height) ||
+        !probe_integer(cJSON_GetObjectItemCaseSensitive(item, "filesize"),
+                       9007199254740991ULL, &exact) ||
+        !probe_integer(cJSON_GetObjectItemCaseSensitive(item, "filesize_approx"),
+                       9007199254740991ULL, &estimate)) continue;
+    SiteGrabFormat parsed = {0};
+    SiteGrabFormat *format = &parsed;
+    strcpy(format->id, id->valuestring);
+    strcpy(format->ext, ext->valuestring);
+    format->width = (uint32_t)width;
+    format->height = (uint32_t)height;
+    format->size_bytes = exact ? exact : estimate;
+    format->size_estimated = !exact && estimate != 0;
+    format->has_video = has_video;
+    format->has_audio = has_audio;
+    size_t slot = out->format_count;
+    if (slot == SITE_GRAB_PROBE_MAX_FORMATS) {
+      slot = 0;
+      for (size_t j = 1; j < SITE_GRAB_PROBE_MAX_FORMATS; j++)
+        if (probe_rank(&out->formats[j]) < probe_rank(&out->formats[slot])) slot = j;
+      if (probe_rank(format) <= probe_rank(&out->formats[slot])) continue;
+    } else {
+      out->format_count++;
+    }
+    out->formats[slot] = parsed;
+  }
+  cJSON_Delete(root);
+  return out->format_count != 0;
+}
+
+bool site_grab_parse_probe_output(const char *text, size_t length, SiteGrabProbe *out) {
+  if (!text || !out || !length || length > SITE_PROBE_JSON_LIMIT || text[length])
+    return false;
+  const char *split = memchr(text, '\n', length);
+  if (!split) return false;
+  size_t title_length = (size_t)(split - text);
+  if (title_length && text[title_length - 1] == '\r') title_length--;
+  const char *formats = split + 1;
+  size_t formats_length = length - (size_t)(formats - text);
+  while (formats_length && (formats[formats_length - 1] == '\n' ||
+                            formats[formats_length - 1] == '\r')) formats_length--;
+  if (!title_length || !formats_length || memchr(formats, '\n', formats_length))
+    return false;
+  static const char prefix[] = "{\"title\":";
+  static const char middle[] = ",\"formats\":";
+  size_t total = sizeof(prefix) - 1 + title_length + sizeof(middle) - 1 +
+    formats_length + 1;
+  if (total > SITE_PROBE_JSON_LIMIT) return false;
+  char *wrapper = malloc(total + 1);
+  if (!wrapper) return false;
+  size_t used = 0;
+  memcpy(wrapper + used, prefix, sizeof(prefix) - 1); used += sizeof(prefix) - 1;
+  memcpy(wrapper + used, text, title_length); used += title_length;
+  memcpy(wrapper + used, middle, sizeof(middle) - 1); used += sizeof(middle) - 1;
+  memcpy(wrapper + used, formats, formats_length); used += formats_length;
+  wrapper[used++] = '}';
+  wrapper[used] = '\0';
+  bool ok = site_grab_parse_probe_json(wrapper, used, out);
+  volatile unsigned char *private_bytes = (volatile unsigned char *)wrapper;
+  for (size_t i = 0; i < used; i++) private_bytes[i] = 0;
+  free(wrapper);
+  return ok;
+}
 
 static bool host_is(const char *host, const char *domain) {
   size_t h = strlen(host), d = strlen(domain);
@@ -120,6 +280,31 @@ bool site_grab_parse_progress(const char *line, SiteGrabProgress *out) {
 #include "../utils/log.h"
 #include "../utils/path.h"
 #include "finalize.h"
+
+int site_grab_probe(const char *url, const _Atomic bool *cancel, SiteGrabProbe *out) {
+  if (!out) return -1;
+  memset(out, 0, sizeof(*out));
+  if (!url || strlen(url) > 2047 || !site_grab_url_allowed(url)) return -1;
+  DownloadManagerConfig config;
+  config_get(&config);
+  if (!config.use_yt_dlp || !spawn_site_tool_available()) return -1;
+  char *json = malloc(SITE_PROBE_JSON_LIMIT + 1);
+  if (!json) return -1;
+  size_t length = 0;
+  char *argv[] = {"yt-dlp", "--ignore-config", "--no-playlist", "--no-cache-dir",
+    "--simulate", "--no-warnings", "--no-progress",
+    "--print", "%(title)j", "--print",
+    "%(formats.:.{format_id,ext,width,height,filesize,filesize_approx,vcodec,acodec})j",
+    "--", (char *)url, NULL};
+  int timeout = config.transfer_timeout_sec < 30 ? config.transfer_timeout_sec : 30;
+  int rc = spawn_site_tool_capture(argv, cancel, timeout, json,
+                                   SITE_PROBE_JSON_LIMIT + 1, &length);
+  if (rc == 0 && !site_grab_parse_probe_output(json, length, out)) rc = -1;
+  volatile unsigned char *private_bytes = (volatile unsigned char *)json;
+  for (size_t i = 0; i < length; i++) private_bytes[i] = 0;
+  free(json);
+  return rc;
+}
 #ifndef _WIN32
 #include <dirent.h>
 #include <fcntl.h>

@@ -51,6 +51,13 @@ int spawn_site_tool(char *const argv[], const _Atomic bool *cancel,
                     const _Atomic bool *pause, int inactivity_timeout_sec,
                     SpawnLineCallback callback, void *userdata);
 
+/* Capture bounded stdout from the cached site tool. stderr is discarded.
+ * Returns 0 on success, 125 if output exceeds capacity, 124 on timeout,
+ * -2 on cancellation, and -1 on launch failure. Output is NUL terminated. */
+int spawn_site_tool_capture(char *const argv[], const _Atomic bool *cancel,
+                            int timeout_sec, char *output, size_t capacity,
+                            size_t *output_length);
+
 /* No shell. scanner_args supports quotes/backslashes; file_path is last argv.
  * 0 clean, positive child exit (124 timeout), -1 launch/parse error,
  * -2 cancel or pause. */

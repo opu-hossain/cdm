@@ -82,6 +82,14 @@ int spawn_site_tool(char *const argv[], const _Atomic bool *cancel,
                     SpawnLineCallback callback, void *userdata) {
   (void)argv;(void)cancel;(void)pause;(void)timeout;(void)callback;(void)userdata;return -1;
 }
+int spawn_site_tool_capture(char *const argv[], const _Atomic bool *cancel,
+                            int timeout_sec, char *output, size_t capacity,
+                            size_t *output_length) {
+  (void)argv; (void)cancel; (void)timeout_sec;
+  if (output && capacity) output[0] = '\0';
+  if (output_length) *output_length = 0;
+  return -1;
+}
 
 int spawn_scanner(const char *command, const char *scanner_args,
                   const char *file_path, const _Atomic bool *cancel,
@@ -601,6 +609,87 @@ int spawn_site_tool(char *const argv[],const _Atomic bool *cancel,
   for(int i=0;i<2;i++)if(open_fds[i])close(fds[i]);
   if(result)return result;
   return WIFEXITED(status)?WEXITSTATUS(status):WIFSIGNALED(status)?128+WTERMSIG(status):-1;
+}
+
+int spawn_site_tool_capture(char *const argv[], const _Atomic bool *cancel,
+                            int timeout_sec, char *output, size_t capacity,
+                            size_t *output_length) {
+  if (!argv || !output || capacity < 2 || !output_length || timeout_sec < 1 ||
+      !spawn_site_tool_available()) return -1;
+  output[0] = '\0';
+  *output_length = 0;
+  if (cancel && atomic_load(cancel)) return -2;
+  int fds[2];
+  if (!make_pipe(fds)) return -1;
+  posix_spawn_file_actions_t actions;
+  int error = posix_spawn_file_actions_init(&actions);
+  if (error) { close(fds[0]); close(fds[1]); return -1; }
+  error = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO,
+                                          "/dev/null", O_RDONLY, 0);
+  if (!error) error = posix_spawn_file_actions_adddup2(&actions, fds[1], STDOUT_FILENO);
+  if (!error) error = posix_spawn_file_actions_addopen(&actions, STDERR_FILENO,
+                                                       "/dev/null", O_WRONLY, 0);
+  if (!error) error = posix_spawn_file_actions_addclose(&actions, fds[0]);
+  if (!error) error = posix_spawn_file_actions_addclose(&actions, fds[1]);
+  pid_t pid = -1;
+  if (!error) error = posix_spawn(&pid, site_executable, &actions, NULL, argv, environ);
+  posix_spawn_file_actions_destroy(&actions);
+  close(fds[1]);
+  if (error) { close(fds[0]); return -1; }
+  bool open_fd = true, reaped = false;
+  uint64_t start = monotonic_ms();
+  int status = 0, result = 0;
+  while (open_fd || !reaped) {
+    if (!reaped) {
+      pid_t got = waitpid(pid, &status, WNOHANG);
+      if (got == pid) reaped = true;
+      else if (got < 0 && errno != EINTR) { result = -1; break; }
+    }
+    uint64_t now = monotonic_ms();
+    if ((cancel && atomic_load(cancel)) || !start || !now ||
+        now - start >= (uint64_t)timeout_sec * 1000) {
+      result = cancel && atomic_load(cancel) ? -2 : 124;
+      break;
+    }
+    if (!open_fd) { dm_thread_sleep_ms(20); continue; }
+    struct pollfd descriptor = {.fd = fds[0], .events = POLLIN | POLLHUP};
+    int ready = poll(&descriptor, 1, 100);
+    if (ready < 0) {
+      if (errno == EINTR) continue;
+      result = -1;
+      break;
+    }
+    if (ready == 0) continue;
+    char chunk[2048];
+    ssize_t got = read(fds[0], chunk, sizeof(chunk));
+    if (got == 0) { close(fds[0]); open_fd = false; }
+    else if (got < 0) {
+      if (errno != EAGAIN && errno != EINTR) { result = -1; break; }
+    } else if ((size_t)got > capacity - 1 - *output_length) {
+      result = 125;
+      break;
+    } else {
+      memcpy(output + *output_length, chunk, (size_t)got);
+      *output_length += (size_t)got;
+      output[*output_length] = '\0';
+    }
+  }
+  if (result && !reaped) {
+    kill(pid, SIGTERM);
+    for (int i = 0; i < 5 && !reaped; i++) {
+      dm_thread_sleep_ms(100);
+      pid_t got = waitpid(pid, &status, WNOHANG);
+      if (got == pid) reaped = true;
+    }
+    if (!reaped) {
+      kill(pid, SIGKILL);
+      pid_t got;
+      do { got = waitpid(pid, &status, 0); } while (got < 0 && errno == EINTR);
+    }
+  }
+  if (open_fd) close(fds[0]);
+  return result ? result : WIFEXITED(status) ? WEXITSTATUS(status)
+    : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1;
 }
 
 #endif
