@@ -3,7 +3,7 @@
   "name": "Core Download Manager",
   "description": "Offer browser downloads to cdm.",
   "version": "0.3.0",
-  "permissions": ["downloads", "nativeMessaging", "activeTab", "contextMenus", "storage"],
+  "permissions": ["downloads", "nativeMessaging", "activeTab", "contextMenus", "storage", "scripting"],
   "options_ui": {"page": "options.html", "open_in_tab": true},
   "optional_permissions": ["cookies", "webRequest"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],

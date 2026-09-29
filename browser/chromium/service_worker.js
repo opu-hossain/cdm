@@ -305,6 +305,25 @@ async function observeMediaHeaders(details) {
 // Keep ordinary downloads registered even when header/media observation cannot.
 let headerObserverRegistered = false;
 let mediaObserverRegistered = false;
+const MEDIA_SCRIPT_ID = "cdm-media-overlay";
+// The service worker serializes registration updates; browser scripting owns the registration.
+let mediaScriptSync = Promise.resolve();
+function queueMediaScriptSync() {
+  mediaScriptSync = mediaScriptSync.then(async () => {
+    const stored = await chrome.storage.sync.get("mediaDetection");
+    const enabled = stored.mediaDetection === true &&
+      await chrome.permissions.contains({permissions: ["webRequest"],
+        origins: ["http://*/*", "https://*/*"]});
+    const registered = await chrome.scripting.getRegisteredContentScripts({ids: [MEDIA_SCRIPT_ID]});
+    if (enabled && registered.length === 0) {
+      await chrome.scripting.registerContentScripts([{id: MEDIA_SCRIPT_ID,
+        js: ["media_overlay.js"], matches: ["http://*/*", "https://*/*"],
+        runAt: "document_idle"}]);
+    } else if (!enabled && registered.length !== 0) {
+      await chrome.scripting.unregisterContentScripts({ids: [MEDIA_SCRIPT_ID]});
+    }
+  }).catch(() => { /* Missing permissions or scripting support leave the overlay disabled. */ });
+}
 function registerOptionalObservers() {
   const webRequest = chrome.webRequest;
   if (!webRequest) return;
@@ -324,21 +343,35 @@ function registerOptionalObservers() {
   }
 }
 registerOptionalObservers();
-chrome.permissions?.onAdded?.addListener(registerOptionalObservers);
+queueMediaScriptSync();
+chrome.permissions?.onAdded?.addListener(() => {
+  registerOptionalObservers();
+  queueMediaScriptSync();
+});
+chrome.permissions?.onRemoved?.addListener(() => {
+  mediaCandidates.clear();
+  queueMediaScriptSync();
+});
 
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
-  if (sender.url !== chrome.runtime.getURL("options.html") ||
-      !["cdm_media_list", "cdm_media_offer"].includes(message?.type)) return;
+  const fromOptions = sender.url === chrome.runtime.getURL("options.html") &&
+    ["cdm_media_list", "cdm_media_offer"].includes(message?.type);
+  const fromPage = Number.isInteger(sender.tab?.id) && sender.frameId === 0 &&
+    !!originFor(sender.url) &&
+    ["cdm_media_list_tab", "cdm_media_offer_tab"].includes(message?.type);
+  if (!fromOptions && !fromPage) return;
   (async () => {
     const stored = await chrome.storage.sync.get("mediaDetection");
     if (stored.mediaDetection !== true) mediaCandidates.clear();
     pruneMedia();
-    if (message.type === "cdm_media_list") {
-      reply([...mediaCandidates.values()].map(({id, url, kind, mime, filename, tabId}) =>
-        ({id, url, kind, mime, filename, tabId})));
+    if (message.type === "cdm_media_list" || message.type === "cdm_media_list_tab") {
+      reply([...mediaCandidates.values()].filter(value =>
+        fromOptions || value.tabId === sender.tab.id).map(({id, url, kind, mime, filename, tabId}) =>
+        fromOptions ? {id, url, kind, mime, filename, tabId} : {id, kind, mime, filename}));
       return;
     }
-    const selected = [...mediaCandidates].find(([, value]) => value.id === message.id);
+    const selected = [...mediaCandidates].find(([, value]) => value.id === message.id &&
+      (fromOptions || value.tabId === sender.tab.id));
     if (!selected) { reply({ok: false}); return; }
     const [key, candidate] = selected;
     if (!await chrome.permissions.contains({permissions: ["webRequest"],
@@ -346,11 +379,13 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     const ok = await offerDownload(candidate, candidate.url, false, candidate);
     if (ok) mediaCandidates.delete(key);
     reply({ok});
-  })().catch(() => reply(message.type === "cdm_media_list" ? [] : {ok: false}));
+  })().catch(() => reply(message.type === "cdm_media_list" ||
+    message.type === "cdm_media_list_tab" ? [] : {ok: false}));
   return true; // Callback reply works in Firefox and older Chrome releases.
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "sync" && changes.mediaDetection && changes.mediaDetection.newValue !== true)
     mediaCandidates.clear();
+  if (area === "sync" && changes.mediaDetection) queueMediaScriptSync();
 });

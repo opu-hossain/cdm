@@ -13,6 +13,9 @@ async function verify(file, globalName, expectedBrowser) {
   let mediaSequence = 0;
   let clock = Date.now();
   let storageListener;
+  let permissionAddedListener;
+  let permissionRemovedListener;
+  const registeredMediaScripts = [];
   let headerOptions;
   let nativeListener;
   let disconnectListener;
@@ -66,7 +69,14 @@ async function verify(file, globalName, expectedBrowser) {
       setBadgeBackgroundColor() {},
       setTitle() {}
     },
+    scripting: {
+      getRegisteredContentScripts() { return Promise.resolve(registeredMediaScripts); },
+      registerContentScripts(scripts) { registeredMediaScripts.push(...scripts); return Promise.resolve(); },
+      unregisterContentScripts() { registeredMediaScripts.length = 0; return Promise.resolve(); }
+    },
     permissions: {
+      onAdded: {addListener(listener) { permissionAddedListener = listener; }},
+      onRemoved: {addListener(listener) { permissionRemovedListener = listener; }},
       request(request) { permissionRequests.push(request);
         return Promise.resolve(granted); },
       contains() { return Promise.resolve(granted); },
@@ -285,6 +295,12 @@ async function verify(file, globalName, expectedBrowser) {
   await mediaListener(response);
   assert.equal((await callRuntime({type: "cdm_media_list"})).length, 0);
   mediaDetection = true;
+  storageListener({mediaDetection: {newValue: true}}, "sync");
+  await new Promise(setImmediate);
+  assert.equal(registeredMediaScripts.length, 1);
+  assert.deepEqual(Array.from(registeredMediaScripts[0].js), ["media_overlay.js"]);
+  assert.equal(typeof permissionAddedListener, "function");
+  assert.equal(typeof permissionRemovedListener, "function");
   await mediaListener(response);
   await mediaListener(response);
   let candidates = await callRuntime({type: "cdm_media_list"});
@@ -292,6 +308,20 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal(candidates[0].kind, "hls");
   assert.equal(messages.length, beforeMedia, "detection must not open native offers");
   assert(!Object.hasOwn(candidates[0], "cookie"));
+  function callTabRuntime(message, tabId = 7, frameId = 0) {
+    return new Promise(resolve => {
+      const keep = runtimeListener(message,
+        {url: "https://example.invalid/page", tab: {id: tabId}, frameId}, resolve);
+      if (keep !== true) resolve(undefined);
+    });
+  }
+  const inPage = await callTabRuntime({type: "cdm_media_list_tab"});
+  assert.equal(inPage.length, 1);
+  assert.equal(inPage[0].id, candidates[0].id);
+  assert(!Object.hasOwn(inPage[0], "url"), "page overlay must not receive signed URLs");
+  assert.equal((await callTabRuntime({type: "cdm_media_list_tab"}, 8)).length, 0);
+  assert.equal(await callTabRuntime({type: "cdm_media_list_tab"}, 7, 1), undefined);
+  assert.equal((await callTabRuntime({type: "cdm_media_offer_tab", id: candidates[0].id}, 8)).ok, false);
   // Existing site-specific consent is on; turning it off clears cached context.
   await actionListener({url: "https://example.invalid/page"});
   assert.equal(await callRuntime({type: "cdm_media_list"}, "https://example.invalid/"), undefined);
@@ -303,6 +333,12 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal(messages.at(-1).cookie, undefined);
   assert.equal(canceled.length, beforeMediaCancel, "media selection must not cancel downloads");
   assert.equal((await callRuntime({type: "cdm_media_list"})).length, 0);
+  await mediaListener({...response, url: "https://example.invalid/overlay.mp4"});
+  const pageRows = await callTabRuntime({type: "cdm_media_list_tab"});
+  assert.equal((await callTabRuntime({type: "cdm_media_offer_tab", id: pageRows[0].id})).ok, true);
+  assert.equal(messages.at(-1).type, "media_offer");
+  assert.equal(messages.at(-1).kind, "video");
+  assert.equal((await callTabRuntime({type: "cdm_media_list_tab"})).length, 0);
   await mediaListener({...response, url: "https://example.invalid/manifest",
     responseHeaders: [{name: "Content-Type", value: "Application/Dash+XML; charset=utf-8"}]});
   candidates = await callRuntime({type: "cdm_media_list"});
@@ -328,8 +364,16 @@ async function verify(file, globalName, expectedBrowser) {
   clock += 600001;
   assert.equal((await callRuntime({type: "cdm_media_list"})).length, 0);
   await mediaListener(response);
+  granted = false;
+  permissionRemovedListener({permissions: ["webRequest"]});
+  await new Promise(setImmediate);
+  assert.equal(registeredMediaScripts.length, 0);
+  assert.equal((await callTabRuntime({type: "cdm_media_list_tab"})).length, 0);
+  granted = true;
   mediaDetection = false;
   storageListener({mediaDetection: {newValue: false}}, "sync");
+  await new Promise(setImmediate);
+  assert.equal(registeredMediaScripts.length, 0);
   assert.equal((await callRuntime({type: "cdm_media_list"})).length, 0);
   assert.equal((await callRuntime({type: "cdm_media_offer", id: candidates[0].id})).ok, false);
 
@@ -502,12 +546,75 @@ async function verifyWithoutOptionalWebRequest(file, globalName) {
   assert.equal(mediaRegistrations, 1);
 }
 
+async function verifyMediaOverlay(file, globalName) {
+  class Element {
+    constructor(tag) {
+      this.tagName = tag; this.children = []; this.listeners = {}; this.style = {};
+      this.textContent = ""; this.hidden = false;
+    }
+    appendChild(child) { this.children.push(child); return child; }
+    append(...children) { children.forEach(child => this.appendChild(child)); }
+    replaceChildren(...children) { this.children = children; }
+    addEventListener(type, listener) { this.listeners[type] = listener; }
+    attachShadow() { this.shadow = new Element("shadow"); return this.shadow; }
+    click() { return this.listeners.click?.({stopPropagation() {}}); }
+  }
+  const root = new Element("html");
+  const video = {paused: false, ended: false, getBoundingClientRect() {
+    return {left: 20, top: 30, right: 820, bottom: 480, width: 800, height: 450};
+  }};
+  let rows = [{id: "media-overlay-fixture", kind: "hls", filename: "master.m3u8"}];
+  const offers = [];
+  let tick;
+  const sandbox = vm.createContext({
+    [globalName]: {runtime: {sendMessage(message) {
+      if (message.type === "cdm_media_list_tab") return Promise.resolve(rows);
+      offers.push(message); return Promise.resolve({ok: true});
+    }}},
+    document: {documentElement: root, title: "Fixture video",
+      querySelectorAll() { return [video]; }, createElement(tag) { return new Element(tag); },
+      addEventListener() {}},
+    window: {addEventListener() {}},
+    setInterval(callback) { tick = callback; },
+    console
+  });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(file), "media_overlay.js"), "utf8"),
+    sandbox);
+  await new Promise(setImmediate);
+  assert.equal(typeof tick, "function");
+  assert.equal(root.children.length, 1);
+  const host = root.children[0];
+  assert.equal(host.style.position, "fixed");
+  assert.equal(host.style.display, "block");
+  const button = host.shadow.children[1];
+  const panel = host.shadow.children[2];
+  assert.match(button.textContent, /Download with cdm/);
+  await button.click();
+  assert.equal(panel.hidden, false);
+  assert.match(panel.children[0].textContent, /Fixture video/);
+  assert.match(panel.children[1].textContent, /master.m3u8/);
+  const firstChoice = panel.children[1];
+  await tick();
+  assert.equal(panel.children[1], firstChoice, "polling must not replace a choice under the pointer");
+  await panel.children[1].click();
+  assert.equal(offers[0].type, "cdm_media_offer_tab");
+  assert.equal(offers[0].id, "media-overlay-fixture");
+  rows = [];
+  await tick();
+  assert.equal(host.style.display, "none");
+  rows = [{id: "media-overlay-fixture", kind: "hls", filename: "master.m3u8"}];
+  video.paused = true;
+  await tick();
+  assert.equal(host.style.display, "none");
+}
+
 for (const file of [process.argv[2], process.argv[3]]) {
   const manifest = JSON.parse(fs.readFileSync(
     path.join(path.dirname(file), "manifest.json"), "utf8"));
   assert(manifest.permissions.includes("activeTab"));
   assert(manifest.permissions.includes("contextMenus"));
   assert(manifest.permissions.includes("storage"));
+  assert(manifest.permissions.includes("scripting"));
   assert.equal(manifest.options_ui.page, "options.html");
   assert(fs.existsSync(path.join(path.dirname(file), "options.html")));
   assert.deepEqual(manifest.optional_permissions, ["cookies", "webRequest"]);
@@ -519,5 +626,7 @@ Promise.all([
   verifyWithoutOptionalWebRequest(process.argv[2], "chrome"),
   verifyWithoutOptionalWebRequest(process.argv[3], "browser"),
   verifyOptions(process.argv[2], "chrome"),
-  verifyOptions(process.argv[3], "browser")
+  verifyOptions(process.argv[3], "browser"),
+  verifyMediaOverlay(process.argv[2], "chrome"),
+  verifyMediaOverlay(process.argv[3], "browser")
 ]).catch(error => { console.error(error); process.exitCode = 1; });
