@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Opu Hossain
 
+#include "../engine/site_grab.h"
 #include "../platform/ipc_socket.h"
 #include "../platform/spawn.h"
 #include "../platform/thread.h"
@@ -12,6 +13,7 @@
 #include <errno.h>
 #include <ctype.h>
 #include <curl/curl.h>
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -276,6 +278,78 @@ static bool send_error(const char *request_id, const char *message) {
   return ok;
 }
 
+static bool valid_probe_text(const char *text) {
+  if (!valid_utf8((const unsigned char *)text)) return false;
+  for (const unsigned char *p = (const unsigned char *)text; *p; p++)
+    if (*p < 0x20 || *p == 0x7f) return false;
+  return true;
+}
+
+/* Site probes run in a dedicated native host process; no daemon IPC is held. */
+static bool handle_site_probe(const cJSON *root) {
+  char request_id[128];
+  char url[2048];
+  if (!copy_field(root, "request_id", request_id, sizeof(request_id), true) ||
+      !valid_probe_text(request_id) ||
+      !copy_field(root, "url", url, sizeof(url), true) ||
+      !valid_probe_text(url) ||
+      cJSON_GetObjectItemCaseSensitive(root, "cookie") ||
+      cJSON_GetObjectItemCaseSensitive(root, "headers") ||
+      cJSON_GetObjectItemCaseSensitive(root, "referer") ||
+      cJSON_GetObjectItemCaseSensitive(root, "user_agent"))
+    return send_error(NULL, "invalid site probe");
+  SiteGrabProbe probe = {0};
+  if (site_grab_probe(url, NULL, &probe) != 0)
+    return send_error(request_id, "site probe unavailable or unsupported");
+
+  cJSON *reply = cJSON_CreateObject();
+  cJSON *formats = cJSON_CreateArray();
+  if (!reply || !formats) {
+    cJSON_Delete(reply);
+    cJSON_Delete(formats);
+    return false;
+  }
+  if (!cJSON_AddStringToObject(reply, "type", "site_probe_result") ||
+      !cJSON_AddStringToObject(reply, "request_id", request_id) ||
+      !cJSON_AddStringToObject(reply, "title", probe.title)) {
+    cJSON_Delete(formats);
+    cJSON_Delete(reply);
+    return false;
+  }
+  if (!cJSON_AddItemToObject(reply, "formats", formats)) {
+    cJSON_Delete(formats);
+    cJSON_Delete(reply);
+    return false;
+  }
+  for (size_t i = 0; i < probe.format_count; i++) {
+    const SiteGrabFormat *source = &probe.formats[i];
+    char size_bytes[32];
+    int written = snprintf(size_bytes, sizeof(size_bytes), "%" PRIu64,
+                           source->size_bytes);
+    if (written < 0 || (size_t)written >= sizeof(size_bytes)) {
+      cJSON_Delete(reply);
+      return false;
+    }
+    cJSON *format = cJSON_CreateObject();
+    if (!format || !cJSON_AddStringToObject(format, "id", source->id) ||
+        !cJSON_AddStringToObject(format, "ext", source->ext) ||
+        !cJSON_AddNumberToObject(format, "width", source->width) ||
+        !cJSON_AddNumberToObject(format, "height", source->height) ||
+        !cJSON_AddStringToObject(format, "size_bytes", size_bytes) ||
+        !cJSON_AddBoolToObject(format, "size_estimated", source->size_estimated) ||
+        !cJSON_AddBoolToObject(format, "has_video", source->has_video) ||
+        !cJSON_AddBoolToObject(format, "has_audio", source->has_audio) ||
+        !cJSON_AddItemToArray(formats, format)) {
+      cJSON_Delete(format);
+      cJSON_Delete(reply);
+      return false;
+    }
+  }
+  bool ok = native_send(reply);
+  cJSON_Delete(reply);
+  return ok;
+}
+
 static bool normalize_site(const char *input, char out[256]) {
   size_t length = strlen(input);
   if (!length || length >= 256) return false;
@@ -448,6 +522,11 @@ static bool handle_message(const char *json) {
   const cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
   if (cJSON_IsString(type) && strcmp(type->valuestring, "set_site_exclusions") == 0) {
     bool ok = configure_exclusions(root);
+    cJSON_Delete(root);
+    return ok;
+  }
+  if (cJSON_IsString(type) && strcmp(type->valuestring, "site_probe") == 0) {
+    bool ok = handle_site_probe(root);
     cJSON_Delete(root);
     return ok;
   }

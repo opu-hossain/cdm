@@ -89,6 +89,27 @@ def main(host: str) -> None:
     assert replies[5]["type"] == "error", replies
     assert replies[6]["type"] == "offer_skipped", "invalid configuration replaced valid policy"
     assert replies[7]["type"] == "error", replies
+    probes = [
+        {"type": "site_probe", "request_id": "probe-1",
+         "url": "https://example.invalid/watch"},
+        {"type": "site_probe", "request_id": "probe-2", "url": "file:///tmp/video"},
+        {"type": "site_probe", "request_id": "bad\nrequest",
+         "url": "https://example.invalid/watch"},
+        {"type": "site_probe", "request_id": "probe-4",
+         "url": "https://example.invalid/watch", "cookie": "secret"},
+        {"type": "site_probe", "request_id": "probe-5",
+         "url": "https://example.invalid/" + "x" * 2048},
+        {"type": "site_probe", "request_id": "probe-6",
+         "url": "https://example.invalid/watch\nsecret"},
+    ]
+    result = subprocess.run([host], input=b"".join(frame(json.dumps(value).encode())
+        for value in probes), env=invalid_env, capture_output=True, timeout=5)
+    probe_replies = decode_frames(result.stdout)
+    assert len(probe_replies) == len(probes), probe_replies
+    assert all(reply["type"] == "error" for reply in probe_replies), probe_replies
+    assert [reply["request_id"] for reply in probe_replies] == [
+        "probe-1", "probe-2", "", "", "", ""], probe_replies
+    assert b"secret" not in result.stdout + result.stderr
     for field, value in (("cookie", "x\r\nY"), ("cookie", "x" * 4097),
                          ("user_agent", "x" * 257), ("referer", "x" * 2049),
                          ("cookie", 3), ("cookie", "x\x00y"),
