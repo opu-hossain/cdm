@@ -65,6 +65,7 @@ typedef struct {
   uint16_t daemon_version;
   uint32_t context_flags;
   uint32_t media_kind;
+  IpcBrowserSiteFormatV1 site_format;
   bool site_available;
   bool use_site_tool;
   bool duplicate;
@@ -204,7 +205,11 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
                     ? tr("gui.referer_available") : tr("gui.confirm_to_use_this_browser_session"),
         NK_TEXT_LEFT, MUTED);
   }
-  if (state->site_available) {
+  if (state->site_format.id[0]) {
+    nk_layout_row_dynamic(ctx, 28, 1);
+    nk_label_colored(ctx, state->site_format.label, NK_TEXT_LEFT, MUTED);
+    state->use_site_tool = true;
+  } else if (state->site_available) {
     nk_bool checked = state->use_site_tool;
     nk_layout_row_dynamic(ctx, 28, 1);
     nk_checkbox_label(ctx, tr("gui.use_yt_dlp_for_this_site"), &checked);
@@ -526,6 +531,13 @@ int run_browser_popup(uint32_t offer_id) {
     ipc_client_disconnect(daemon);
     return 1;
   }
+  if (daemon_version >= 14 &&
+      ipc_browser_site_format_info_v1(daemon, offer_id, &state.site_format) != 0) {
+    ipc_client_disconnect(daemon);
+    return 1;
+  }
+  if (state.site_format.id[0])
+    state.use_site_tool = true;
   snprintf(state.filename, sizeof(state.filename), "%s",
            state.offer.filename);
   if (state.media_kind == IPC_BROWSER_MEDIA_HLS) {
@@ -545,7 +557,7 @@ int run_browser_popup(uint32_t offer_id) {
   file_ensure_directory(state.folder);
   int height = state.context_flags ? 418 : 370;
   if (state.media_kind) height += 24;
-  if (state.site_available) height += 28;
+  if (state.site_available || state.site_format.id[0]) height += 28;
   GuiSdlBackendConfig settings = {.width = 480, .height = height,
                                   .title = tr("gui.cdm_browser_download"),
                                   .font_size = 13};

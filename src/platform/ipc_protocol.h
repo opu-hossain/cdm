@@ -60,12 +60,19 @@ typedef enum {
   MSG_BROWSER_CONFIRM_SITE_V1 = 60, // v2 confirm payload/reply; opt-in site tool
   MSG_IMPORT_JSON_V1 = 61, // byte mode (1 merge, 2 replace) + path; uint8 result
   MSG_EXPORT_PAGE_V1 = 62, // page plus size/category/media/context metadata
+  MSG_BROWSER_OFFER_FORMAT_V1 = 63, // v2 JSON plus selected site format
+  MSG_BROWSER_FORMAT_INFO_V1 = 64, // offer ID -> IpcBrowserSiteFormatV1
 } MsgType;
 
-#define IPC_PROTOCOL_VERSION 13
+#define IPC_PROTOCOL_VERSION 14
 #define IPC_BROWSER_HAS_COOKIE 1u
 #define IPC_BROWSER_HAS_USER_AGENT 2u
 #define IPC_BROWSER_HAS_REFERER 4u
+typedef struct {
+  char id[64]; // yt-dlp format ID; empty for default site format
+  char label[128]; // display only; browser supplied
+  uint32_t has_audio; // 1 if the selected format includes audio
+} IpcBrowserSiteFormatV1;
 
 /* Versioned category record; fixed native ABI, with bounded NUL strings. */
 typedef struct {

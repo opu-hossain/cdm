@@ -371,6 +371,11 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"}, 8)).title, "Fixture title");
   assert.equal(siteProbeConnections, 3, "another tab needs its own probe");
   assert.equal((await callTabRuntime({type: "cdm_site_select_tab", id: "18"}, 8)).ok, true);
+  assert.equal(messages.at(-1).type, "media_offer");
+  assert.equal(messages.at(-1).site_format_id, "18");
+  assert.equal(messages.at(-1).site_format_has_audio, true);
+  assert.equal(messages.at(-1).url, "https://example.invalid/page");
+  assert.equal(messages.at(-1).cookie, undefined);
   siteProbeReply = {type: "site_probe_result", title: "Next page",
     formats: [{id: "22", ext: "mp4", width: 1280, height: 720,
       size_bytes: "0", size_estimated: false, has_video: true, has_audio: true}]};
@@ -385,8 +390,8 @@ async function verify(file, globalName, expectedBrowser) {
   clock += 600001;
   assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"})).formats.length, 0);
   assert.equal(siteProbeConnections, 5);
-  assert.equal(messages.at(-1).type, "media_offer",
-    "selecting a format must not start a download before engine wiring");
+  assert.equal(messages.at(-1).site_format_id, "18",
+    "failed probes must not create another offer");
   await mediaListener({...response, url: "https://example.invalid/overlay.mp4"});
   const pageRows = await callTabRuntime({type: "cdm_media_list_tab"});
   assert.equal((await callTabRuntime({type: "cdm_media_offer_tab", id: pageRows[0].id})).ok, true);
@@ -664,6 +669,7 @@ async function verifyMediaOverlay(file, globalName) {
   assert.equal(offers[1].type, "cdm_site_select_tab");
   assert.equal(offers[1].id, "18");
   assert.equal(offers[1].page_id, "overlay-page");
+  assert.equal(button.textContent, "Offered to cdm");
   rows = [];
   site = {title: "", formats: []};
   await tick();

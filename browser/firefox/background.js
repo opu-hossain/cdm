@@ -200,6 +200,10 @@ async function offerDownload(item, url, automatic = false, media = null) {
     port.postMessage({
       type: media ? "media_offer" : "download_offer",
       ...(media ? {kind: media.kind} : {}),
+      ...(media?.site_format_id ? {
+        site_format_id: media.site_format_id,
+        site_format_label: media.site_format_label,
+        site_format_has_audio: media.site_format_has_audio} : {}),
       automatic,
       request_id: requestId,
       url,
@@ -260,8 +264,10 @@ function siteProbeResult(message) {
   return {title: message.title.slice(0, 255),
     formats: message.formats.slice(0, 64).filter(format =>
       format && typeof format === "object" &&
-      typeof format.id === "string" && format.id.length > 0 && format.id.length < 64 &&
-      typeof format.ext === "string" && format.ext.length < 16 &&
+      typeof format.id === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(format.id) &&
+      typeof format.ext === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9._-]{0,14}$/.test(format.ext) &&
       Number.isInteger(format.width) && format.width >= 0 && format.width <= 16384 &&
       Number.isInteger(format.height) && format.height >= 0 && format.height <= 16384 &&
       typeof format.size_bytes === "string" && /^\d{1,20}$/.test(format.size_bytes) &&
@@ -302,7 +308,7 @@ async function siteProbeForTab(tabId, url, pageId) {
   const cached = siteProbeCache.get(tabId);
   if (cached?.url === url && cached.pageId === pageId) return cached.promise;
   if (siteProbeCache.size >= 64) siteProbeCache.delete(siteProbeCache.keys().next().value);
-  const entry = {url, pageId, at: now, selected: "", promise: probeSiteNative(url)};
+  const entry = {url, pageId, at: now, promise: probeSiteNative(url)};
   siteProbeCache.set(tabId, entry);
   return entry.promise;
 }
@@ -439,9 +445,20 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
       const result = entry?.url === url && entry.pageId === pageId &&
         Date.now() - entry.at <= 600000
         ? await entry.promise : emptySiteProbe();
-      const selected = result.formats.some(format => format.id === message.id);
-      if (selected) entry.selected = message.id;
-      reply({ok: selected});
+      const selected = result.formats.find(format => format.id === message.id);
+      if (!selected) { reply({ok: false}); return; }
+      const title = (result.title || "video").replace(/[\/\\\x00-\x1f\x7f]/g, "_")
+        .trim().slice(0, 200) || "video";
+      const size = Number(selected.size_bytes);
+      const label = (selected.height || "?") + "p " + selected.ext.toUpperCase() +
+        (size > 0 ? " " + (selected.size_estimated || !selected.has_audio ? "~" : "") +
+          (size / 1000000).toFixed(1) + " MB" : "") +
+        (selected.has_audio ? "" : " + audio");
+      const ok = await offerDownload(
+        {filename: title + "." + selected.ext, incognito: false},
+        url, false, {kind: "video", context: {}, site_format_id: selected.id,
+          site_format_label: label, site_format_has_audio: selected.has_audio});
+      reply({ok});
       return;
     }
     if (message.type === "cdm_media_list" || message.type === "cdm_media_list_tab") {

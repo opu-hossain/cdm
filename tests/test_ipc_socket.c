@@ -1047,6 +1047,37 @@ Test(ipc, opt_in_site_confirmation_discards_browser_context) {
   Download *d=queue_manager_find_by_id(response.id);cr_assert_not_null(d);cr_assert(d->site_grab);cr_assert_not(d->requires_browser_context);cr_assert_null(d->request);
   IpcDownloadDetails details={0};cr_assert_eq(db_get_download_details(d->id,&details),0);cr_assert_eq(details.cookie[0],0);
   queue_manager_remove(d->id);cr_assert_eq(db_restore_queue(),0);d=queue_manager_find_by_id(response.id);cr_assert_not_null(d);cr_assert(d->site_grab);
+  queue_manager_remove(d->id);
+  char format_json[512], formatted_dest[256];
+  n=snprintf(format_json,sizeof(format_json),
+      "{\"request_id\":\"site-format\",\"url\":\"https://www.%s/watch2\","
+      "\"kind\":\"video\",\"site_format_id\":\"18\","
+      "\"site_format_label\":\"360p MP4\","
+      "\"site_format_has_audio\":true}", "youtube.com");
+  cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(format_json));
+  MsgHeader format_header={.length=(uint32_t)n,.type=MSG_BROWSER_OFFER_FORMAT_V1};
+  cr_assert_eq(ipc_write_exact(client,&format_header,sizeof(format_header)),0);
+  cr_assert_eq(ipc_write_exact(client,format_json,format_header.length),0);
+  IpcBrowserOffer formatted_offer={0};
+  cr_assert_eq(ipc_read_exact(client,&formatted_offer,sizeof(formatted_offer)),0);
+  cr_assert_neq(formatted_offer.offer_id,0);
+  IpcBrowserSiteFormatV1 info={0};
+  cr_assert_eq(ipc_browser_site_format_info_v1(client,formatted_offer.offer_id,&info),0);
+  cr_assert_str_eq(info.id,"18");cr_assert_str_eq(info.label,"360p MP4");
+  cr_assert_eq(info.has_audio,1);
+  n=snprintf(formatted_dest,sizeof(formatted_dest),"%s/formatted.mp4",root);
+  cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(formatted_dest));
+  IpcAddResponse plain_response={0};
+  cr_assert_eq(ipc_browser_confirm_v2(client,formatted_offer.offer_id,
+      formatted_dest,&plain_response),-1);
+  IpcAddResponse formatted_response={0};
+  cr_assert_eq(ipc_browser_confirm_site_v1(client,formatted_offer.offer_id,
+      formatted_dest,&formatted_response),0);
+  d=queue_manager_find_by_id(formatted_response.id);cr_assert_not_null(d);
+  cr_assert_str_eq(d->site_format_id,"18");
+  queue_manager_remove(d->id);cr_assert_eq(db_restore_queue(),0);
+  d=queue_manager_find_by_id(formatted_response.id);cr_assert_not_null(d);
+  cr_assert_str_eq(d->site_format_id,"18");
   queue_manager_remove(d->id);ipc_client_disconnect(client);atomic_store(&browser_server_running,false);thrd_join(server,NULL);ipc_server_stop();db_close();
-  unlink(destination);unlink(executable);unlink(config_path);unsetenv("DOWNLOADMGR_ROOT");char downloads[256];n=snprintf(downloads,sizeof(downloads),"%s/Downloads",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(downloads));rmdir(downloads);rmdir(root);
+  unlink(destination);unlink(formatted_dest);unlink(executable);unlink(config_path);unsetenv("DOWNLOADMGR_ROOT");char downloads[256];n=snprintf(downloads,sizeof(downloads),"%s/Downloads",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(downloads));rmdir(downloads);rmdir(root);
 }

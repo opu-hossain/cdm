@@ -126,6 +126,8 @@ int db_init(const char *db_path) {
       "  media_kind INTEGER NOT NULL DEFAULT 0 CHECK(media_kind BETWEEN 0 AND 3),"
       "  companion_path TEXT NOT NULL DEFAULT '',"
       "  site_grab INTEGER NOT NULL DEFAULT 0 CHECK(site_grab IN (0,1)),"
+      "  site_format_id TEXT NOT NULL DEFAULT '',"
+      "  site_format_has_audio INTEGER NOT NULL DEFAULT 0 CHECK(site_format_has_audio IN (0,1)),"
       "  last_error TEXT NOT NULL DEFAULT ''"
       ");"
       ""
@@ -152,7 +154,8 @@ int db_init(const char *db_path) {
                                           "last_modified", "auto_filename",
                                           "auth_user", "auth_password",
                                           "queue_id", "schedule_paused",
-                                          "category_id", "requires_browser_context", "media_kind", "companion_path", "site_grab", "last_error"};
+                                          "category_id", "requires_browser_context", "media_kind", "companion_path", "site_grab", "last_error",
+                                          "site_format_id", "site_format_has_audio"};
   static const char *migration_types[] = {"TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "TEXT DEFAULT ''", "TEXT DEFAULT ''",
                                           "INTEGER DEFAULT 0", "INTEGER DEFAULT 0",
@@ -166,7 +169,9 @@ int db_init(const char *db_path) {
                                           "INTEGER NOT NULL DEFAULT 0 CHECK(media_kind BETWEEN 0 AND 3)",
                                           "TEXT NOT NULL DEFAULT ''",
                                           "INTEGER NOT NULL DEFAULT 0 CHECK(site_grab IN (0,1))",
-                                          "TEXT NOT NULL DEFAULT ''"};
+                                          "TEXT NOT NULL DEFAULT ''",
+                                          "TEXT NOT NULL DEFAULT ''",
+                                          "INTEGER NOT NULL DEFAULT 0 CHECK(site_format_has_audio IN (0,1))"};
 
   char *migration_error = NULL;
   /* SQLite requires a NULL default when adding REFERENCES with FK checks
@@ -823,8 +828,9 @@ static int insert_download(uint32_t id, const char *url,
       "(id, url, dest_path, status, created_at, cookie, referrer, "
       "extra_headers, expected_sha256, speed_limit_bps, reserved_file, "
       "auto_filename, auth_user, auth_password, queue_id, category_id, "
-      "requires_browser_context, media_kind, site_grab) "
-      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+      "requires_browser_context, media_kind, site_grab, site_format_id, "
+      "site_format_has_audio) "
+      "VALUES (?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
     LOG_ERROR("prepare failed: %s", sqlite3_errmsg(g_db));
@@ -854,6 +860,8 @@ static int insert_download(uint32_t id, const char *url,
   sqlite3_bind_int(stmt, 16, ephemeral ? 1 : 0);
   sqlite3_bind_int(stmt, 17, opts ? (int)opts->media_kind : 0);
   sqlite3_bind_int(stmt, 18, opts && opts->site_grab ? 1 : 0);
+  sqlite3_bind_text(stmt, 19, opts ? opts->site_format_id : "", -1, SQLITE_STATIC);
+  sqlite3_bind_int(stmt, 20, opts && opts->site_format_has_audio ? 1 : 0);
 
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
@@ -1360,7 +1368,8 @@ int db_restore_queue(void) {
                     "speed_limit_bps, reserved_file, auto_filename, etag, "
                     "last_modified, auth_user, auth_password, "
                     "COALESCE(queue_id,1), created_at, schedule_paused, "
-                    "requires_browser_context, media_kind, site_grab, last_error "
+                    "requires_browser_context, media_kind, site_grab, last_error, "
+                    "site_format_id, site_format_has_audio "
                     "FROM downloads WHERE status != 'DONE'";
 
   sqlite3_stmt *stmt = NULL;
@@ -1388,6 +1397,10 @@ int db_restore_queue(void) {
     d->site_grab = sqlite3_column_int(stmt, 22) != 0;
     const char *stored_error = (const char *)sqlite3_column_text(stmt, 23);
     if (stored_error) strncpy(d->last_error, stored_error, sizeof(d->last_error)-1);
+    const char *site_format_id = (const char *)sqlite3_column_text(stmt, 24);
+    if (site_format_id && strlen(site_format_id) < sizeof(d->site_format_id))
+      strcpy(d->site_format_id, site_format_id);
+    d->site_format_has_audio = sqlite3_column_int(stmt, 25) != 0;
 
     const char *url = (const char *)sqlite3_column_text(stmt, 1);
     const char *path = (const char *)sqlite3_column_text(stmt, 2);

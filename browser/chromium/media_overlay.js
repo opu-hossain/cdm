@@ -82,16 +82,16 @@
         ? (format.size_estimated ? "~" : "") + (size / 1000000).toFixed(1) + " MB"
         : "size unknown";
       choice.textContent = (format.height || "?") + "p · " + format.ext.toUpperCase() +
-        " · " + sizeLabel + (format.has_audio ? "" : " · video only");
+        " · " + sizeLabel + (format.has_audio ? "" : " · video size; audio may be added");
       choice.addEventListener("click", async () => {
         choice.disabled = true;
         try {
           const result = await api.runtime.sendMessage(
             {type: "cdm_site_select_tab", id: format.id, page_id: pageId});
-          button.textContent = result?.ok ? "Format selected" : "Could not select format";
+          button.textContent = result?.ok ? "Offered to cdm" : "Could not offer media";
           if (result?.ok) panel.hidden = true;
         } catch (_) {
-          button.textContent = "Could not select format";
+          button.textContent = "Could not offer media";
         } finally { choice.disabled = false; }
       });
       panel.appendChild(choice);

@@ -14,6 +14,7 @@ typedef struct {
 } SiteGrabProgress;
 bool site_grab_url_allowed(const char *url);
 bool site_grab_host_allowed(const char *host);
+bool site_grab_format_id_valid(const char *id);
 bool site_grab_parse_progress(const char *line, SiteGrabProgress *out);
 #define SITE_GRAB_PROBE_MAX_FORMATS 64
 typedef struct {

@@ -5,6 +5,13 @@
 #include <string.h>
 #include <stdio.h>
 Test(site_grab, host_allowlist) {
+  cr_assert(site_grab_format_id_valid("18"));
+  cr_assert(site_grab_format_id_valid("hls-720"));
+  cr_assert_not(site_grab_format_id_valid("18+bestaudio"));
+  cr_assert_not(site_grab_format_id_valid("-18"));
+  cr_assert_not(site_grab_format_id_valid("all"));
+  cr_assert_not(site_grab_format_id_valid("mergeall"));
+  cr_assert_not(site_grab_format_id_valid(""));
   cr_assert(site_grab_host_allowed("www.youtube.com"));
   cr_assert(site_grab_host_allowed("youtu.be"));
   cr_assert(site_grab_host_allowed("player.vimeo.com"));

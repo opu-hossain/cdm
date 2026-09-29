@@ -126,6 +126,18 @@ def main(host: str) -> None:
         result = subprocess.run([host], input=frame(json.dumps(offer).encode()),
                                 env=invalid_env, capture_output=True, timeout=5)
         assert "invalid" in decode_frames(result.stdout)[0]["error"]
+    for fields in (
+        {"site_format_id": "bad;id", "site_format_label": "360p",
+         "site_format_has_audio": True},
+        {"site_format_id": "18", "site_format_label": "360p"},
+        {"site_format_id": "18", "site_format_label": "360p",
+         "site_format_has_audio": True, "cookie": "secret"},
+    ):
+        offer = {**base, "type": "media_offer", "kind": "video", **fields}
+        result = subprocess.run([host], input=frame(json.dumps(offer).encode()),
+                                env=invalid_env, capture_output=True, timeout=5)
+        assert "invalid" in decode_frames(result.stdout)[0]["error"]
+        assert b"secret" not in result.stdout + result.stderr
     malformed = json.dumps({**base, "cookie": "REPLACE"}).encode().replace(
         b"REPLACE", b"\xc0\x80")
     result = subprocess.run([host], input=frame(malformed), env=invalid_env,
@@ -140,9 +152,11 @@ def main(host: str) -> None:
                     ("filename", ctypes.c_char * 512), ("mime", ctypes.c_char * 128),
                     ("referrer", ctypes.c_char * 2048)]
 
-    for media, version, with_context in ((None, 8, True), ("hls", 10, True),
-                                         ("dash", 10, False), ("video", 10, True),
-                                         ("hls", 9, False)):
+    for media, version, with_context, format_id in (
+            (None, 8, True, None), ("hls", 10, True, None),
+            ("dash", 10, False, None), ("video", 10, True, None),
+            ("hls", 9, False, None), ("video", 14, False, "18"),
+            ("video", 13, False, "18")):
         with tempfile.TemporaryDirectory(prefix="cdm-host-context-") as root:
             runtime = Path(root) / "runtime"
             runtime.mkdir(mode=0o700)
@@ -171,7 +185,7 @@ def main(host: str) -> None:
                         header = exact(peer, 8)
                         assert struct.unpack("=II", header) == (0, 41), header
                         peer.sendall(struct.pack("=H", version))
-                        if media and version < 10:
+                        if (media and version < 10) or (format_id and version < 14):
                             assert peer.recv(1) == b"", "media sent to an old daemon"
                             return
                         header = exact(peer, 8)
@@ -198,21 +212,28 @@ def main(host: str) -> None:
                 payload.update(cookie="x" * 4096, user_agent="u" * 256, referer="r" * 2048)
             if media:
                 payload.update(type="media_offer", kind=media)
+            if format_id:
+                payload.update(site_format_id=format_id, site_format_label="360p MP4",
+                               site_format_has_audio=True)
             result = subprocess.run([host], input=frame(json.dumps(configuration).encode()) +
                                     frame(json.dumps(payload).encode()),
                                     env=env, capture_output=True, timeout=5)
             worker.join(timeout=2)
             assert not worker.is_alive(), "fake daemon did not finish"
             assert not failures, failures
-            if media and version < 10:
+            if (media and version < 10) or (format_id and version < 14):
                 replies = decode_frames(result.stdout)
                 assert not observed
-                assert "support media" in replies[1]["error"], replies
+                assert ("support media" if version < 10 else "selected site formats"
+                        ) in replies[1]["error"], replies
                 continue
             assert observed, result.stderr.decode(errors="replace")
-            assert observed[0][0] == 56, observed
+            assert observed[0][0] == (63 if format_id else 56), observed
             if media:
                 assert observed[0][1]["kind"] == media, observed
+            if format_id:
+                assert observed[0][1]["site_format_id"] == format_id, observed
+                assert observed[0][1]["site_format_has_audio"] is True, observed
             assert all(observed[0][1].get(key, "") == payload.get(key, "")
                        for key in ("cookie", "user_agent", "referer")), observed
             replies = decode_frames(result.stdout)

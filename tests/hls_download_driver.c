@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 int main(int argc, char **argv) {
-  if (argc != 5 && argc != 6)
+  if (argc != 5 && argc != 6 && argc != 8)
     return 2;
   config_init(argv[4]);
   if (db_init(argv[3]) != 0)
@@ -19,7 +19,14 @@ int main(int argc, char **argv) {
   Download *d = queue_manager_find_by_id(1);
   if (!d) {
     RequestOptions options = {0};
-    options.site_grab = argc == 6 && strcmp(argv[5], "site") == 0;
+    options.site_grab = argc >= 6 && strcmp(argv[5], "site") == 0;
+    if (argc == 8 && options.site_grab) {
+      int written = snprintf(options.site_format_id,
+                             sizeof(options.site_format_id), "%s", argv[6]);
+      if (written < 0 || (size_t)written >= sizeof(options.site_format_id))
+        return 2;
+      options.site_format_has_audio = strcmp(argv[7], "audio") == 0;
+    }
     options.media_kind = options.site_grab ? DOWNLOAD_MEDIA_NONE
                          : argc == 6 && strncmp(argv[5], "dash", 4) == 0
                              ? DOWNLOAD_MEDIA_DASH

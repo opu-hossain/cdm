@@ -157,7 +157,8 @@ static bool copy_context_field(const cJSON *root, const char *key, char *out,
 }
 
 static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer,
-                        HostRequestContext *context, uint32_t *media_kind) {
+                        HostRequestContext *context, uint32_t *media_kind,
+                        IpcBrowserSiteFormatV1 *site_format) {
   const cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
   if (!cJSON_IsString(type)) return false;
   *media_kind = IPC_BROWSER_MEDIA_NONE;
@@ -173,6 +174,7 @@ static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer,
   }
   memset(offer, 0, sizeof(*offer));
   memset(context, 0, sizeof(*context));
+  memset(site_format, 0, sizeof(*site_format));
   if (!copy_field(root, "request_id", offer->request_id,
                   sizeof(offer->request_id), true) ||
       !copy_field(root, "url", offer->url, sizeof(offer->url), true) ||
@@ -188,6 +190,26 @@ static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer,
       !copy_context_field(root, "referer", context->referer,
                           sizeof(context->referer)))
     return false;
+  const cJSON *format_id = cJSON_GetObjectItemCaseSensitive(root, "site_format_id");
+  if (format_id) {
+    const cJSON *audio = cJSON_GetObjectItemCaseSensitive(root, "site_format_has_audio");
+    if (*media_kind != IPC_BROWSER_MEDIA_VIDEO ||
+        !copy_field(root, "site_format_id", site_format->id,
+                    sizeof(site_format->id), true) ||
+        !copy_field(root, "site_format_label", site_format->label,
+                    sizeof(site_format->label), true) ||
+        !site_grab_format_id_valid(site_format->id) ||
+        !cJSON_IsBool(audio) ||
+        !valid_utf8((const unsigned char *)site_format->label) ||
+        context->cookie[0] || context->user_agent[0] || context->referer[0])
+      return false;
+    for (const unsigned char *p = (const unsigned char *)site_format->label; *p; p++)
+      if (*p < 0x20 || *p == 0x7f) return false;
+    site_format->has_audio = cJSON_IsTrue(audio) ? 1u : 0u;
+  } else if (cJSON_GetObjectItemCaseSensitive(root, "site_format_label") ||
+             cJSON_GetObjectItemCaseSensitive(root, "site_format_has_audio")) {
+    return false;
+  }
   const cJSON *total = cJSON_GetObjectItemCaseSensitive(root, "total_bytes");
   if (total && (!cJSON_IsNumber(total) || total->valuedouble < 0 ||
                 total->valuedouble > 9007199254740991.0))
@@ -219,7 +241,8 @@ static void clear_context_fields(cJSON *root) {
 }
 
 static char *context_offer_json(const IpcBrowserOffer *offer,
-                                const HostRequestContext *context, uint32_t media_kind) {
+                                const HostRequestContext *context, uint32_t media_kind,
+                                const IpcBrowserSiteFormatV1 *site_format) {
   cJSON *root = cJSON_CreateObject();
   if (!root) return NULL;
   bool ok = cJSON_AddStringToObject(root, "request_id", offer->request_id) &&
@@ -236,6 +259,11 @@ static char *context_offer_json(const IpcBrowserOffer *offer,
                        media_kind == IPC_BROWSER_MEDIA_DASH ? "dash" : "video";
     ok = ok && cJSON_AddStringToObject(root, "kind", kind);
   }
+  if (site_format->id[0])
+    ok = ok && cJSON_AddStringToObject(root, "site_format_id", site_format->id) &&
+         cJSON_AddStringToObject(root, "site_format_label", site_format->label) &&
+         cJSON_AddBoolToObject(root, "site_format_has_audio",
+                               site_format->has_audio != 0);
   char *json = ok ? cJSON_PrintUnformatted(root) : NULL;
   clear_context_fields(root);
   cJSON_Delete(root);
@@ -250,13 +278,12 @@ static void clear_json(char *json) {
   cJSON_free(json);
 }
 
-static int forward_context_offer(int daemon, const char *json,
+static int forward_context_offer(int daemon, MsgType type, const char *json,
                                  IpcBrowserOffer *registered) {
   size_t length = strlen(json);
   int result = -1;
   if (length <= IPC_MAX_FRAME_SIZE) {
-    MsgHeader header = {.length = (uint32_t)length,
-                        .type = MSG_BROWSER_OFFER_V2};
+    MsgHeader header = {.length = (uint32_t)length, .type = type};
     if (ipc_write_exact(daemon, &header, sizeof(header)) == 0 &&
         ipc_write_exact(daemon, json, length) == 0 &&
         ipc_read_exact(daemon, registered, sizeof(*registered)) == 0 &&
@@ -533,7 +560,8 @@ static bool handle_message(const char *json) {
   IpcBrowserOffer offered = {0};
   HostRequestContext context = {0};
   uint32_t media_kind = IPC_BROWSER_MEDIA_NONE;
-  if (!parse_offer(root, &offered, &context, &media_kind)) {
+  IpcBrowserSiteFormatV1 site_format = {0};
+  if (!parse_offer(root, &offered, &context, &media_kind, &site_format)) {
     const cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "request_id");
     bool ok = send_error(cJSON_IsString(id) ? id->valuestring : NULL,
                          tr("host.error.invalid_offer"));
@@ -559,8 +587,9 @@ static bool handle_message(const char *json) {
 
   bool has_context = context.cookie[0] || context.user_agent[0] ||
                      context.referer[0];
-  bool use_json = has_context || media_kind;
-  char *context_json = use_json ? context_offer_json(&offered, &context, media_kind) : NULL;
+  bool use_json = has_context || media_kind || site_format.id[0];
+  char *context_json = use_json
+      ? context_offer_json(&offered, &context, media_kind, &site_format) : NULL;
   clear_context(&context);
   if (use_json) {
     /* Check the 16 KiB daemon frame before starting or contacting it. */
@@ -590,13 +619,20 @@ static bool handle_message(const char *json) {
     clear_json(context_json);
     return send_error(offered.request_id, tr("host.error.media_unsupported"));
   }
+  if (site_format.id[0] && daemon_version < 14) {
+    ipc_client_disconnect(daemon);
+    clear_json(context_json);
+    return send_error(offered.request_id, "daemon does not support selected site formats");
+  }
   if (has_context && daemon_version < 8) {
     ipc_client_disconnect(daemon);
     clear_json(context_json);
     return send_error(offered.request_id, tr("host.error.context_unsupported"));
   }
   IpcBrowserOffer registered = {0};
-  int result = use_json ? forward_context_offer(daemon, context_json, &registered)
+  int result = use_json ? forward_context_offer(daemon,
+      site_format.id[0] ? MSG_BROWSER_OFFER_FORMAT_V1 : MSG_BROWSER_OFFER_V2,
+      context_json, &registered)
                            : ipc_browser_offer(daemon, &offered, &registered);
   clear_json(context_json);
   ipc_client_disconnect(daemon);

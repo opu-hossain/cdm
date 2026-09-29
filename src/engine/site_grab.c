@@ -50,6 +50,17 @@ static bool probe_token(const char *text, size_t limit) {
   }
   return true;
 }
+bool site_grab_format_id_valid(const char *id) {
+  if (!id || !probe_token(id, sizeof(((SiteGrabFormat *)0)->id))) return false;
+  static const char *reserved[] = {
+    "all", "mergeall", "best", "b", "worst", "w",
+    "bestvideo", "bv", "bestaudio", "ba",
+    "worstvideo", "wv", "worstaudio", "wa"
+  };
+  for (size_t i = 0; i < sizeof(reserved) / sizeof(reserved[0]); i++)
+    if (strcasecmp(id, reserved[i]) == 0) return false;
+  return true;
+}
 
 static bool probe_integer(const cJSON *item, uint64_t maximum, uint64_t *out) {
   *out = 0;
@@ -94,7 +105,7 @@ bool site_grab_parse_probe_json(const char *json, size_t length, SiteGrabProbe *
     const cJSON *video = cJSON_GetObjectItemCaseSensitive(item, "vcodec");
     const cJSON *audio = cJSON_GetObjectItemCaseSensitive(item, "acodec");
     if (!cJSON_IsString(id) || !id->valuestring ||
-        !probe_token(id->valuestring, sizeof(out->formats[0].id)) ||
+        !site_grab_format_id_valid(id->valuestring) ||
         !cJSON_IsString(ext) || !ext->valuestring ||
         !probe_token(ext->valuestring, sizeof(out->formats[0].ext)) ||
         !cJSON_IsString(video) || !video->valuestring ||
@@ -494,6 +505,19 @@ int site_grab_run_download(struct Download *d) {
       goto finish;
   }
   char *argv[22];
+  char selected_format[128];
+  const char *format = config.yt_dlp_format;
+  if (d->site_format_id[0]) {
+    if (!site_grab_format_id_valid(d->site_format_id))
+      goto finish;
+    int n = d->site_format_has_audio
+        ? snprintf(selected_format, sizeof(selected_format), "%s", d->site_format_id)
+        : snprintf(selected_format, sizeof(selected_format), "%s+bestaudio/%s",
+                   d->site_format_id, d->site_format_id);
+    if (n < 0 || (size_t)n >= sizeof(selected_format))
+      goto finish;
+    format = selected_format;
+  }
   size_t argc = 0;
   argv[argc++] = "yt-dlp";
   argv[argc++] = "--ignore-config";
@@ -513,7 +537,7 @@ int site_grab_run_download(struct Download *d) {
     argv[argc++] = rate;
   }
   argv[argc++] = "-f";
-  argv[argc++] = config.yt_dlp_format;
+  argv[argc++] = (char *)format;
   argv[argc++] = "-o";
   argv[argc++] = template;
   argv[argc++] = "--";

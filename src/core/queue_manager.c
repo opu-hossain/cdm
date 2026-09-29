@@ -193,6 +193,10 @@ static uint32_t add_download(const char *url, const char *dest_path,
   atomic_store(&d->auto_filename, auto_filename);
   d->media_kind = opts ? opts->media_kind : DOWNLOAD_MEDIA_NONE;
   d->site_grab = opts && opts->site_grab;
+  if (opts) {
+    memcpy(d->site_format_id, opts->site_format_id, sizeof(d->site_format_id));
+    d->site_format_has_audio = opts->site_format_has_audio;
+  }
   d->requires_browser_context = opts && opts->browser_context;
 
   if (request_options_present(opts) || d->requires_browser_context) {
@@ -475,6 +479,21 @@ bool queue_manager_get_site_grab(uint32_t id, bool *out) {
   for (Download *d = g_head; d; d = d->next)
     if (d->id == id) {
       *out = d->site_grab;
+      found = true;
+      break;
+    }
+  dm_mutex_unlock(&g_mutex);
+  return found;
+}
+bool queue_manager_get_site_format(uint32_t id, char out[64], bool *has_audio) {
+  if (!out || !has_audio) return false;
+  ensure_mutex();
+  dm_mutex_lock(&g_mutex);
+  bool found = false;
+  for (Download *d = g_head; d; d = d->next)
+    if (d->id == id) {
+      memcpy(out, d->site_format_id, sizeof(d->site_format_id));
+      *has_audio = d->site_format_has_audio;
       found = true;
       break;
     }
