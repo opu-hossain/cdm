@@ -32,6 +32,13 @@ async function verify(file, globalName, expectedBrowser) {
   const wireMessages = [];
   let storageFails = false;
   let cookieReads = 0;
+  let siteProbeMode = false;
+  let siteProbeConnections = 0;
+  const siteProbeMessages = [];
+  let siteProbeReply = {type: "site_probe_result", request_id: "media-99",
+    title: "Fixture title", formats: [{id: "18", ext: "mp4", width: 640,
+      height: 360, size_bytes: "1234567", size_estimated: true,
+      has_video: true, has_audio: true}]};
   let cookieRows = [{name: "session", value: "fixture"}];
   const permissionRequests = [];
   const port = {
@@ -56,6 +63,16 @@ async function verify(file, globalName, expectedBrowser) {
       onMessage: {addListener(listener) { runtimeListener = listener; }}, onInstalled: {addListener(listener) { installListener = listener; }},
       connectNative(name) {
       assert.equal(name, "org.cdm.browser");
+      if (siteProbeMode) {
+        siteProbeConnections++;
+        let listener;
+        return {postMessage(message) {
+          siteProbeMessages.push(message);
+          queueMicrotask(() => listener?.({...siteProbeReply, request_id: message.request_id}));
+        }, disconnect() {},
+        onMessage: {addListener(callback) { listener = callback; }},
+        onDisconnect: {addListener() {}}};
+      }
       return port;
     } },
     contextMenus: {
@@ -97,7 +114,7 @@ async function verify(file, globalName, expectedBrowser) {
     [globalName]: api,
     crypto: { randomUUID: () => mediaDetection ? `media-${++mediaSequence}` : "browser-test-request" },
     Date: {now: () => clock},
-    console, URL, TextEncoder,
+    console, URL, TextEncoder, setTimeout, clearTimeout,
     importScripts(name) {
       vm.runInContext(fs.readFileSync(path.join(path.dirname(file), name), "utf8"), sandbox);
     }
@@ -308,10 +325,13 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal(candidates[0].kind, "hls");
   assert.equal(messages.length, beforeMedia, "detection must not open native offers");
   assert(!Object.hasOwn(candidates[0], "cookie"));
-  function callTabRuntime(message, tabId = 7, frameId = 0) {
+  function callTabRuntime(message, tabId = 7, frameId = 0,
+                          url = "https://example.invalid/page") {
     return new Promise(resolve => {
-      const keep = runtimeListener(message,
-        {url: "https://example.invalid/page", tab: {id: tabId}, frameId}, resolve);
+      const payload = message.type?.startsWith("cdm_site_")
+        ? {page_id: "page-1", ...message} : message;
+      const keep = runtimeListener(payload,
+        {url, tab: {id: tabId}, frameId}, resolve);
       if (keep !== true) resolve(undefined);
     });
   }
@@ -333,6 +353,40 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal(messages.at(-1).cookie, undefined);
   assert.equal(canceled.length, beforeMediaCancel, "media selection must not cancel downloads");
   assert.equal((await callRuntime({type: "cdm_media_list"})).length, 0);
+  siteProbeMode = true;
+  const site = await callTabRuntime({type: "cdm_site_probe_tab"});
+  assert.equal(site.title, "Fixture title");
+  assert.equal(site.formats[0].size_bytes, "1234567");
+  assert.equal(siteProbeConnections, 1);
+  assert.equal(siteProbeMessages[0].type, "site_probe");
+  assert.equal(siteProbeMessages[0].url, "https://example.invalid/page");
+  assert.equal(siteProbeMessages[0].cookie, undefined);
+  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"})).title, "Fixture title");
+  assert.equal(siteProbeConnections, 1, "site metadata should be cached per page");
+  assert.equal((await callTabRuntime(
+    {type: "cdm_site_probe_tab", page_id: "page-2"})).title, "Fixture title");
+  assert.equal(siteProbeConnections, 2, "reload with the same URL needs a fresh probe");
+  assert.equal((await callTabRuntime(
+    {type: "cdm_site_select_tab", page_id: "page-1", id: "18"})).ok, false);
+  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"}, 8)).title, "Fixture title");
+  assert.equal(siteProbeConnections, 3, "another tab needs its own probe");
+  assert.equal((await callTabRuntime({type: "cdm_site_select_tab", id: "18"}, 8)).ok, true);
+  siteProbeReply = {type: "site_probe_result", title: "Next page",
+    formats: [{id: "22", ext: "mp4", width: 1280, height: 720,
+      size_bytes: "0", size_estimated: false, has_video: true, has_audio: true}]};
+  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"}, 7, 0,
+    "https://example.invalid/other")).title, "Next page");
+  assert.equal((await callTabRuntime({type: "cdm_site_select_tab", id: "18"}, 7, 0,
+    "https://example.invalid/other")).ok, false, "old page selection must expire");
+  assert.equal(siteProbeConnections, 4);
+  assert.equal((await callTabRuntime({type: "cdm_site_select_tab", id: "missing"})).ok, false);
+  assert.equal(await callTabRuntime({type: "cdm_site_probe_tab"}, 7, 1), undefined);
+  siteProbeReply = {type: "error", error: "unsupported"};
+  clock += 600001;
+  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"})).formats.length, 0);
+  assert.equal(siteProbeConnections, 5);
+  assert.equal(messages.at(-1).type, "media_offer",
+    "selecting a format must not start a download before engine wiring");
   await mediaListener({...response, url: "https://example.invalid/overlay.mp4"});
   const pageRows = await callTabRuntime({type: "cdm_media_list_tab"});
   assert.equal((await callTabRuntime({type: "cdm_media_offer_tab", id: pageRows[0].id})).ok, true);
@@ -564,17 +618,22 @@ async function verifyMediaOverlay(file, globalName) {
     return {left: 20, top: 30, right: 820, bottom: 480, width: 800, height: 450};
   }};
   let rows = [{id: "media-overlay-fixture", kind: "hls", filename: "master.m3u8"}];
+  let site = {title: "Fixture title", formats: [{id: "18", ext: "mp4", width: 640,
+    height: 360, size_bytes: "1234567", size_estimated: true,
+    has_video: true, has_audio: true}]};
   const offers = [];
   let tick;
   const sandbox = vm.createContext({
     [globalName]: {runtime: {sendMessage(message) {
       if (message.type === "cdm_media_list_tab") return Promise.resolve(rows);
+      if (message.type === "cdm_site_probe_tab") return Promise.resolve(site);
       offers.push(message); return Promise.resolve({ok: true});
     }}},
     document: {documentElement: root, title: "Fixture video",
       querySelectorAll() { return [video]; }, createElement(tag) { return new Element(tag); },
       addEventListener() {}},
     window: {addEventListener() {}},
+    crypto: {randomUUID() { return "overlay-page"; }},
     setInterval(callback) { tick = callback; },
     console
   });
@@ -591,15 +650,22 @@ async function verifyMediaOverlay(file, globalName) {
   assert.match(button.textContent, /Download with cdm/);
   await button.click();
   assert.equal(panel.hidden, false);
-  assert.match(panel.children[0].textContent, /Fixture video/);
+  assert.match(panel.children[0].textContent, /Fixture title/);
   assert.match(panel.children[1].textContent, /master.m3u8/);
+  assert.match(panel.children[2].textContent, /360/);
+  assert.match(panel.children[2].textContent, /1.2/);
   const firstChoice = panel.children[1];
   await tick();
   assert.equal(panel.children[1], firstChoice, "polling must not replace a choice under the pointer");
   await panel.children[1].click();
   assert.equal(offers[0].type, "cdm_media_offer_tab");
   assert.equal(offers[0].id, "media-overlay-fixture");
+  await panel.children[2].click();
+  assert.equal(offers[1].type, "cdm_site_select_tab");
+  assert.equal(offers[1].id, "18");
+  assert.equal(offers[1].page_id, "overlay-page");
   rows = [];
+  site = {title: "", formats: []};
   await tick();
   assert.equal(host.style.display, "none");
   rows = [{id: "media-overlay-fixture", kind: "hls", filename: "master.m3u8"}];

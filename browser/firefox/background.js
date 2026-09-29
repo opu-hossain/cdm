@@ -250,6 +250,62 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
 // Background/service worker is the sole owner; URLs/context never enter storage.
 // Ten-minute TTL and 64 total entries bound memory; manifests survive video churn.
 const mediaCandidates = new Map();
+// Solely owned by this background page. A page refresh or URL change gets a new probe.
+const siteProbeCache = new Map();
+const emptySiteProbe = () => ({title: "", formats: []});
+function siteProbeResult(message) {
+  if (message?.type !== "site_probe_result" ||
+      typeof message.title !== "string" || !Array.isArray(message.formats))
+    return emptySiteProbe();
+  return {title: message.title.slice(0, 255),
+    formats: message.formats.slice(0, 64).filter(format =>
+      format && typeof format === "object" &&
+      typeof format.id === "string" && format.id.length > 0 && format.id.length < 64 &&
+      typeof format.ext === "string" && format.ext.length < 16 &&
+      Number.isInteger(format.width) && format.width >= 0 && format.width <= 16384 &&
+      Number.isInteger(format.height) && format.height >= 0 && format.height <= 16384 &&
+      typeof format.size_bytes === "string" && /^\d{1,20}$/.test(format.size_bytes) &&
+      typeof format.has_video === "boolean" && format.has_video &&
+      typeof format.has_audio === "boolean" &&
+      typeof format.size_estimated === "boolean").map(format => ({
+        id: format.id, ext: format.ext, width: format.width, height: format.height,
+        size_bytes: format.size_bytes, size_estimated: format.size_estimated,
+        has_video: format.has_video, has_audio: format.has_audio}))};
+}
+function probeSiteNative(url) {
+  return new Promise(resolve => {
+    let port, finished = false;
+    const requestId = crypto.randomUUID();
+    const finish = result => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      try { port?.disconnect(); } catch (_) {}
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(emptySiteProbe()), 35000);
+    try {
+      port = browser.runtime.connectNative(HOST_NAME);
+      port.onMessage.addListener(message => {
+        if (message?.request_id === requestId)
+          finish(siteProbeResult(message));
+      });
+      port.onDisconnect.addListener(() => finish(emptySiteProbe()));
+      port.postMessage({type: "site_probe", request_id: requestId, url});
+    } catch (_) { finish(emptySiteProbe()); }
+  });
+}
+async function siteProbeForTab(tabId, url, pageId) {
+  const now = Date.now();
+  for (const [id, entry] of siteProbeCache)
+    if (now - entry.at > 600000) siteProbeCache.delete(id);
+  const cached = siteProbeCache.get(tabId);
+  if (cached?.url === url && cached.pageId === pageId) return cached.promise;
+  if (siteProbeCache.size >= 64) siteProbeCache.delete(siteProbeCache.keys().next().value);
+  const entry = {url, pageId, at: now, selected: "", promise: probeSiteNative(url)};
+  siteProbeCache.set(tabId, entry);
+  return entry.promise;
+}
 function pruneMedia() {
   for (const [key, value] of mediaCandidates)
     if (Date.now() - value.at > 600000) mediaCandidates.delete(key);
@@ -340,6 +396,7 @@ browser.permissions?.onAdded?.addListener(() => {
 });
 browser.permissions?.onRemoved?.addListener(() => {
   mediaCandidates.clear();
+  siteProbeCache.clear();
   queueMediaScriptSync();
 });
 
@@ -348,12 +405,45 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
     ["cdm_media_list", "cdm_media_offer"].includes(message?.type);
   const fromPage = Number.isInteger(sender.tab?.id) && sender.frameId === 0 &&
     !!originFor(sender.url) &&
-    ["cdm_media_list_tab", "cdm_media_offer_tab"].includes(message?.type);
+    ["cdm_media_list_tab", "cdm_media_offer_tab",
+      "cdm_site_probe_tab", "cdm_site_select_tab"].includes(message?.type);
   if (!fromOptions && !fromPage) return;
   (async () => {
     const stored = await browser.storage.sync.get("mediaDetection");
-    if (stored.mediaDetection !== true) mediaCandidates.clear();
+    if (stored.mediaDetection !== true) {
+      mediaCandidates.clear();
+      siteProbeCache.clear();
+    }
     pruneMedia();
+    if (message.type === "cdm_site_probe_tab" || message.type === "cdm_site_select_tab") {
+      const tabId = sender.tab.id;
+      const url = sender.url;
+      const pageId = message.page_id;
+      if (typeof pageId !== "string" || !/^[a-zA-Z0-9-]{1,128}$/.test(pageId) ||
+          stored.mediaDetection !== true ||
+          !url.startsWith("https://") ||
+          !!new URL(url).username || !!new URL(url).password ||
+          new TextEncoder().encode(url).length > 2047 ||
+          CdmFilters.excluded(url, CdmFilters.normalizeSites(
+            (await browser.storage.sync.get("siteExclusions")).siteExclusions)) ||
+          !await browser.permissions.contains({permissions: ["webRequest"],
+            origins: ["http://*/*", "https://*/*"]})) {
+        reply(message.type === "cdm_site_probe_tab" ? emptySiteProbe() : {ok: false});
+        return;
+      }
+      if (message.type === "cdm_site_probe_tab") {
+        reply(await siteProbeForTab(tabId, url, pageId));
+        return;
+      }
+      const entry = siteProbeCache.get(tabId);
+      const result = entry?.url === url && entry.pageId === pageId &&
+        Date.now() - entry.at <= 600000
+        ? await entry.promise : emptySiteProbe();
+      const selected = result.formats.some(format => format.id === message.id);
+      if (selected) entry.selected = message.id;
+      reply({ok: selected});
+      return;
+    }
     if (message.type === "cdm_media_list" || message.type === "cdm_media_list_tab") {
       reply([...mediaCandidates.values()].filter(value =>
         fromOptions || value.tabId === sender.tab.id).map(({id, url, kind, mime, filename, tabId}) =>
@@ -375,7 +465,9 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
 });
 
 browser.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && changes.mediaDetection && changes.mediaDetection.newValue !== true)
+  if (area === "sync" && changes.mediaDetection && changes.mediaDetection.newValue !== true) {
     mediaCandidates.clear();
+    siteProbeCache.clear();
+  }
   if (area === "sync" && changes.mediaDetection) queueMediaScriptSync();
 });

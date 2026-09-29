@@ -1,7 +1,9 @@
 // Runs only on pages granted media-detection host access. This document owns its UI state.
 (() => {
   const api = typeof browser !== "undefined" ? browser : chrome;
-  let host, button, panel, title, rows = [], refreshing = false, rendered = "";
+  const pageId = crypto.randomUUID();
+  let host, button, panel, title, rows = [], site = {title: "", formats: []};
+  let refreshing = false, rendered = "";
 
   function playingVideo() {
     let chosen = null, area = 0;
@@ -44,7 +46,7 @@
   }
 
   function position() {
-    if (!host || !rows.length) return;
+    if (!host || (!rows.length && !site.formats.length)) return;
     const video = playingVideo();
     if (!video) { host.style.display = "none"; return; }
     const rect = video.getBoundingClientRect();
@@ -54,7 +56,7 @@
   }
 
   function render() {
-    title.textContent = (document.title || "Video").slice(0, 120);
+    title.textContent = (site.title || document.title || "Video").slice(0, 120);
     panel.replaceChildren(title);
     for (const item of rows) {
       const choice = document.createElement("button");
@@ -72,6 +74,28 @@
       });
       panel.appendChild(choice);
     }
+    for (const format of site.formats) {
+      const choice = document.createElement("button");
+      choice.type = "button";
+      const size = Number(format.size_bytes);
+      const sizeLabel = size > 0
+        ? (format.size_estimated ? "~" : "") + (size / 1000000).toFixed(1) + " MB"
+        : "size unknown";
+      choice.textContent = (format.height || "?") + "p · " + format.ext.toUpperCase() +
+        " · " + sizeLabel + (format.has_audio ? "" : " · video only");
+      choice.addEventListener("click", async () => {
+        choice.disabled = true;
+        try {
+          const result = await api.runtime.sendMessage(
+            {type: "cdm_site_select_tab", id: format.id, page_id: pageId});
+          button.textContent = result?.ok ? "Format selected" : "Could not select format";
+          if (result?.ok) panel.hidden = true;
+        } catch (_) {
+          button.textContent = "Could not select format";
+        } finally { choice.disabled = false; }
+      });
+      panel.appendChild(choice);
+    }
   }
 
   async function refresh() {
@@ -83,19 +107,23 @@
     }
     refreshing = true;
     try {
-      const found = await api.runtime.sendMessage({type: "cdm_media_list_tab"});
+      const [found, siteResult] = await Promise.all([
+        api.runtime.sendMessage({type: "cdm_media_list_tab"}),
+        api.runtime.sendMessage({type: "cdm_site_probe_tab", page_id: pageId})]);
       rows = Array.isArray(found) ? found.filter(item =>
         typeof item.id === "string" && item.id.length <= 128 &&
         ["hls", "dash", "video"].includes(item.kind) &&
         typeof item.filename === "string" && item.filename.length <= 511).slice(0, 64) : [];
-      if (!rows.length) {
+      site = siteResult && typeof siteResult.title === "string" &&
+        Array.isArray(siteResult.formats) ? siteResult : {title: "", formats: []};
+      if (!rows.length && !site.formats.length) {
         rendered = "";
         if (host) host.style.display = "none";
         if (panel) panel.hidden = true;
         return;
       }
       ensureUi();
-      const signature = JSON.stringify([document.title, rows]);
+      const signature = JSON.stringify([document.title, rows, site]);
       if (signature !== rendered) {
         button.textContent = "Download with cdm";
         render();
@@ -104,6 +132,7 @@
       position();
     } catch (_) {
       rows = [];
+      site = {title: "", formats: []};
       if (host) host.style.display = "none";
     } finally { refreshing = false; }
   }
