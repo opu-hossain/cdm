@@ -351,7 +351,9 @@ async function observeMediaHeaders(details) {
     if (!await chrome.permissions.contains({permissions: ["webRequest"],
         origins: ["http://*/*", "https://*/*"]})) return;
     pruneMedia();
-    const key = `${details.tabId}\n${details.url}`;
+    const frameId = Number.isInteger(details.frameId) && details.frameId >= 0
+      ? details.frameId : 0;
+    const key = `${details.tabId}\n${frameId}\n${details.url}`;
     if (mediaCandidates.has(key)) return;
     const context = await offerContext({incognito: false}, details.url);
     // Recheck enablement after asynchronous context capture/revocation.
@@ -365,7 +367,7 @@ async function observeMediaHeaders(details) {
     }
     const filename = safeValue(new URL(details.url).pathname.split("/").pop() || "", 511);
     mediaCandidates.set(key, {id: crypto.randomUUID(), url: details.url, kind, mime,
-      filename, tabId: details.tabId, context, at: Date.now()});
+      filename, tabId: details.tabId, frameId, context, at: Date.now()});
   } catch (_) {
     // Unavailable storage/permissions fail closed; no native offer was sent.
   }
@@ -385,10 +387,12 @@ function queueMediaScriptSync() {
       await chrome.permissions.contains({permissions: ["webRequest"],
         origins: ["http://*/*", "https://*/*"]});
     const registered = await chrome.scripting.getRegisteredContentScripts({ids: [MEDIA_SCRIPT_ID]});
-    if (enabled && registered.length === 0) {
+    if (enabled && registered[0]?.allFrames !== true) {
+      if (registered.length)
+        await chrome.scripting.unregisterContentScripts({ids: [MEDIA_SCRIPT_ID]});
       await chrome.scripting.registerContentScripts([{id: MEDIA_SCRIPT_ID,
         js: ["media_overlay.js"], matches: ["http://*/*", "https://*/*"],
-        runAt: "document_idle"}]);
+        allFrames: true, runAt: "document_idle"}]);
     } else if (!enabled && registered.length !== 0) {
       await chrome.scripting.unregisterContentScripts({ids: [MEDIA_SCRIPT_ID]});
     }
@@ -428,7 +432,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   const fromOptions = sender.url === chrome.runtime.getURL("options.html") &&
     ["cdm_media_list", "cdm_media_offer"].includes(message?.type);
   const fromPage = Number.isInteger(sender.tab?.id) && !sender.tab.incognito &&
-    sender.frameId === 0 &&
+    Number.isInteger(sender.frameId) && sender.frameId >= 0 &&
     !!originFor(sender.url) &&
     ["cdm_media_list_tab", "cdm_media_offer_tab",
       "cdm_site_probe_tab", "cdm_site_select_tab"].includes(message?.type);
@@ -442,6 +446,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     pruneMedia();
     if (message.type === "cdm_site_probe_tab" || message.type === "cdm_site_select_tab") {
       const tabId = sender.tab.id;
+      const frameKey = `${tabId}:${sender.frameId}`;
       const url = sender.url;
       const pageId = message.page_id;
       if (typeof pageId !== "string" || !/^[a-zA-Z0-9-]{1,128}$/.test(pageId) ||
@@ -461,7 +466,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       if (message.type === "cdm_site_probe_tab") {
         const allowed = siteHostAllowed(new URL(url).hostname.toLowerCase());
         if (!allowed && message.explicit !== true) {
-          const cached = siteProbeCache.get(tabId);
+          const cached = siteProbeCache.get(frameKey);
           if (cached?.url === url && cached.pageId === pageId &&
               cached.publicSite) {
             const result = await cached.promise;
@@ -471,11 +476,11 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
           }
           return;
         }
-        reply(await siteProbeForTab(tabId, url, pageId, !allowed,
-                                    !allowed && message.explicit === true));
+        reply(await siteProbeForTab(frameKey, url, pageId, !allowed,
+                                    message.explicit === true));
         return;
       }
-      const entry = siteProbeCache.get(tabId);
+      const entry = siteProbeCache.get(frameKey);
       const result = entry?.url === url && entry.pageId === pageId &&
         Date.now() - entry.at <= 600000
         ? await entry.promise : emptySiteProbe();
@@ -498,12 +503,14 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     }
     if (message.type === "cdm_media_list" || message.type === "cdm_media_list_tab") {
       reply([...mediaCandidates.values()].filter(value =>
-        fromOptions || value.tabId === sender.tab.id).map(({id, url, kind, mime, filename, tabId}) =>
+        fromOptions || (value.tabId === sender.tab.id &&
+          value.frameId === sender.frameId)).map(({id, url, kind, mime, filename, tabId}) =>
         fromOptions ? {id, url, kind, mime, filename, tabId} : {id, kind, mime, filename}));
       return;
     }
     const selected = [...mediaCandidates].find(([, value]) => value.id === message.id &&
-      (fromOptions || value.tabId === sender.tab.id));
+      (fromOptions || (value.tabId === sender.tab.id &&
+        value.frameId === sender.frameId)));
     if (!selected) { reply({ok: false}); return; }
     const [key, candidate] = selected;
     if (!await chrome.permissions.contains({permissions: ["webRequest"],

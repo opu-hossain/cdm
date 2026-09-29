@@ -27,16 +27,17 @@
     host.style.zIndex = "2147483647";
     const shadow = host.attachShadow({mode: "closed"});
     const style = document.createElement("style");
-    style.textContent = "button{font:13px sans-serif;cursor:pointer;border:0;border-radius:5px;padding:8px 10px;background:#2276a5;color:#fff;box-shadow:0 2px 8px #0008}" +
+    style.textContent = "button{font:13px sans-serif;cursor:pointer;border:0;border-radius:5px;padding:8px 10px;background:#2276a5;color:#fff;box-shadow:0 2px 8px #0008;max-width:100%}" +
       "button:hover,button:focus{background:#155980}" +
-      ".panel{width:280px;max-height:260px;overflow:auto;margin-top:4px;padding:8px;background:#20262c;color:#fff;border-radius:5px;box-shadow:0 2px 12px #0009;font:13px sans-serif}" +
+      ".panel{box-sizing:border-box;width:100%;max-height:260px;overflow:auto;margin-top:4px;padding:8px;background:#20262c;color:#fff;border-radius:5px;box-shadow:0 2px 12px #0009;font:13px sans-serif}" +
       ".panel[hidden]{display:none}.title{overflow-wrap:anywhere;margin:0 0 6px}" +
-      ".panel button{display:block;width:100%;margin:3px 0;text-align:left;overflow-wrap:anywhere}";
+      ".panel button{display:block;width:100%;margin:3px 0;text-align:left;overflow-wrap:anywhere}" +
+      "button:first-of-type{display:block;margin-left:auto}";
     button = document.createElement("button");
     button.type = "button";
     button.textContent = "Download with cdm";
     button.addEventListener("click", () => {
-      if (manualRequired && !rows.length && !site.formats.length) {
+      if (manualRequired && !rows.length && !site.formats.length && panel.hidden) {
         return checkFormats();
       } else {
         panel.hidden = !panel.hidden;
@@ -52,12 +53,14 @@
   }
 
   function position() {
-    if (!host || (!rows.length && !site.formats.length && !manualRequired)) return;
+    if (!host) return;
     const video = playingVideo();
     if (!video) { host.style.display = "none"; return; }
     const rect = video.getBoundingClientRect();
-    host.style.left = `${Math.max(0, rect.right - 170)}px`;
-    host.style.top = `${Math.max(0, rect.top + 10)}px`;
+    const viewportWidth = window.innerWidth || rect.right;
+    host.style.right = `${Math.max(8, viewportWidth - Math.min(rect.right - 8, viewportWidth - 8))}px`;
+    host.style.width = `${Math.min(296, Math.max(140, rect.width - 16), viewportWidth - 16)}px`;
+    host.style.top = `${Math.max(0, rect.top + 8)}px`;
     host.style.display = "block";
   }
 
@@ -102,6 +105,16 @@
       });
       panel.appendChild(choice);
     }
+    if (!rows.length && !site.formats.length) {
+      const unavailable = document.createElement("p");
+      unavailable.textContent = "No supported formats found for this video.";
+      panel.appendChild(unavailable);
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.textContent = "Check again";
+      retry.addEventListener("click", checkFormats);
+      panel.appendChild(retry);
+    }
     if (manualRequired && rows.length) {
       const check = document.createElement("button");
       check.type = "button";
@@ -121,9 +134,8 @@
         Array.isArray(result.formats) ? result : {title: "", formats: []};
       manualRequired = !site.formats.length;
       render();
-      panel.hidden = !site.formats.length;
-      button.textContent = site.formats.length ? "Download with cdm" :
-        "No formats found · Retry";
+      panel.hidden = false;
+      button.textContent = "Download with cdm";
       position();
     } catch (_) {
       button.textContent = "Could not check formats · Retry";
@@ -131,12 +143,18 @@
   }
 
   async function refresh() {
-    if (refreshing) return;
     if (!playingVideo()) {
       if (host) host.style.display = "none";
       if (panel) panel.hidden = true;
       return;
     }
+    ensureUi();
+    if (!rows.length && !site.formats.length) {
+      manualRequired = true;
+      button.textContent = "Download with cdm";
+    }
+    position();
+    if (refreshing) return;
     refreshing = true;
     try {
       const [found, siteResult] = await Promise.all([
@@ -148,18 +166,12 @@
         typeof item.filename === "string" && item.filename.length <= 511).slice(0, 64) : [];
       site = siteResult && typeof siteResult.title === "string" &&
         Array.isArray(siteResult.formats) ? siteResult : {title: "", formats: []};
-      manualRequired = siteResult?.manual_required === true;
-      if (!rows.length && !site.formats.length && !manualRequired) {
-        rendered = "";
-        if (host) host.style.display = "none";
-        if (panel) panel.hidden = true;
-        return;
-      }
+      manualRequired = siteResult?.manual_required === true ||
+        (!rows.length && !site.formats.length);
       ensureUi();
       const signature = JSON.stringify([document.title, rows, site, manualRequired]);
       if (signature !== rendered) {
-        button.textContent = manualRequired && !rows.length
-          ? "Check formats with cdm" : "Download with cdm";
+        button.textContent = "Download with cdm";
         render();
         rendered = signature;
       }
@@ -167,8 +179,10 @@
     } catch (_) {
       rows = [];
       site = {title: "", formats: []};
-      manualRequired = false;
-      if (host) host.style.display = "none";
+      manualRequired = true;
+      ensureUi();
+      button.textContent = "Download with cdm";
+      position();
     } finally { refreshing = false; }
   }
 

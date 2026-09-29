@@ -316,6 +316,13 @@ async function verify(file, globalName, expectedBrowser) {
   await new Promise(setImmediate);
   assert.equal(registeredMediaScripts.length, 1);
   assert.deepEqual(Array.from(registeredMediaScripts[0].js), ["media_overlay.js"]);
+  assert.equal(registeredMediaScripts[0].allFrames, true,
+    "embedded video frames need their own in-page control");
+  registeredMediaScripts[0].allFrames = false; // Persisted registration from an older extension.
+  storageListener({mediaDetection: {newValue: true}}, "sync");
+  await new Promise(setImmediate);
+  assert.equal(registeredMediaScripts.length, 1);
+  assert.equal(registeredMediaScripts[0].allFrames, true);
   assert.equal(typeof permissionAddedListener, "function");
   assert.equal(typeof permissionRemovedListener, "function");
   await mediaListener(response);
@@ -340,7 +347,7 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal(inPage[0].id, candidates[0].id);
   assert(!Object.hasOwn(inPage[0], "url"), "page overlay must not receive signed URLs");
   assert.equal((await callTabRuntime({type: "cdm_media_list_tab"}, 8)).length, 0);
-  assert.equal(await callTabRuntime({type: "cdm_media_list_tab"}, 7, 1), undefined);
+  assert.equal((await callTabRuntime({type: "cdm_media_list_tab"}, 7, 1)).length, 0);
   assert.equal((await callTabRuntime({type: "cdm_media_offer_tab", id: candidates[0].id}, 8)).ok, false);
   // Existing site-specific consent is on; turning it off clears cached context.
   await actionListener({url: "https://example.invalid/page"});
@@ -354,6 +361,9 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal(canceled.length, beforeMediaCancel, "media selection must not cancel downloads");
   assert.equal((await callRuntime({type: "cdm_media_list"})).length, 0);
   siteProbeMode = true;
+  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"}, 7, 1)).manual_required,
+    true);
+  assert.equal(siteProbeConnections, 0);
   assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"})).manual_required, true);
   assert.equal(siteProbeConnections, 0, "broader sites require an explicit click");
   assert.equal(runtimeListener({type: "cdm_site_probe_tab", explicit: true,
@@ -394,19 +404,37 @@ async function verify(file, globalName, expectedBrowser) {
     "https://example.invalid/other")).ok, false, "old page selection must expire");
   assert.equal(siteProbeConnections, 4);
   assert.equal((await callTabRuntime({type: "cdm_site_select_tab", id: "missing"})).ok, false);
-  assert.equal(await callTabRuntime({type: "cdm_site_probe_tab"}, 7, 1), undefined);
+  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"}, 7, 1)).manual_required,
+    true);
   siteProbeReply = {type: "error", error: "unsupported"};
   clock += 600001;
   assert.equal((await callTabRuntime({type: "cdm_site_probe_tab", explicit: true})).formats.length, 0);
   assert.equal(siteProbeConnections, 5);
   assert.equal(messages.at(-1).site_format_id, "18",
     "failed probes must not create another offer");
+  const supportedUrl = "https://www." + "youtube.com/watch";
+  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"}, 10, 0,
+    supportedUrl)).formats.length, 0);
+  assert.equal(siteProbeConnections, 6);
+  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab", explicit: true}, 10, 0,
+    supportedUrl)).formats.length, 0);
+  assert.equal(siteProbeConnections, 7,
+    "an in-page click must retry a failed automatic site probe");
   await mediaListener({...response, url: "https://example.invalid/overlay.mp4"});
   const pageRows = await callTabRuntime({type: "cdm_media_list_tab"});
   assert.equal((await callTabRuntime({type: "cdm_media_offer_tab", id: pageRows[0].id})).ok, true);
   assert.equal(messages.at(-1).type, "media_offer");
   assert.equal(messages.at(-1).kind, "video");
   assert.equal((await callTabRuntime({type: "cdm_media_list_tab"})).length, 0);
+  await mediaListener({...response, frameId: 1,
+    url: "https://example.invalid/embedded.m3u8"});
+  const embeddedRows = await callTabRuntime({type: "cdm_media_list_tab"}, 7, 1);
+  assert.equal(embeddedRows.length, 1);
+  assert.equal((await callTabRuntime({type: "cdm_media_list_tab"})).length, 0);
+  assert.equal((await callTabRuntime({type: "cdm_media_offer_tab",
+    id: embeddedRows[0].id})).ok, false);
+  assert.equal((await callTabRuntime({type: "cdm_media_offer_tab",
+    id: embeddedRows[0].id}, 7, 1)).ok, true);
   await mediaListener({...response, url: "https://example.invalid/manifest",
     responseHeaders: [{name: "Content-Type", value: "Application/Dash+XML; charset=utf-8"}]});
   candidates = await callRuntime({type: "cdm_media_list"});
@@ -638,11 +666,14 @@ async function verifyMediaOverlay(file, globalName) {
   const supportedSite = site;
   const offers = [];
   let tick;
+  let releaseInitialProbe;
   const sandbox = vm.createContext({
     [globalName]: {runtime: {sendMessage(message) {
       if (message.type === "cdm_media_list_tab") return Promise.resolve(rows);
       if (message.type === "cdm_site_probe_tab") {
         if (message.explicit) { offers.push(message); site = supportedSite; }
+        else if (!releaseInitialProbe)
+          return new Promise(resolve => { releaseInitialProbe = () => resolve(site); });
         return Promise.resolve(site);
       }
       offers.push(message); return Promise.resolve({ok: true});
@@ -657,12 +688,18 @@ async function verifyMediaOverlay(file, globalName) {
   });
   vm.runInContext(fs.readFileSync(path.join(path.dirname(file), "media_overlay.js"), "utf8"),
     sandbox);
+  assert.equal(root.children.length, 1,
+    "playing video should show its control before format probing finishes");
+  assert.equal(root.children[0].style.display, "block");
+  releaseInitialProbe();
   await new Promise(setImmediate);
   assert.equal(typeof tick, "function");
   assert.equal(root.children.length, 1);
   const host = root.children[0];
   assert.equal(host.style.position, "fixed");
   assert.equal(host.style.display, "block");
+  assert.equal(host.style.top, "38px");
+  assert.equal(host.style.right, "8px");
   const button = host.shadow.children[1];
   const panel = host.shadow.children[2];
   assert.match(button.textContent, /Download with cdm/);
@@ -686,18 +723,24 @@ async function verifyMediaOverlay(file, globalName) {
   rows = [];
   site = {title: "", formats: []};
   await tick();
-  assert.equal(host.style.display, "none");
-  site = {title: "", formats: [], manual_required: true};
-  await tick();
-  assert.equal(host.style.display, "block");
-  assert.equal(button.textContent, "Check formats with cdm");
+  assert.equal(host.style.display, "block", "playing video keeps an in-frame control");
+  assert.equal(button.textContent, "Download with cdm");
   await button.click();
   assert.equal(offers[2].type, "cdm_site_probe_tab");
   assert.equal(offers[2].explicit, true);
   assert.equal(panel.hidden, false);
+  site = {title: "", formats: [], manual_required: true};
+  await tick();
+  assert.equal(host.style.display, "block");
+  assert.equal(button.textContent, "Download with cdm");
+  assert.match(panel.children[1].textContent, /No supported formats/);
+  await panel.children[2].click();
+  assert.equal(offers[3].type, "cdm_site_probe_tab");
+  assert.equal(offers[3].explicit, true);
+  assert.equal(panel.hidden, false);
   assert.match(panel.children[1].textContent, /360/);
   await panel.children[1].click();
-  assert.equal(offers[3].type, "cdm_site_select_tab");
+  assert.equal(offers[4].type, "cdm_site_select_tab");
   rows = [{id: "media-overlay-fixture", kind: "hls", filename: "master.m3u8"}];
   video.paused = true;
   await tick();
