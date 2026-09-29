@@ -36,7 +36,10 @@
     <p id="status" role="status" aria-live="polite"></p>
   </form>
   <h2>Detected media</h2>
-  <p>Refresh after playing a video. Select a candidate to review in cdm.
+  <p>Refresh after playing a video. Only direct video files and HLS/DASH manifests
+    appear here; YouTube playback may use an unsupported stream. For YouTube,
+    configure the optional yt-dlp site extractor and use the page context menu.
+    Select a candidate to review in cdm.
     Manifests are retained ahead of video segments. Detection excludes private
     browsing and excluded sites; an explicit selection bypasses download filters.</p>
   <button id="mediaRefresh" type="button">Refresh detected media</button>

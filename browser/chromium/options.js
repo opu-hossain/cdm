@@ -44,9 +44,19 @@ const mediaStatus = document.getElementById("mediaStatus");
 const mediaOffer = document.getElementById("mediaOffer");
 async function refreshMedia() {
   mediaOffer.disabled = true;
+  mediaList.replaceChildren();
   try {
+    const stored = await api.storage.sync.get("mediaDetection");
+    if (stored.mediaDetection !== true) {
+      mediaStatus.textContent = "Enable media detection and click Save filters and exclusions first.";
+      return;
+    }
+    if (!await api.permissions.contains({permissions: ["webRequest"],
+        origins: ["http://*/*", "https://*/*"]})) {
+      mediaStatus.textContent = "Media detection permission is missing. Save again to request it.";
+      return;
+    }
     const candidates = await api.runtime.sendMessage({type: "cdm_media_list"});
-    mediaList.replaceChildren();
     if (!Array.isArray(candidates) || candidates.length > 64)
       throw new Error("Could not load detected media");
     for (const candidate of candidates) {
@@ -57,7 +67,7 @@ async function refreshMedia() {
     }
     mediaOffer.disabled = candidates.length === 0;
     mediaStatus.textContent = candidates.length ? "Select a candidate to offer to cdm."
-        : "No candidates. Enable detection, play media, then refresh.";
+        : "No supported media candidates retained. YouTube playback may use an unsupported stream; use the optional yt-dlp page download for YouTube.";
   } catch (_) {
     mediaStatus.textContent = "Could not load detected media. Reopen this page to retry.";
   }

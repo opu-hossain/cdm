@@ -86,7 +86,7 @@ The optional extensions hand supported GET downloads to cdm. Per-origin consent 
 
 ## Video downloads
 
-The extension's **ON** badge enables browser-session sharing for one site; it does not start video detection. To try detection, open the extension's **Options**, enable **Media detection**, save and grant the requested permission. Play a video, then return to Options, click **Refresh detected media**, select a candidate, and click **Offer selected media to cdm**. Detection does not open a popup by itself. Many sites expose separate video segments rather than a complete file; cdm supports only the finite HLS/DASH layouts in [media downloads](docs/media.md).
+The extension's **ON** badge enables browser-session sharing for one site; it does not start video detection. To try detection, open the extension's **Options**, enable **Media detection**, click **Save filters and exclusions**, and grant the requested permission. Play a video, then return to Options, click **Refresh detected media**, select a candidate, and click **Offer selected media to cdm**. Detection does not open a popup by itself. It lists direct video files and supported HLS/DASH manifests; YouTube playback may leave the list empty because it can use another streaming protocol. See [media downloads](docs/media.md) for format limits.
 
 For a supported video-site page such as YouTube, install `yt-dlp`, enable `use_yt_dlp = true` under `[sites]` in `~/.local/share/cdm/config.toml`, restart the daemon, then right-click the video page and choose **Download page with cdm**. In the confirmation popup, select **Use yt-dlp for this site**. This option is disabled by default and sends the page URL without browser cookies or headers.
 

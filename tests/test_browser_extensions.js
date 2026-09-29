@@ -365,12 +365,13 @@ async function verifyOptions(file, globalName) {
     document: {getElementById(id) { assert(elements[id], id); return elements[id]; },
       createElement(tag) { assert.equal(tag, "option"); return {}; }},
     [globalName]: {permissions: {request(value) { mediaPermissionRequests.push(value);
-      return Promise.resolve(grantedMedia); }}, runtime: {sendMessage(message) {
+      return Promise.resolve(grantedMedia); }, contains() { return Promise.resolve(grantedMedia); }}, runtime: {sendMessage(message) {
         if (message.type === "cdm_media_list") return Promise.resolve(mediaRows);
         selectedMedia = message.id; mediaRows = []; return Promise.resolve({ok: true});
       }}, storage: {sync: {
       get() { return Promise.resolve({interceptionFilters: {minSizeBytes: 7,
-          extensionsAllow: ["PDF"]}, siteExclusions: ["*.EXAMPLE.invalid"]}); },
+          extensionsAllow: ["PDF"]}, siteExclusions: ["*.EXAMPLE.invalid"],
+          mediaDetection: saved?.mediaDetection}); },
       set(value) { if (failSave) return Promise.reject(new Error("fixture quota failure"));
         saved = JSON.parse(JSON.stringify(value)); return Promise.resolve(); }
     }}}
@@ -382,6 +383,8 @@ async function verifyOptions(file, globalName) {
   assert.equal(elements.extensionsAllow.value, "pdf");
   assert.equal(elements.save.disabled, false);
   assert.equal(elements.siteExclusions.value, "*.example.invalid");
+  await elements.mediaRefresh.listeners.click();
+  assert.match(elements.mediaStatus.textContent, /enable media detection/i);
   elements.minSizeBytes.value = "128";
   elements.extensionsAllow.value = ".ZIP, zip, tar.gz";
   elements.mimeDeny.value = "VIDEO/*";
@@ -424,9 +427,16 @@ async function verifyOptions(file, globalName) {
   assert.equal(selectedMedia, "media-option-fixture");
   assert.equal(elements.mediaCandidates.children.length, 0);
   assert.equal(elements.mediaOffer.disabled, true);
+  await elements.mediaRefresh.listeners.click();
+  assert.match(elements.mediaStatus.textContent, /YouTube.*yt-dlp/i);
+  grantedMedia = false;
+  await elements.mediaRefresh.listeners.click();
+  assert.match(elements.mediaStatus.textContent, /permission/i);
   const filters = context.CdmFilters;
   assert.equal(filters.mediaKind("https://example.invalid/file.MPD?q=1"), "dash");
   assert.equal(filters.mediaKind("https://example.invalid/video", "Video/MP4; charset=x"), "video");
+  assert.equal(filters.mediaKind("https://example.invalid/videoplayback",
+    "application/vnd.yt-ump"), "");
   assert.equal(filters.mediaKind("https://example.invalid/page", "text/html"), "");
   assert.equal(filters.mediaKind("data:video/mp4,fixture", "video/mp4"), "");
   assert.throws(() => filters.normalize({extensionsAllow: Array(65).fill("zip")}), /64/);
