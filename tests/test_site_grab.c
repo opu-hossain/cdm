@@ -21,6 +21,13 @@ Test(site_grab, host_allowlist) {
       site_grab_host_allowed("youtube.com.evil.invalid"));
   cr_assert_not(
       site_grab_url_allowed("https://example.invalid/watch"));
+  cr_assert(site_grab_public_url_allowed("https://example.invalid/watch"));
+  cr_assert_not(site_grab_public_url_allowed("http://example.invalid/watch"));
+  cr_assert_not(site_grab_public_url_allowed("https://127.0.0.1/watch"));
+  cr_assert_not(site_grab_public_url_allowed("https://[::1]/watch"));
+  cr_assert_not(site_grab_public_url_allowed("https://media.local/watch"));
+  cr_assert_not(site_grab_public_url_allowed("https://localhost/watch"));
+  cr_assert_not(site_grab_public_url_allowed("https://user@example.invalid/watch"));
   cr_assert_not(site_grab_url_allowed("https://user@example.invalid/watch"));
   cr_assert_not(site_grab_url_allowed("file:///tmp/a"));
   SiteGrabProbe probe;

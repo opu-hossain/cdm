@@ -354,32 +354,41 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal(canceled.length, beforeMediaCancel, "media selection must not cancel downloads");
   assert.equal((await callRuntime({type: "cdm_media_list"})).length, 0);
   siteProbeMode = true;
-  const site = await callTabRuntime({type: "cdm_site_probe_tab"});
+  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"})).manual_required, true);
+  assert.equal(siteProbeConnections, 0, "broader sites require an explicit click");
+  assert.equal(runtimeListener({type: "cdm_site_probe_tab", explicit: true,
+      page_id: "private-page"},
+    {url: "https://example.invalid/page", tab: {id: 9, incognito: true},
+      frameId: 0}, () => {}), undefined);
+  assert.equal(siteProbeConnections, 0);
+  const site = await callTabRuntime({type: "cdm_site_probe_tab", explicit: true});
   assert.equal(site.title, "Fixture title");
   assert.equal(site.formats[0].size_bytes, "1234567");
   assert.equal(siteProbeConnections, 1);
   assert.equal(siteProbeMessages[0].type, "site_probe");
   assert.equal(siteProbeMessages[0].url, "https://example.invalid/page");
+  assert.equal(siteProbeMessages[0].explicit_consent, true);
   assert.equal(siteProbeMessages[0].cookie, undefined);
   assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"})).title, "Fixture title");
   assert.equal(siteProbeConnections, 1, "site metadata should be cached per page");
   assert.equal((await callTabRuntime(
-    {type: "cdm_site_probe_tab", page_id: "page-2"})).title, "Fixture title");
+    {type: "cdm_site_probe_tab", page_id: "page-2", explicit: true})).title, "Fixture title");
   assert.equal(siteProbeConnections, 2, "reload with the same URL needs a fresh probe");
   assert.equal((await callTabRuntime(
     {type: "cdm_site_select_tab", page_id: "page-1", id: "18"})).ok, false);
-  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"}, 8)).title, "Fixture title");
+  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab", explicit: true}, 8)).title, "Fixture title");
   assert.equal(siteProbeConnections, 3, "another tab needs its own probe");
   assert.equal((await callTabRuntime({type: "cdm_site_select_tab", id: "18"}, 8)).ok, true);
   assert.equal(messages.at(-1).type, "media_offer");
   assert.equal(messages.at(-1).site_format_id, "18");
   assert.equal(messages.at(-1).site_format_has_audio, true);
+  assert.equal(messages.at(-1).site_public_consent, true);
   assert.equal(messages.at(-1).url, "https://example.invalid/page");
   assert.equal(messages.at(-1).cookie, undefined);
   siteProbeReply = {type: "site_probe_result", title: "Next page",
     formats: [{id: "22", ext: "mp4", width: 1280, height: 720,
       size_bytes: "0", size_estimated: false, has_video: true, has_audio: true}]};
-  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"}, 7, 0,
+  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab", explicit: true}, 7, 0,
     "https://example.invalid/other")).title, "Next page");
   assert.equal((await callTabRuntime({type: "cdm_site_select_tab", id: "18"}, 7, 0,
     "https://example.invalid/other")).ok, false, "old page selection must expire");
@@ -388,7 +397,7 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal(await callTabRuntime({type: "cdm_site_probe_tab"}, 7, 1), undefined);
   siteProbeReply = {type: "error", error: "unsupported"};
   clock += 600001;
-  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"})).formats.length, 0);
+  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab", explicit: true})).formats.length, 0);
   assert.equal(siteProbeConnections, 5);
   assert.equal(messages.at(-1).site_format_id, "18",
     "failed probes must not create another offer");
@@ -626,12 +635,16 @@ async function verifyMediaOverlay(file, globalName) {
   let site = {title: "Fixture title", formats: [{id: "18", ext: "mp4", width: 640,
     height: 360, size_bytes: "1234567", size_estimated: true,
     has_video: true, has_audio: true}]};
+  const supportedSite = site;
   const offers = [];
   let tick;
   const sandbox = vm.createContext({
     [globalName]: {runtime: {sendMessage(message) {
       if (message.type === "cdm_media_list_tab") return Promise.resolve(rows);
-      if (message.type === "cdm_site_probe_tab") return Promise.resolve(site);
+      if (message.type === "cdm_site_probe_tab") {
+        if (message.explicit) { offers.push(message); site = supportedSite; }
+        return Promise.resolve(site);
+      }
       offers.push(message); return Promise.resolve({ok: true});
     }}},
     document: {documentElement: root, title: "Fixture video",
@@ -674,6 +687,17 @@ async function verifyMediaOverlay(file, globalName) {
   site = {title: "", formats: []};
   await tick();
   assert.equal(host.style.display, "none");
+  site = {title: "", formats: [], manual_required: true};
+  await tick();
+  assert.equal(host.style.display, "block");
+  assert.equal(button.textContent, "Check formats with cdm");
+  await button.click();
+  assert.equal(offers[2].type, "cdm_site_probe_tab");
+  assert.equal(offers[2].explicit, true);
+  assert.equal(panel.hidden, false);
+  assert.match(panel.children[1].textContent, /360/);
+  await panel.children[1].click();
+  assert.equal(offers[3].type, "cdm_site_select_tab");
   rows = [{id: "media-overlay-fixture", kind: "hls", filename: "master.m3u8"}];
   video.paused = true;
   await tick();

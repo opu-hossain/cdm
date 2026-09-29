@@ -210,7 +210,8 @@ async function offerDownload(item, url, automatic = false, media = null) {
       ...(media?.site_format_id ? {
         site_format_id: media.site_format_id,
         site_format_label: media.site_format_label,
-        site_format_has_audio: media.site_format_has_audio} : {}),
+        site_format_has_audio: media.site_format_has_audio,
+        ...(media.site_public_consent ? {site_public_consent: true} : {})} : {}),
       automatic,
       request_id: requestId,
       url,
@@ -288,7 +289,11 @@ function siteProbeResult(message) {
         size_bytes: format.size_bytes, size_estimated: format.size_estimated,
         has_video: format.has_video, has_audio: format.has_audio}))};
 }
-function probeSiteNative(url) {
+function siteHostAllowed(host) {
+  return ["youtube.com", "youtu.be", "vimeo.com", "dailymotion.com"]
+    .some(domain => host === domain || host.endsWith("." + domain));
+}
+function probeSiteNative(url, publicSite) {
   return new Promise(resolve => {
     let port, finished = false;
     const requestId = crypto.randomUUID();
@@ -307,18 +312,21 @@ function probeSiteNative(url) {
           finish(siteProbeResult(message));
       });
       port.onDisconnect.addListener(() => finish(emptySiteProbe()));
-      port.postMessage({type: "site_probe", request_id: requestId, url});
+      port.postMessage({type: "site_probe", request_id: requestId, url,
+        ...(publicSite ? {explicit_consent: true} : {})});
     } catch (_) { finish(emptySiteProbe()); }
   });
 }
-async function siteProbeForTab(tabId, url, pageId) {
+async function siteProbeForTab(tabId, url, pageId, publicSite, force = false) {
   const now = Date.now();
   for (const [id, entry] of siteProbeCache)
     if (now - entry.at > 600000) siteProbeCache.delete(id);
   const cached = siteProbeCache.get(tabId);
-  if (cached?.url === url && cached.pageId === pageId) return cached.promise;
+  if (!force && cached?.url === url && cached.pageId === pageId &&
+      cached.publicSite === publicSite) return cached.promise;
   if (siteProbeCache.size >= 64) siteProbeCache.delete(siteProbeCache.keys().next().value);
-  const entry = {url, pageId, at: now, promise: probeSiteNative(url)};
+  const entry = {url, pageId, publicSite, at: now,
+    promise: probeSiteNative(url, publicSite)};
   siteProbeCache.set(tabId, entry);
   return entry.promise;
 }
@@ -419,7 +427,8 @@ chrome.permissions?.onRemoved?.addListener(() => {
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   const fromOptions = sender.url === chrome.runtime.getURL("options.html") &&
     ["cdm_media_list", "cdm_media_offer"].includes(message?.type);
-  const fromPage = Number.isInteger(sender.tab?.id) && sender.frameId === 0 &&
+  const fromPage = Number.isInteger(sender.tab?.id) && !sender.tab.incognito &&
+    sender.frameId === 0 &&
     !!originFor(sender.url) &&
     ["cdm_media_list_tab", "cdm_media_offer_tab",
       "cdm_site_probe_tab", "cdm_site_select_tab"].includes(message?.type);
@@ -440,15 +449,30 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
           !url.startsWith("https://") ||
           !!new URL(url).username || !!new URL(url).password ||
           new TextEncoder().encode(url).length > 2047 ||
-          CdmFilters.excluded(url, CdmFilters.normalizeSites(
-            (await chrome.storage.sync.get("siteExclusions")).siteExclusions)) ||
+          (message.type === "cdm_site_probe_tab" && !message.explicit &&
+            CdmFilters.excluded(url, CdmFilters.normalizeSites(
+            (await chrome.storage.sync.get("siteExclusions")).siteExclusions))) ||
+          ![undefined, true].includes(message.explicit) ||
           !await chrome.permissions.contains({permissions: ["webRequest"],
             origins: ["http://*/*", "https://*/*"]})) {
         reply(message.type === "cdm_site_probe_tab" ? emptySiteProbe() : {ok: false});
         return;
       }
       if (message.type === "cdm_site_probe_tab") {
-        reply(await siteProbeForTab(tabId, url, pageId));
+        const allowed = siteHostAllowed(new URL(url).hostname.toLowerCase());
+        if (!allowed && message.explicit !== true) {
+          const cached = siteProbeCache.get(tabId);
+          if (cached?.url === url && cached.pageId === pageId &&
+              cached.publicSite) {
+            const result = await cached.promise;
+            reply(result.formats.length ? result : {...result, manual_required: true});
+          } else {
+            reply({...emptySiteProbe(), manual_required: true});
+          }
+          return;
+        }
+        reply(await siteProbeForTab(tabId, url, pageId, !allowed,
+                                    !allowed && message.explicit === true));
         return;
       }
       const entry = siteProbeCache.get(tabId);
@@ -467,7 +491,8 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       const ok = await offerDownload(
         {filename: title + "." + selected.ext, incognito: false},
         url, false, {kind: "video", context: {}, site_format_id: selected.id,
-          site_format_label: label, site_format_has_audio: selected.has_audio});
+          site_format_label: label, site_format_has_audio: selected.has_audio,
+          site_public_consent: entry.publicSite});
       reply({ok});
       return;
     }

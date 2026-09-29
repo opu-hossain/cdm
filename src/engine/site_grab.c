@@ -190,6 +190,53 @@ bool site_grab_host_allowed(const char *host) {
   return host_is(host, "youtube.com") || host_is(host, "youtu.be") ||
          host_is(host, "vimeo.com") || host_is(host, "dailymotion.com");
 }
+static bool public_host_allowed(const char *host) {
+  if (!host) return false;
+  size_t length = strlen(host);
+  if (!length || length > 253 || host[length - 1] == '.') return false;
+  const char *last_dot = strrchr(host, '.');
+  if (!last_dot || !last_dot[1]) return false;
+  bool tld_has_letter = false;
+  size_t label = 0;
+  for (const char *p = host; *p; p++) {
+    unsigned char c = (unsigned char)*p;
+    if (c == '.') {
+      if (!label || label > 63 || p[-1] == '-') return false;
+      label = 0;
+      continue;
+    }
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+          (c >= '0' && c <= '9') || c == '-') ||
+        (!label && c == '-')) return false;
+    if (p > last_dot && isalpha(c)) tld_has_letter = true;
+    label++;
+  }
+  if (!label || label > 63 || host[length - 1] == '-' || !tld_has_letter)
+    return false;
+  static const char *blocked[] = {
+    "localhost", "local", "internal", "lan", "home", "onion", "test", "arpa"
+  };
+  for (size_t i = 0; i < sizeof(blocked) / sizeof(blocked[0]); i++)
+    if (!strcasecmp(last_dot + 1, blocked[i])) return false;
+  return true;
+}
+
+bool site_grab_public_url_allowed(const char *url) {
+  if (!url || strlen(url) > 2047) return false;
+  CURLU *parsed = curl_url();
+  char *scheme = NULL, *host = NULL, *user = NULL, *pass = NULL;
+  bool ok = parsed &&
+            curl_url_set(parsed, CURLUPART_URL, url, 0) == CURLUE_OK &&
+            curl_url_get(parsed, CURLUPART_SCHEME, &scheme, 0) == CURLUE_OK &&
+            curl_url_get(parsed, CURLUPART_HOST, &host, 0) == CURLUE_OK &&
+            !strcasecmp(scheme, "https") && public_host_allowed(host);
+  if (ok && (curl_url_get(parsed, CURLUPART_USER, &user, 0) == CURLUE_OK ||
+             curl_url_get(parsed, CURLUPART_PASSWORD, &pass, 0) == CURLUE_OK))
+    ok = false;
+  curl_free(scheme); curl_free(host); curl_free(user); curl_free(pass);
+  curl_url_cleanup(parsed);
+  return ok;
+}
 bool site_grab_url_allowed(const char *url) {
   if (!url)
     return false;
@@ -292,10 +339,13 @@ bool site_grab_parse_progress(const char *line, SiteGrabProgress *out) {
 #include "../utils/path.h"
 #include "finalize.h"
 
-int site_grab_probe(const char *url, const _Atomic bool *cancel, SiteGrabProbe *out) {
+int site_grab_probe_with_consent(const char *url, bool public_site,
+                                const _Atomic bool *cancel, SiteGrabProbe *out) {
   if (!out) return -1;
   memset(out, 0, sizeof(*out));
-  if (!url || strlen(url) > 2047 || !site_grab_url_allowed(url)) return -1;
+  if (!url || strlen(url) > 2047 ||
+      !(public_site ? site_grab_public_url_allowed(url)
+                    : site_grab_url_allowed(url))) return -1;
   DownloadManagerConfig config;
   config_get(&config);
   if (!config.use_yt_dlp || !spawn_site_tool_available()) return -1;
@@ -315,6 +365,9 @@ int site_grab_probe(const char *url, const _Atomic bool *cancel, SiteGrabProbe *
   for (size_t i = 0; i < length; i++) private_bytes[i] = 0;
   free(json);
   return rc;
+}
+int site_grab_probe(const char *url, const _Atomic bool *cancel, SiteGrabProbe *out) {
+  return site_grab_probe_with_consent(url, false, cancel, out);
 }
 #ifndef _WIN32
 #include <dirent.h>
@@ -460,7 +513,9 @@ int site_grab_run_download(struct Download *d) {
   DownloadManagerConfig config;
   config_get(&config);
   if (!d->site_grab || !config.use_yt_dlp || !spawn_site_tool_available() ||
-      !site_grab_url_allowed(d->url) || d->requires_browser_context ||
+      !(d->site_grab_public ? site_grab_public_url_allowed(d->url)
+                            : site_grab_url_allowed(d->url)) ||
+      d->requires_browser_context ||
       (d->request && d->request->browser_context))
     return -1;
   char original[1024], directory[1200], lock_path[1300], template[1300];

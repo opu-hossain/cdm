@@ -101,6 +101,12 @@ def main(host: str) -> None:
          "url": "https://example.invalid/" + "x" * 2048},
         {"type": "site_probe", "request_id": "probe-6",
          "url": "https://example.invalid/watch\nsecret"},
+        {"type": "site_probe", "request_id": "probe-7",
+         "url": "https://example.invalid/watch", "explicit_consent": True},
+        {"type": "site_probe", "request_id": "probe-8",
+         "url": "https://127.0.0.1/watch", "explicit_consent": True},
+        {"type": "site_probe", "request_id": "probe-9",
+         "url": "https://example.invalid/watch", "explicit_consent": "yes"},
     ]
     result = subprocess.run([host], input=b"".join(frame(json.dumps(value).encode())
         for value in probes), env=invalid_env, capture_output=True, timeout=5)
@@ -108,7 +114,7 @@ def main(host: str) -> None:
     assert len(probe_replies) == len(probes), probe_replies
     assert all(reply["type"] == "error" for reply in probe_replies), probe_replies
     assert [reply["request_id"] for reply in probe_replies] == [
-        "probe-1", "probe-2", "", "", "", ""], probe_replies
+        "probe-1", "probe-2", "", "", "", "", "probe-7", "probe-8", ""], probe_replies
     assert b"secret" not in result.stdout + result.stderr
     for field, value in (("cookie", "x\r\nY"), ("cookie", "x" * 4097),
                          ("user_agent", "x" * 257), ("referer", "x" * 2049),
@@ -132,6 +138,8 @@ def main(host: str) -> None:
         {"site_format_id": "18", "site_format_label": "360p"},
         {"site_format_id": "18", "site_format_label": "360p",
          "site_format_has_audio": True, "cookie": "secret"},
+        {"site_format_id": "18", "site_format_label": "360p",
+         "site_format_has_audio": True, "site_public_consent": "yes"},
     ):
         offer = {**base, "type": "media_offer", "kind": "video", **fields}
         result = subprocess.run([host], input=frame(json.dumps(offer).encode()),
@@ -152,11 +160,12 @@ def main(host: str) -> None:
                     ("filename", ctypes.c_char * 512), ("mime", ctypes.c_char * 128),
                     ("referrer", ctypes.c_char * 2048)]
 
-    for media, version, with_context, format_id in (
-            (None, 8, True, None), ("hls", 10, True, None),
-            ("dash", 10, False, None), ("video", 10, True, None),
-            ("hls", 9, False, None), ("video", 14, False, "18"),
-            ("video", 13, False, "18")):
+    for media, version, with_context, format_id, public in (
+            (None, 8, True, None, False), ("hls", 10, True, None, False),
+            ("dash", 10, False, None, False), ("video", 10, True, None, False),
+            ("hls", 9, False, None, False), ("video", 14, False, "18", False),
+            ("video", 13, False, "18", False), ("video", 15, False, "18", True),
+            ("video", 14, False, "18", True)):
         with tempfile.TemporaryDirectory(prefix="cdm-host-context-") as root:
             runtime = Path(root) / "runtime"
             runtime.mkdir(mode=0o700)
@@ -185,7 +194,8 @@ def main(host: str) -> None:
                         header = exact(peer, 8)
                         assert struct.unpack("=II", header) == (0, 41), header
                         peer.sendall(struct.pack("=H", version))
-                        if (media and version < 10) or (format_id and version < 14):
+                        if (media and version < 10) or (format_id and version < 14) or (
+                                public and version < 15):
                             assert peer.recv(1) == b"", "media sent to an old daemon"
                             return
                         header = exact(peer, 8)
@@ -215,25 +225,31 @@ def main(host: str) -> None:
             if format_id:
                 payload.update(site_format_id=format_id, site_format_label="360p MP4",
                                site_format_has_audio=True)
+            if public:
+                payload["site_public_consent"] = True
             result = subprocess.run([host], input=frame(json.dumps(configuration).encode()) +
                                     frame(json.dumps(payload).encode()),
                                     env=env, capture_output=True, timeout=5)
             worker.join(timeout=2)
             assert not worker.is_alive(), "fake daemon did not finish"
             assert not failures, failures
-            if (media and version < 10) or (format_id and version < 14):
+            if (media and version < 10) or (format_id and version < 14) or (
+                    public and version < 15):
                 replies = decode_frames(result.stdout)
                 assert not observed
-                assert ("support media" if version < 10 else "selected site formats"
+                assert ("support media" if version < 10 else
+                        "selected site formats" if version < 14 else "public site offers"
                         ) in replies[1]["error"], replies
                 continue
             assert observed, result.stderr.decode(errors="replace")
-            assert observed[0][0] == (63 if format_id else 56), observed
+            assert observed[0][0] == (65 if public else 63 if format_id else 56), observed
             if media:
                 assert observed[0][1]["kind"] == media, observed
             if format_id:
                 assert observed[0][1]["site_format_id"] == format_id, observed
                 assert observed[0][1]["site_format_has_audio"] is True, observed
+            if public:
+                assert observed[0][1]["site_public_consent"] is True, observed
             assert all(observed[0][1].get(key, "") == payload.get(key, "")
                        for key in ("cookie", "user_agent", "referer")), observed
             replies = decode_frames(result.stdout)

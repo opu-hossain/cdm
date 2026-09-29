@@ -158,7 +158,7 @@ static bool copy_context_field(const cJSON *root, const char *key, char *out,
 
 static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer,
                         HostRequestContext *context, uint32_t *media_kind,
-                        IpcBrowserSiteFormatV1 *site_format) {
+                        IpcBrowserSiteFormatV1 *site_format, bool *public_site) {
   const cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
   if (!cJSON_IsString(type)) return false;
   *media_kind = IPC_BROWSER_MEDIA_NONE;
@@ -175,6 +175,7 @@ static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer,
   memset(offer, 0, sizeof(*offer));
   memset(context, 0, sizeof(*context));
   memset(site_format, 0, sizeof(*site_format));
+  *public_site = false;
   if (!copy_field(root, "request_id", offer->request_id,
                   sizeof(offer->request_id), true) ||
       !copy_field(root, "url", offer->url, sizeof(offer->url), true) ||
@@ -210,6 +211,13 @@ static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer,
              cJSON_GetObjectItemCaseSensitive(root, "site_format_has_audio")) {
     return false;
   }
+  const cJSON *consent = cJSON_GetObjectItemCaseSensitive(root, "site_public_consent");
+  if (consent) {
+    if (!cJSON_IsTrue(consent) || !site_format->id[0] ||
+        !site_grab_public_url_allowed(offer->url))
+      return false;
+    *public_site = true;
+  }
   const cJSON *total = cJSON_GetObjectItemCaseSensitive(root, "total_bytes");
   if (total && (!cJSON_IsNumber(total) || total->valuedouble < 0 ||
                 total->valuedouble > 9007199254740991.0))
@@ -242,7 +250,8 @@ static void clear_context_fields(cJSON *root) {
 
 static char *context_offer_json(const IpcBrowserOffer *offer,
                                 const HostRequestContext *context, uint32_t media_kind,
-                                const IpcBrowserSiteFormatV1 *site_format) {
+                                const IpcBrowserSiteFormatV1 *site_format,
+                                bool public_site) {
   cJSON *root = cJSON_CreateObject();
   if (!root) return NULL;
   bool ok = cJSON_AddStringToObject(root, "request_id", offer->request_id) &&
@@ -264,6 +273,8 @@ static char *context_offer_json(const IpcBrowserOffer *offer,
          cJSON_AddStringToObject(root, "site_format_label", site_format->label) &&
          cJSON_AddBoolToObject(root, "site_format_has_audio",
                                site_format->has_audio != 0);
+  if (public_site)
+    ok = ok && cJSON_AddBoolToObject(root, "site_public_consent", true);
   char *json = ok ? cJSON_PrintUnformatted(root) : NULL;
   clear_context_fields(root);
   cJSON_Delete(root);
@@ -316,6 +327,7 @@ static bool valid_probe_text(const char *text) {
 static bool handle_site_probe(const cJSON *root) {
   char request_id[128];
   char url[2048];
+  const cJSON *consent = cJSON_GetObjectItemCaseSensitive(root, "explicit_consent");
   if (!copy_field(root, "request_id", request_id, sizeof(request_id), true) ||
       !valid_probe_text(request_id) ||
       !copy_field(root, "url", url, sizeof(url), true) ||
@@ -325,8 +337,11 @@ static bool handle_site_probe(const cJSON *root) {
       cJSON_GetObjectItemCaseSensitive(root, "referer") ||
       cJSON_GetObjectItemCaseSensitive(root, "user_agent"))
     return send_error(NULL, "invalid site probe");
+  if (consent && !cJSON_IsBool(consent))
+    return send_error(NULL, "invalid site probe");
+  bool public_site = cJSON_IsTrue(consent);
   SiteGrabProbe probe = {0};
-  if (site_grab_probe(url, NULL, &probe) != 0)
+  if (site_grab_probe_with_consent(url, public_site, NULL, &probe) != 0)
     return send_error(request_id, "site probe unavailable or unsupported");
 
   cJSON *reply = cJSON_CreateObject();
@@ -561,7 +576,9 @@ static bool handle_message(const char *json) {
   HostRequestContext context = {0};
   uint32_t media_kind = IPC_BROWSER_MEDIA_NONE;
   IpcBrowserSiteFormatV1 site_format = {0};
-  if (!parse_offer(root, &offered, &context, &media_kind, &site_format)) {
+  bool public_site = false;
+  if (!parse_offer(root, &offered, &context, &media_kind, &site_format,
+                   &public_site)) {
     const cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "request_id");
     bool ok = send_error(cJSON_IsString(id) ? id->valuestring : NULL,
                          tr("host.error.invalid_offer"));
@@ -589,7 +606,8 @@ static bool handle_message(const char *json) {
                      context.referer[0];
   bool use_json = has_context || media_kind || site_format.id[0];
   char *context_json = use_json
-      ? context_offer_json(&offered, &context, media_kind, &site_format) : NULL;
+      ? context_offer_json(&offered, &context, media_kind, &site_format,
+                           public_site) : NULL;
   clear_context(&context);
   if (use_json) {
     /* Check the 16 KiB daemon frame before starting or contacting it. */
@@ -624,6 +642,11 @@ static bool handle_message(const char *json) {
     clear_json(context_json);
     return send_error(offered.request_id, "daemon does not support selected site formats");
   }
+  if (public_site && daemon_version < 15) {
+    ipc_client_disconnect(daemon);
+    clear_json(context_json);
+    return send_error(offered.request_id, "daemon does not support public site offers");
+  }
   if (has_context && daemon_version < 8) {
     ipc_client_disconnect(daemon);
     clear_json(context_json);
@@ -631,6 +654,7 @@ static bool handle_message(const char *json) {
   }
   IpcBrowserOffer registered = {0};
   int result = use_json ? forward_context_offer(daemon,
+      public_site ? MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1 :
       site_format.id[0] ? MSG_BROWSER_OFFER_FORMAT_V1 : MSG_BROWSER_OFFER_V2,
       context_json, &registered)
                            : ipc_browser_offer(daemon, &offered, &registered);

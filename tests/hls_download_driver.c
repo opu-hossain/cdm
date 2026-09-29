@@ -19,7 +19,9 @@ int main(int argc, char **argv) {
   Download *d = queue_manager_find_by_id(1);
   if (!d) {
     RequestOptions options = {0};
-    options.site_grab = argc >= 6 && strcmp(argv[5], "site") == 0;
+    options.site_grab = argc >= 6 && strncmp(argv[5], "site", 4) == 0;
+    options.site_grab_public = options.site_grab &&
+        strcmp(argv[5], "site-public") == 0;
     if (argc == 8 && options.site_grab) {
       int written = snprintf(options.site_format_id,
                              sizeof(options.site_format_id), "%s", argv[6]);

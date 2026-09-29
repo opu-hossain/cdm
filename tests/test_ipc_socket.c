@@ -1078,6 +1078,32 @@ Test(ipc, opt_in_site_confirmation_discards_browser_context) {
   queue_manager_remove(d->id);cr_assert_eq(db_restore_queue(),0);
   d=queue_manager_find_by_id(formatted_response.id);cr_assert_not_null(d);
   cr_assert_str_eq(d->site_format_id,"18");
+  queue_manager_remove(d->id);
+  const char public_json[] =
+      "{\"request_id\":\"site-public\",\"url\":\"https://example.invalid/watch\","
+      "\"kind\":\"video\",\"site_format_id\":\"18\","
+      "\"site_format_label\":\"360p MP4\","
+      "\"site_format_has_audio\":true,\"site_public_consent\":true}";
+  MsgHeader public_header={.length=sizeof(public_json)-1,
+      .type=MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1};
+  cr_assert_eq(ipc_write_exact(client,&public_header,sizeof(public_header)),0);
+  cr_assert_eq(ipc_write_exact(client,public_json,public_header.length),0);
+  IpcBrowserOffer public_offer={0};
+  cr_assert_eq(ipc_read_exact(client,&public_offer,sizeof(public_offer)),0);
+  cr_assert_neq(public_offer.offer_id,0);
+  cr_assert_eq(ipc_browser_site_capability_v1(client,public_offer.offer_id,&eligible),0);
+  cr_assert(eligible);
+  char public_dest[256];
+  n=snprintf(public_dest,sizeof(public_dest),"%s/public.mp4",root);
+  cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(public_dest));
+  IpcAddResponse public_response={0};
+  cr_assert_eq(ipc_browser_confirm_site_v1(client,public_offer.offer_id,
+      public_dest,&public_response),0);
+  d=queue_manager_find_by_id(public_response.id);cr_assert_not_null(d);
+  cr_assert(d->site_grab_public);
+  queue_manager_remove(d->id);cr_assert_eq(db_restore_queue(),0);
+  d=queue_manager_find_by_id(public_response.id);cr_assert_not_null(d);
+  cr_assert(d->site_grab_public);cr_assert_str_eq(d->site_format_id,"18");
   queue_manager_remove(d->id);ipc_client_disconnect(client);atomic_store(&browser_server_running,false);thrd_join(server,NULL);ipc_server_stop();db_close();
-  unlink(destination);unlink(formatted_dest);unlink(executable);unlink(config_path);unsetenv("DOWNLOADMGR_ROOT");char downloads[256];n=snprintf(downloads,sizeof(downloads),"%s/Downloads",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(downloads));rmdir(downloads);rmdir(root);
+  unlink(destination);unlink(formatted_dest);unlink(public_dest);unlink(executable);unlink(config_path);unsetenv("DOWNLOADMGR_ROOT");char downloads[256];n=snprintf(downloads,sizeof(downloads),"%s/Downloads",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(downloads));rmdir(downloads);rmdir(root);
 }

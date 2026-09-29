@@ -62,9 +62,10 @@ typedef enum {
   MSG_EXPORT_PAGE_V1 = 62, // page plus size/category/media/context metadata
   MSG_BROWSER_OFFER_FORMAT_V1 = 63, // v2 JSON plus selected site format
   MSG_BROWSER_FORMAT_INFO_V1 = 64, // offer ID -> IpcBrowserSiteFormatV1
+  MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1 = 65, // explicit public HTTPS site consent
 } MsgType;
 
-#define IPC_PROTOCOL_VERSION 14
+#define IPC_PROTOCOL_VERSION 15
 #define IPC_BROWSER_HAS_COOKIE 1u
 #define IPC_BROWSER_HAS_USER_AGENT 2u
 #define IPC_BROWSER_HAS_REFERER 4u

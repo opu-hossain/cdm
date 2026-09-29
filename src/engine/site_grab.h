@@ -13,6 +13,7 @@ typedef struct {
   double percent;       /* -1 = unknown */
 } SiteGrabProgress;
 bool site_grab_url_allowed(const char *url);
+bool site_grab_public_url_allowed(const char *url);
 bool site_grab_host_allowed(const char *host);
 bool site_grab_format_id_valid(const char *id);
 bool site_grab_parse_progress(const char *line, SiteGrabProgress *out);
@@ -38,6 +39,8 @@ bool site_grab_parse_probe_json(const char *json, size_t length, SiteGrabProbe *
 bool site_grab_parse_probe_output(const char *text, size_t length, SiteGrabProbe *out);
 /* Read-only metadata probe; existing HTTPS site allowlist and tool opt-in apply. */
 int site_grab_probe(const char *url, const _Atomic bool *cancel, SiteGrabProbe *out);
+int site_grab_probe_with_consent(const char *url, bool public_site,
+                                const _Atomic bool *cancel, SiteGrabProbe *out);
 struct Download;
 int site_grab_run_download(struct Download *download);
 #endif

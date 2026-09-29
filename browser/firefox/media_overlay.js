@@ -3,7 +3,7 @@
   const api = typeof browser !== "undefined" ? browser : chrome;
   const pageId = crypto.randomUUID();
   let host, button, panel, title, rows = [], site = {title: "", formats: []};
-  let refreshing = false, rendered = "";
+  let refreshing = false, rendered = "", manualRequired = false;
 
   function playingVideo() {
     let chosen = null, area = 0;
@@ -35,7 +35,13 @@
     button = document.createElement("button");
     button.type = "button";
     button.textContent = "Download with cdm";
-    button.addEventListener("click", () => { panel.hidden = !panel.hidden; });
+    button.addEventListener("click", () => {
+      if (manualRequired && !rows.length && !site.formats.length) {
+        return checkFormats();
+      } else {
+        panel.hidden = !panel.hidden;
+      }
+    });
     panel = document.createElement("div");
     panel.className = "panel";
     panel.hidden = true;
@@ -46,7 +52,7 @@
   }
 
   function position() {
-    if (!host || (!rows.length && !site.formats.length)) return;
+    if (!host || (!rows.length && !site.formats.length && !manualRequired)) return;
     const video = playingVideo();
     if (!video) { host.style.display = "none"; return; }
     const rect = video.getBoundingClientRect();
@@ -96,6 +102,32 @@
       });
       panel.appendChild(choice);
     }
+    if (manualRequired && rows.length) {
+      const check = document.createElement("button");
+      check.type = "button";
+      check.textContent = "Check site formats with cdm";
+      check.addEventListener("click", checkFormats);
+      panel.appendChild(check);
+    }
+  }
+
+  async function checkFormats() {
+    button.disabled = true;
+    button.textContent = "Checking formats…";
+    try {
+      const result = await api.runtime.sendMessage(
+        {type: "cdm_site_probe_tab", page_id: pageId, explicit: true});
+      site = result && typeof result.title === "string" &&
+        Array.isArray(result.formats) ? result : {title: "", formats: []};
+      manualRequired = !site.formats.length;
+      render();
+      panel.hidden = !site.formats.length;
+      button.textContent = site.formats.length ? "Download with cdm" :
+        "No formats found · Retry";
+      position();
+    } catch (_) {
+      button.textContent = "Could not check formats · Retry";
+    } finally { button.disabled = false; }
   }
 
   async function refresh() {
@@ -116,16 +148,18 @@
         typeof item.filename === "string" && item.filename.length <= 511).slice(0, 64) : [];
       site = siteResult && typeof siteResult.title === "string" &&
         Array.isArray(siteResult.formats) ? siteResult : {title: "", formats: []};
-      if (!rows.length && !site.formats.length) {
+      manualRequired = siteResult?.manual_required === true;
+      if (!rows.length && !site.formats.length && !manualRequired) {
         rendered = "";
         if (host) host.style.display = "none";
         if (panel) panel.hidden = true;
         return;
       }
       ensureUi();
-      const signature = JSON.stringify([document.title, rows, site]);
+      const signature = JSON.stringify([document.title, rows, site, manualRequired]);
       if (signature !== rendered) {
-        button.textContent = "Download with cdm";
+        button.textContent = manualRequired && !rows.length
+          ? "Check formats with cdm" : "Download with cdm";
         render();
         rendered = signature;
       }
@@ -133,6 +167,7 @@
     } catch (_) {
       rows = [];
       site = {title: "", formats: []};
+      manualRequired = false;
       if (host) host.style.display = "none";
     } finally { refreshing = false; }
   }

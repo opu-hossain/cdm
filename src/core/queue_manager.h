@@ -32,6 +32,7 @@ typedef enum {
 typedef struct {
   DownloadMediaKind media_kind;
   bool site_grab; // opt-in external site extractor, internal only
+  bool site_grab_public; // explicit per-page consent for public HTTPS site
   char site_format_id[64]; // selected yt-dlp format, empty = configured default
   bool site_format_has_audio;
   char cookie[4097];
@@ -68,6 +69,7 @@ typedef struct Download {
   uint32_t id;
   DownloadMediaKind media_kind; // immutable after queue publication
   bool site_grab; // immutable after queue publication; persisted
+  bool site_grab_public; // immutable after queue publication; persisted
   char site_format_id[64]; // immutable after queue publication; persisted
   bool site_format_has_audio;
   char last_error[256]; // queue mutex; redacted diagnostic
@@ -184,6 +186,7 @@ int queue_manager_count_by_status_locked(DownloadStatus s);
 bool queue_manager_get_status(uint32_t id, DownloadStatus *out_status);
 bool queue_manager_get_media_kind(uint32_t id, DownloadMediaKind *out);
 bool queue_manager_get_site_grab(uint32_t id, bool *out);
+bool queue_manager_get_site_public(uint32_t id, bool *out);
 bool queue_manager_get_site_format(uint32_t id, char out[64], bool *has_audio);
 bool queue_manager_get_error(uint32_t id, char *out, size_t capacity);
 void queue_manager_set_site_error(uint32_t id, const char *error);

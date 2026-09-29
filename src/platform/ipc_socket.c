@@ -178,6 +178,7 @@ typedef struct {
   IpcBrowserOffer offer;
   uint32_t media_kind; // IPC poll thread owns offer metadata
   IpcBrowserSiteFormatV1 site_format;
+  bool public_site;
   RequestOptions context; // IPC-thread-owned until copied on confirmation
   time_t touched_at;
   bool duplicate;
@@ -275,7 +276,8 @@ static bool browser_header_valid(const char *value) {
 
 static bool browser_parse_offer(const char *json, IpcBrowserOffer *out,
                                  RequestOptions *context, uint32_t *media_kind,
-                                 IpcBrowserSiteFormatV1 *site_format) {
+                                 IpcBrowserSiteFormatV1 *site_format,
+                                 bool public_site) {
   /* cJSON strings have no length; reject escaped NUL in all offer fields. */
   for (const char *p = json; *p; p++) {
     if (*p == '\\' && p[1]) {
@@ -347,6 +349,13 @@ static bool browser_parse_offer(const char *json, IpcBrowserOffer *out,
   } else if (cJSON_GetObjectItemCaseSensitive(root, "site_format_id") ||
              cJSON_GetObjectItemCaseSensitive(root, "site_format_label") ||
              cJSON_GetObjectItemCaseSensitive(root, "site_format_has_audio")) {
+    valid = false;
+  }
+  const cJSON *consent = cJSON_GetObjectItemCaseSensitive(root, "site_public_consent");
+  if (public_site) {
+    valid = valid && cJSON_IsTrue(consent) &&
+            site_grab_public_url_allowed(out->url);
+  } else if (consent) {
     valid = false;
   }
   const cJSON *total = cJSON_GetObjectItemCaseSensitive(root, "total_bytes");
@@ -510,6 +519,7 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_BROWSER_OFFER:
   case MSG_BROWSER_OFFER_V2:
   case MSG_BROWSER_OFFER_FORMAT_V1:
+  case MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1:
     return header->length <= IPC_MAX_FRAME_SIZE;
   case MSG_PAUSE:
   case MSG_RESUME:
@@ -793,7 +803,8 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
   }
   case MSG_BROWSER_OFFER:
   case MSG_BROWSER_OFFER_V2:
-  case MSG_BROWSER_OFFER_FORMAT_V1: {
+  case MSG_BROWSER_OFFER_FORMAT_V1:
+  case MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1: {
     char json[IPC_MAX_FRAME_SIZE + 1];
     IpcBrowserOffer response = {0};
     if (ipc_read_exact(client_fd, json, hdr->length) != 0)
@@ -806,13 +817,18 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     if (!memchr(json, '\0', hdr->length) &&
         browser_parse_offer(json, &proposed,
             hdr->type == MSG_BROWSER_OFFER ? NULL : &context, &media_kind,
-            hdr->type == MSG_BROWSER_OFFER_FORMAT_V1 ? &site_format : NULL)) {
+            (hdr->type == MSG_BROWSER_OFFER_FORMAT_V1 ||
+             hdr->type == MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1)
+                ? &site_format : NULL,
+            hdr->type == MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1)) {
       BrowserOfferSlot *slot = browser_find_request(proposed.request_id);
       if (slot && (strcmp(slot->offer.url, proposed.url) != 0 ||
                    slot->media_kind != media_kind ||
                    strcmp(slot->site_format.id, site_format.id) != 0 ||
                    strcmp(slot->site_format.label, site_format.label) != 0 ||
-                   slot->site_format.has_audio != site_format.has_audio)) {
+                   slot->site_format.has_audio != site_format.has_audio ||
+                   slot->public_site !=
+                     (hdr->type == MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1))) {
         LOG_WARN("Browser request ID reused with different offer metadata");
         slot = NULL;
       } else if (!slot) {
@@ -834,6 +850,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
             slot->context = context;
             slot->media_kind = media_kind;
             slot->site_format = site_format;
+            slot->public_site = hdr->type == MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1;
             slot->offer.offer_id = id;
             slot->touched_at = time(NULL);
             LOG_INFO("Browser offer %u registered", id);
@@ -889,7 +906,8 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         (slot->media_kind == IPC_BROWSER_MEDIA_NONE ||
          slot->media_kind == IPC_BROWSER_MEDIA_VIDEO) &&
         config.use_yt_dlp && spawn_site_tool_available() &&
-        site_grab_url_allowed(slot->offer.url)) eligible = 1;
+        (slot->public_site ? site_grab_public_url_allowed(slot->offer.url)
+                           : site_grab_url_allowed(slot->offer.url))) eligible = 1;
     ipc_write_exact(client_fd, &eligible, sizeof(eligible));
     break;
   }
@@ -936,7 +954,9 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         if (!site && slot->site_format.id[0])
           goto confirm_response;
         if (site && (!config.use_yt_dlp || !spawn_site_tool_available() ||
-                     !site_grab_url_allowed(slot->offer.url) ||
+                     !(slot->public_site
+                         ? site_grab_public_url_allowed(slot->offer.url)
+                         : site_grab_url_allowed(slot->offer.url)) ||
                      (slot->media_kind != IPC_BROWSER_MEDIA_NONE &&
                       slot->media_kind != IPC_BROWSER_MEDIA_VIDEO)))
           goto confirm_response;
@@ -944,6 +964,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         if (site) {
           browser_clear(&opts, sizeof(opts));
           opts.site_grab = true;
+          opts.site_grab_public = slot->public_site;
           memcpy(opts.site_format_id, slot->site_format.id,
                  sizeof(opts.site_format_id));
           opts.site_format_has_audio = slot->site_format.has_audio != 0;
@@ -959,12 +980,15 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         if (found == 1) {
           DownloadMediaKind existing_kind;
           bool existing_site = false;
+          bool existing_public = false;
           char existing_format[64] = {0};
           bool existing_audio = false;
           if (!queue_manager_get_media_kind(download_id, &existing_kind) ||
               !queue_manager_get_site_grab(download_id, &existing_site) ||
+              !queue_manager_get_site_public(download_id, &existing_public) ||
               !queue_manager_get_site_format(download_id, existing_format, &existing_audio) ||
               existing_site != site ||
+              (site && existing_public != opts.site_grab_public) ||
               (site && (strcmp(existing_format, opts.site_format_id) != 0 ||
                         existing_audio != opts.site_format_has_audio)) ||
               ((existing_kind == DOWNLOAD_MEDIA_HLS || existing_kind == DOWNLOAD_MEDIA_DASH ||
