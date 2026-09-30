@@ -19,7 +19,7 @@ After `scripts/cdm-release bump` changes the version, all checkboxes reset. Date
 - [ ] On a release desktop, inspect queue schedules/actions, category editing, tray controls, clipboard review, and both GUI themes. Confirm dialogs before destructive actions.
 - [ ] In installed Chromium and Firefox, load each extension and register its native host. Verify confirmation/progress, context consent, filters/exclusions, context menus, and URL refresh against a local HTTP server.
 - [x] Download ffmpeg-generated HLS and DASH VOD over `127.0.0.1` and verify both published outputs contain playable video and audio with ffprobe (2026-09-28).
-- [ ] Confirm HLS/DASH offers in an installed browser and an explicit yt-dlp selection on a consented external test site; verify failure behavior when ffmpeg or yt-dlp is absent.
+- [ ] Confirm direct video/HLS/DASH offers through the in-frame picker in both installed browsers; verify missing-ffmpeg behavior and that unsupported YouTube site streams are not offered.
 - [x] Confirm staged `/etc/xdg/autostart/cdm-daemon.desktop`, desktop launcher, browser extension files, Spanish catalog, and native-host binary are present (`DESTDIR` install and DEB/RPM file-list inspection, 2026-09-28).
 
 ## Package checks

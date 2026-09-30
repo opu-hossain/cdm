@@ -13,7 +13,7 @@ The current source builds Linux DEB and RPM packages and includes an Arch PKGBUI
 - **Desktop GUI:** Add single or multiple URLs, manage downloads and queues, see speed and ETA, search history, choose Light/Dark/System theme, and switch between English and Spanish.
 - **CLI:** Add, pause, resume, cancel, list, and export/import settings and history as JSON.
 - **Browser handoff:** Optional Chrome/Chromium and Firefox extensions offer supported downloads for confirmation; filters, context menus, and optional site-specific browser-session sharing are available.
-- **Video:** Select detected HLS/DASH or video URLs in extension Options; optional `yt-dlp` can handle supported video-site pages. See [video downloads](#video-downloads).
+- **Video:** Select detected direct video, HLS, or DASH streams from the in-page control or extension Options. See [video downloads](#video-downloads).
 - **Desktop extras:** On-demand or login-started daemon, notifications, optional tray and clipboard review, and an optional external antivirus scanner.
 
 ## Install a locally built package
@@ -86,9 +86,7 @@ The optional extensions hand supported GET downloads to cdm. Per-origin consent 
 
 ## Video downloads
 
-The extension's **ON** badge enables browser-session sharing for one site; it does not start video detection. To try detection, open the extension's **Options**, enable **Media detection**, click **Save filters and exclusions**, and grant the requested permission. Play a video, then return to Options, click **Refresh detected media**, select a candidate, and click **Offer selected media to cdm**. Detection does not open a popup by itself. It lists direct video files and supported HLS/DASH manifests; YouTube playback may leave the list empty because it can use another streaming protocol. See [media downloads](docs/media.md) for format limits.
-
-For a supported video-site page such as YouTube, install `yt-dlp`, enable `use_yt_dlp = true` under `[sites]` in `~/.local/share/cdm/config.toml`, restart the daemon, then right-click the video page and choose **Download page with cdm**. In the confirmation popup, select **Use yt-dlp for this site**. This option is disabled by default and sends the page URL without browser cookies or headers.
+The extension's **ON** badge enables browser-session sharing for one site; it does not start video detection. In extension **Options**, enable **Media detection**, save, and grant the requested permission. Play a video and use **Download with cdm** at the top right of its frame to choose a detected direct video, HLS, or DASH stream. Options also lists retained media candidates. Detection alone does not start a download. YouTube site streams are not supported yet; they may not appear as direct media candidates. See [media downloads](docs/media.md) for format limits.
 
 Browser-captured session values stay in memory. Cookies, proxy credentials, and request options entered directly into cdm use plaintext local storage; ordinary JSON exports omit secrets.
 

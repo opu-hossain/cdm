@@ -1020,90 +1020,47 @@ Test(ipc, dash_confirmation_persists_media_kind) {
  ipc_client_disconnect(client);atomic_store(&browser_server_running,false);thrd_join(server,NULL);ipc_server_stop();db_close();unlink(path);unsetenv("DOWNLOADMGR_ROOT");rmdir(directory);
 }
 
-Test(ipc, opt_in_site_confirmation_discards_browser_context) {
-  char root[]="/tmp/cdm-site-ipc-XXXXXX";cr_assert_not_null(mkdtemp(root));
-  char executable[256],config_path[256],destination[256];
-  int n=snprintf(executable,sizeof(executable),"%s/yt-dlp",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(executable));
-  n=snprintf(config_path,sizeof(config_path),"%s/config.toml",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(config_path));
-  n=snprintf(destination,sizeof(destination),"%s/output.mp4",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(destination));
-  FILE *tool=fopen(executable,"wb");cr_assert_not_null(tool);cr_assert_gt(fputs("#!/bin/sh\nexit 0\n",tool),0);cr_assert_eq(fclose(tool),0);cr_assert_eq(chmod(executable,0700),0);
-  FILE *cfg=fopen(config_path,"wb");cr_assert_not_null(cfg);cr_assert_gt(fprintf(cfg,"[sites]\nuse_yt_dlp = true\nyt_dlp_path = \"%s\"\n",executable),0);cr_assert_eq(fclose(cfg),0);
-  cr_assert_eq(setenv("HOME",root,1),0);cr_assert_eq(setenv("DOWNLOADMGR_ROOT",root,1),0);config_init(config_path);
-  cr_assert_eq(db_init(":memory:"),0);cr_assert_eq(ipc_server_start(),0);atomic_store(&browser_server_running,true);
-  thrd_t server;cr_assert_eq(thrd_create(&server,browser_server_thread,NULL),thrd_success);
-  int client=ipc_client_connect_compatible(-1,NULL);cr_assert_geq(client,0);
-  const char denied[]="{\"request_id\":\"site-denied\",\"url\":\"https://example.invalid/watch\"}";
-  MsgHeader denied_header={.length=sizeof(denied)-1,.type=MSG_BROWSER_OFFER_V2};
-  cr_assert_eq(ipc_write_exact(client,&denied_header,sizeof(denied_header)),0);
-  cr_assert_eq(ipc_write_exact(client,denied,denied_header.length),0);
-  IpcBrowserOffer denied_offer={0};cr_assert_eq(ipc_read_exact(client,&denied_offer,sizeof(denied_offer)),0);
-  bool denied_eligible=true;cr_assert_eq(ipc_browser_site_capability_v1(client,denied_offer.offer_id,&denied_eligible),0);cr_assert_not(denied_eligible);
-  IpcAddResponse denied_response={0};cr_assert_eq(ipc_browser_confirm_site_v1(client,denied_offer.offer_id,destination,&denied_response),-1);cr_assert_eq(denied_response.result,IPC_RESULT_ERROR);
-  char json[512];n=snprintf(json,sizeof(json),"{\"request_id\":\"site-one\",\"url\":\"https://www.%s/watch\",\"cookie\":\"synthetic=1\"}","youtube.com");cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(json));
-  MsgHeader header={.length=(uint32_t)n,.type=MSG_BROWSER_OFFER_V2};cr_assert_eq(ipc_write_exact(client,&header,sizeof(header)),0);cr_assert_eq(ipc_write_exact(client,json,header.length),0);
-  IpcBrowserOffer offer={0};cr_assert_eq(ipc_read_exact(client,&offer,sizeof(offer)),0);cr_assert_neq(offer.offer_id,0);
-  bool eligible=false;cr_assert_eq(ipc_browser_site_capability_v1(client,offer.offer_id,&eligible),0);cr_assert(eligible);
-  IpcAddResponse response={0};cr_assert_eq(ipc_browser_confirm_site_v1(client,offer.offer_id,destination,&response),0);
-  Download *d=queue_manager_find_by_id(response.id);cr_assert_not_null(d);cr_assert(d->site_grab);cr_assert_not(d->requires_browser_context);cr_assert_null(d->request);
-  IpcDownloadDetails details={0};cr_assert_eq(db_get_download_details(d->id,&details),0);cr_assert_eq(details.cookie[0],0);
-  queue_manager_remove(d->id);cr_assert_eq(db_restore_queue(),0);d=queue_manager_find_by_id(response.id);cr_assert_not_null(d);cr_assert(d->site_grab);
-  queue_manager_remove(d->id);
-  char format_json[512], formatted_dest[256];
-  n=snprintf(format_json,sizeof(format_json),
-      "{\"request_id\":\"site-format\",\"url\":\"https://www.%s/watch2\","
-      "\"kind\":\"video\",\"site_format_id\":\"18\","
-      "\"site_format_label\":\"360p MP4\","
-      "\"site_format_has_audio\":true}", "youtube.com");
-  cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(format_json));
-  MsgHeader format_header={.length=(uint32_t)n,.type=MSG_BROWSER_OFFER_FORMAT_V1};
-  cr_assert_eq(ipc_write_exact(client,&format_header,sizeof(format_header)),0);
-  cr_assert_eq(ipc_write_exact(client,format_json,format_header.length),0);
-  IpcBrowserOffer formatted_offer={0};
-  cr_assert_eq(ipc_read_exact(client,&formatted_offer,sizeof(formatted_offer)),0);
-  cr_assert_neq(formatted_offer.offer_id,0);
+Test(ipc, retired_site_messages_are_rejected) {
+  char root[]="/tmp/cdm-retired-site-XXXXXX";
+  cr_assert_not_null(mkdtemp(root));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT",root,1),0);
+  cr_assert_eq(db_init(":memory:"),0);
+  cr_assert_eq(ipc_server_start(),0);
+  atomic_store(&browser_server_running,true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server,browser_server_thread,NULL),thrd_success);
+  int client=ipc_client_connect_compatible(-1,NULL);
+  cr_assert_geq(client,0);
+  const char json[]="{\"request_id\":\"legacy-site\",\"url\":\"https://example.invalid/watch\"}";
+  MsgHeader header={.length=sizeof(json)-1,.type=MSG_BROWSER_OFFER_V2};
+  cr_assert_eq(ipc_write_exact(client,&header,sizeof(header)),0);
+  cr_assert_eq(ipc_write_exact(client,json,header.length),0);
+  IpcBrowserOffer offer={0};
+  cr_assert_eq(ipc_read_exact(client,&offer,sizeof(offer)),0);
+  bool eligible=true;
+  cr_assert_eq(ipc_browser_site_capability_v1(client,offer.offer_id,&eligible),0);
+  cr_assert_not(eligible);
+  char destination[256];
+  int n=snprintf(destination,sizeof(destination),"%s/output.mp4",root);
+  cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(destination));
+  IpcAddResponse response={0};
+  cr_assert_eq(ipc_browser_confirm_site_v1(client,offer.offer_id,destination,&response),-1);
+  cr_assert_eq(response.result,IPC_RESULT_ERROR);
+  cr_assert_null(queue_manager_find_by_id(response.id));
   IpcBrowserSiteFormatV1 info={0};
-  cr_assert_eq(ipc_browser_site_format_info_v1(client,formatted_offer.offer_id,&info),0);
-  cr_assert_str_eq(info.id,"18");cr_assert_str_eq(info.label,"360p MP4");
-  cr_assert_eq(info.has_audio,1);
-  n=snprintf(formatted_dest,sizeof(formatted_dest),"%s/formatted.mp4",root);
-  cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(formatted_dest));
-  IpcAddResponse plain_response={0};
-  cr_assert_eq(ipc_browser_confirm_v2(client,formatted_offer.offer_id,
-      formatted_dest,&plain_response),-1);
-  IpcAddResponse formatted_response={0};
-  cr_assert_eq(ipc_browser_confirm_site_v1(client,formatted_offer.offer_id,
-      formatted_dest,&formatted_response),0);
-  d=queue_manager_find_by_id(formatted_response.id);cr_assert_not_null(d);
-  cr_assert_str_eq(d->site_format_id,"18");
-  queue_manager_remove(d->id);cr_assert_eq(db_restore_queue(),0);
-  d=queue_manager_find_by_id(formatted_response.id);cr_assert_not_null(d);
-  cr_assert_str_eq(d->site_format_id,"18");
-  queue_manager_remove(d->id);
-  const char public_json[] =
-      "{\"request_id\":\"site-public\",\"url\":\"https://example.invalid/watch\","
-      "\"kind\":\"video\",\"site_format_id\":\"18\","
-      "\"site_format_label\":\"360p MP4\","
-      "\"site_format_has_audio\":true,\"site_public_consent\":true}";
-  MsgHeader public_header={.length=sizeof(public_json)-1,
-      .type=MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1};
-  cr_assert_eq(ipc_write_exact(client,&public_header,sizeof(public_header)),0);
-  cr_assert_eq(ipc_write_exact(client,public_json,public_header.length),0);
-  IpcBrowserOffer public_offer={0};
-  cr_assert_eq(ipc_read_exact(client,&public_offer,sizeof(public_offer)),0);
-  cr_assert_neq(public_offer.offer_id,0);
-  cr_assert_eq(ipc_browser_site_capability_v1(client,public_offer.offer_id,&eligible),0);
-  cr_assert(eligible);
-  char public_dest[256];
-  n=snprintf(public_dest,sizeof(public_dest),"%s/public.mp4",root);
-  cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(public_dest));
-  IpcAddResponse public_response={0};
-  cr_assert_eq(ipc_browser_confirm_site_v1(client,public_offer.offer_id,
-      public_dest,&public_response),0);
-  d=queue_manager_find_by_id(public_response.id);cr_assert_not_null(d);
-  cr_assert(d->site_grab_public);
-  queue_manager_remove(d->id);cr_assert_eq(db_restore_queue(),0);
-  d=queue_manager_find_by_id(public_response.id);cr_assert_not_null(d);
-  cr_assert(d->site_grab_public);cr_assert_str_eq(d->site_format_id,"18");
-  queue_manager_remove(d->id);ipc_client_disconnect(client);atomic_store(&browser_server_running,false);thrd_join(server,NULL);ipc_server_stop();db_close();
-  unlink(destination);unlink(formatted_dest);unlink(public_dest);unlink(executable);unlink(config_path);unsetenv("DOWNLOADMGR_ROOT");char downloads[256];n=snprintf(downloads,sizeof(downloads),"%s/Downloads",root);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(downloads));rmdir(downloads);rmdir(root);
+  cr_assert_eq(ipc_browser_site_format_info_v1(client,offer.offer_id,&info),0);
+  cr_assert_eq(info.id[0],0);
+  cr_assert_eq(info.has_audio,0);
+  MsgHeader legacy={.length=sizeof(json)-1,.type=MSG_BROWSER_OFFER_FORMAT_V1};
+  cr_assert_eq(ipc_write_exact(client,&legacy,sizeof(legacy)),0);
+  cr_assert_eq(ipc_write_exact(client,json,legacy.length),0);
+  IpcBrowserOffer rejected={0};
+  cr_assert_eq(ipc_read_exact(client,&rejected,sizeof(rejected)),0);
+  cr_assert_eq(rejected.offer_id,0);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running,false);
+  thrd_join(server,NULL);
+  ipc_server_stop();db_close();
+  unsetenv("DOWNLOADMGR_ROOT");
+  rmdir(root);
 }

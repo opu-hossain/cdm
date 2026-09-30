@@ -58,6 +58,7 @@ def main(cdm):
             assert exported["settings"]["downloads"]["max_concurrent"] == 4
             assert exported["settings"]["ui"]["theme"] == "system"
             assert exported["settings"]["ui"]["locale"] == "en"
+            assert "sites" not in exported["settings"]
             assert exported["settings"]["security"] == {
                 "scanner_command": "", "scanner_args": ""}
             assert len(exported["downloads"]) == 501
@@ -164,6 +165,9 @@ def main(cdm):
             replacement["settings"]["downloads"]["max_concurrent"] = 5
             replacement["settings"]["ui"]["theme"] = "dark"
             replacement["settings"]["ui"]["locale"] = "es"
+            replacement["settings"]["sites"] = {
+                "use_yt_dlp": True, "yt_dlp_path": "yt-dlp",
+                "yt_dlp_format": "bestvideo+bestaudio/best"}
             replace_file = root / "replace.json"
             replace_file.write_text(json.dumps(replacement))
             replaced = subprocess.run([cdm, "cli", "import", "--in", str(replace_file),
@@ -180,6 +184,7 @@ def main(cdm):
             assert 'theme = "dark"' in (config_dir / "config.toml").read_text()
             assert 'locale = "es"' in (config_dir / "config.toml").read_text()
             assert 'scanner_command = ""' in (config_dir / "config.toml").read_text()
+            assert "[sites]" not in (config_dir / "config.toml").read_text()
             spanish_export = subprocess.run(
                 [cdm, "cli", "export", "--out", str(root / "spanish.json")],
                 env=env, capture_output=True, text=True, timeout=15)

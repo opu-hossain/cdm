@@ -23,8 +23,6 @@
 #define DEFAULT_CONNECT_TIMEOUT_SEC 10
 #define DEFAULT_TRANSFER_TIMEOUT_SEC 30
 #define DEFAULT_USER_AGENT "cdm/0.1"
-#define DEFAULT_YT_DLP_PATH "yt-dlp"
-#define DEFAULT_YT_DLP_FORMAT "bestvideo+bestaudio/best"
 
 /* Global state (initialised once) */
 static int g_max_concurrent = DEFAULT_MAX_CONCURRENT;
@@ -40,9 +38,6 @@ static char g_proxy_password[256];
 static int g_max_connections = DEFAULT_MAX_CONNECTIONS;
 static char g_user_agent[256] = DEFAULT_USER_AGENT;
 /* Config reload writes, engine workers read, under g_network_mutex. */
-static bool g_use_yt_dlp;
-static char g_yt_dlp_path[1024] = DEFAULT_YT_DLP_PATH;
-static char g_yt_dlp_format[128] = DEFAULT_YT_DLP_FORMAT;
 static int g_connect_timeout_sec = DEFAULT_CONNECT_TIMEOUT_SEC;
 static int g_transfer_timeout_sec = DEFAULT_TRANSFER_TIMEOUT_SEC;
 /* Daemon scheduler and GUI config writes each run on their process main thread. */
@@ -84,9 +79,6 @@ static void reset_defaults(void) {
   g_max_connections = DEFAULT_MAX_CONNECTIONS;
   memset(g_user_agent, 0, sizeof(g_user_agent));
   memcpy(g_user_agent, DEFAULT_USER_AGENT, sizeof(DEFAULT_USER_AGENT));
-  g_use_yt_dlp = false;
-  strcpy(g_yt_dlp_path, DEFAULT_YT_DLP_PATH);
-  strcpy(g_yt_dlp_format, DEFAULT_YT_DLP_FORMAT);
   g_connect_timeout_sec = DEFAULT_CONNECT_TIMEOUT_SEC;
   g_transfer_timeout_sec = DEFAULT_TRANSFER_TIMEOUT_SEC;
   dm_mutex_unlock(&g_network_mutex);
@@ -353,20 +345,8 @@ void config_init(const char *path) {
       proxy_mode = PROXY_NONE;
     }
   }
-  toml_datum_t sites = toml_get(root, "sites");
-  bool use_yt_dlp = false;
-  char yt_dlp_path[sizeof(g_yt_dlp_path)] = DEFAULT_YT_DLP_PATH;
-  char yt_dlp_format[sizeof(g_yt_dlp_format)] = DEFAULT_YT_DLP_FORMAT;
-  read_bool(sites, "use_yt_dlp", &use_yt_dlp);
-  read_string(sites, "yt_dlp_path", yt_dlp_path, sizeof(yt_dlp_path));
-  read_string(sites, "yt_dlp_format", yt_dlp_format, sizeof(yt_dlp_format));
-  if (!yt_dlp_path[0]) strcpy(yt_dlp_path, DEFAULT_YT_DLP_PATH);
-  if (!yt_dlp_format[0]) strcpy(yt_dlp_format, DEFAULT_YT_DLP_FORMAT);
   ensure_network_mutex();
   dm_mutex_lock(&g_network_mutex);
-  g_use_yt_dlp = use_yt_dlp;
-  memcpy(g_yt_dlp_path, yt_dlp_path, sizeof(g_yt_dlp_path));
-  memcpy(g_yt_dlp_format, yt_dlp_format, sizeof(g_yt_dlp_format));
   g_proxy_mode = proxy_mode;
   memcpy(g_proxy_url, proxy_url, sizeof(g_proxy_url));
   memcpy(g_proxy_username, proxy_username, sizeof(g_proxy_username));
@@ -437,9 +417,6 @@ void config_get(DownloadManagerConfig *out) {
   memcpy(out->proxy_password, g_proxy_password, sizeof(out->proxy_password));
   out->max_connections_per_download = g_max_connections;
   memcpy(out->user_agent, g_user_agent, sizeof(out->user_agent));
-  out->use_yt_dlp = g_use_yt_dlp;
-  memcpy(out->yt_dlp_path, g_yt_dlp_path, sizeof(out->yt_dlp_path));
-  memcpy(out->yt_dlp_format, g_yt_dlp_format, sizeof(out->yt_dlp_format));
   out->connect_timeout_sec = g_connect_timeout_sec;
   out->transfer_timeout_sec = g_transfer_timeout_sec;
   dm_mutex_unlock(&g_network_mutex);
@@ -464,9 +441,6 @@ bool config_validate(const DownloadManagerConfig *config) {
       config->max_connections_per_download > 16 ||
       !memchr(config->user_agent, '\0', sizeof(config->user_agent)) ||
       !config->user_agent[0] ||
-      !memchr(config->yt_dlp_path, '\0', sizeof(config->yt_dlp_path)) ||
-      !config->yt_dlp_path[0] ||
-      !memchr(config->yt_dlp_format, '\0', sizeof(config->yt_dlp_format)) ||
       !memchr(config->ui_theme, '\0', sizeof(config->ui_theme)) ||
       (strcmp(config->ui_theme, "system") != 0 &&
        strcmp(config->ui_theme, "light") != 0 &&
@@ -477,7 +451,7 @@ bool config_validate(const DownloadManagerConfig *config) {
       !memchr(config->scanner_command, '\0',
               sizeof(config->scanner_command)) ||
       !memchr(config->scanner_args, '\0', sizeof(config->scanner_args)) ||
-      !config->yt_dlp_format[0] || config->connect_timeout_sec < 1 ||
+      config->connect_timeout_sec < 1 ||
       config->connect_timeout_sec > 600 ||
       config->transfer_timeout_sec < 1 ||
       config->transfer_timeout_sec > 3600);
@@ -532,13 +506,6 @@ bool config_save(const DownloadManagerConfig *config) {
               write_toml_string(fp, config->scanner_command) &&
               fputs("\nscanner_args = ", fp) != EOF &&
               write_toml_string(fp, config->scanner_args) &&
-              fputc('\n', fp) != EOF;
-  if (written)
-    written = fprintf(fp, "\n[sites]\nuse_yt_dlp = %s\nyt_dlp_path = ",
-                      config->use_yt_dlp ? "true" : "false") >= 0 &&
-              write_toml_string(fp, config->yt_dlp_path) &&
-              fputs("\nyt_dlp_format = ", fp) != EOF &&
-              write_toml_string(fp, config->yt_dlp_format) &&
               fputc('\n', fp) != EOF;
   if (written)
     written = fputs("\n[proxy]\nmode = ", fp) != EOF &&

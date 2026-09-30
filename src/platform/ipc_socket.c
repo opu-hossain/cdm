@@ -4,7 +4,6 @@
 #include "ipc_socket.h"
 
 #include "../core/queue_manager.h"
-#include "../engine/site_grab.h"
 #include "../persistence/export.h"
 #include "../persistence/db.h"
 #include "../utils/config.h"
@@ -275,9 +274,7 @@ static bool browser_header_valid(const char *value) {
 }
 
 static bool browser_parse_offer(const char *json, IpcBrowserOffer *out,
-                                 RequestOptions *context, uint32_t *media_kind,
-                                 IpcBrowserSiteFormatV1 *site_format,
-                                 bool public_site) {
+                                 RequestOptions *context, uint32_t *media_kind) {
   /* cJSON strings have no length; reject escaped NUL in all offer fields. */
   for (const char *p = json; *p; p++) {
     if (*p == '\\' && p[1]) {
@@ -332,32 +329,11 @@ static bool browser_parse_offer(const char *json, IpcBrowserOffer *out,
            strcmp(field->string, "referrer") == 0))
         browser_clear(field->valuestring, strlen(field->valuestring));
   }
-  if (site_format) {
-    memset(site_format, 0, sizeof(*site_format));
-    const cJSON *audio = cJSON_GetObjectItemCaseSensitive(root, "site_format_has_audio");
-    valid = valid && browser_json_string(root, "site_format_id", site_format->id,
-                                         sizeof(site_format->id), true) &&
-            browser_json_string(root, "site_format_label", site_format->label,
-                                sizeof(site_format->label), true) &&
-            cJSON_IsBool(audio) && site_grab_format_id_valid(site_format->id) &&
-            browser_header_valid(site_format->label) &&
-            *media_kind == IPC_BROWSER_MEDIA_VIDEO &&
-            (!context || (!context->browser_context && !out->referrer[0]));
-    for (const unsigned char *p = (const unsigned char *)site_format->label; *p; p++)
-      if (*p < 0x20 || *p == 0x7f) valid = false;
-    site_format->has_audio = cJSON_IsTrue(audio) ? 1u : 0u;
-  } else if (cJSON_GetObjectItemCaseSensitive(root, "site_format_id") ||
-             cJSON_GetObjectItemCaseSensitive(root, "site_format_label") ||
-             cJSON_GetObjectItemCaseSensitive(root, "site_format_has_audio")) {
+  if (cJSON_GetObjectItemCaseSensitive(root, "site_format_id") ||
+      cJSON_GetObjectItemCaseSensitive(root, "site_format_label") ||
+      cJSON_GetObjectItemCaseSensitive(root, "site_format_has_audio") ||
+      cJSON_GetObjectItemCaseSensitive(root, "site_public_consent"))
     valid = false;
-  }
-  const cJSON *consent = cJSON_GetObjectItemCaseSensitive(root, "site_public_consent");
-  if (public_site) {
-    valid = valid && cJSON_IsTrue(consent) &&
-            site_grab_public_url_allowed(out->url);
-  } else if (consent) {
-    valid = false;
-  }
   const cJSON *total = cJSON_GetObjectItemCaseSensitive(root, "total_bytes");
   if (total) {
     if (!cJSON_IsNumber(total) || total->valuedouble < 0 ||
@@ -813,22 +789,14 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     IpcBrowserOffer proposed = {0};
     RequestOptions context = {0};
     uint32_t media_kind = IPC_BROWSER_MEDIA_NONE;
-    IpcBrowserSiteFormatV1 site_format = {0};
-    if (!memchr(json, '\0', hdr->length) &&
+    if (hdr->type != MSG_BROWSER_OFFER_FORMAT_V1 &&
+        hdr->type != MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1 &&
+        !memchr(json, '\0', hdr->length) &&
         browser_parse_offer(json, &proposed,
-            hdr->type == MSG_BROWSER_OFFER ? NULL : &context, &media_kind,
-            (hdr->type == MSG_BROWSER_OFFER_FORMAT_V1 ||
-             hdr->type == MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1)
-                ? &site_format : NULL,
-            hdr->type == MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1)) {
+            hdr->type == MSG_BROWSER_OFFER ? NULL : &context, &media_kind)) {
       BrowserOfferSlot *slot = browser_find_request(proposed.request_id);
       if (slot && (strcmp(slot->offer.url, proposed.url) != 0 ||
-                   slot->media_kind != media_kind ||
-                   strcmp(slot->site_format.id, site_format.id) != 0 ||
-                   strcmp(slot->site_format.label, site_format.label) != 0 ||
-                   slot->site_format.has_audio != site_format.has_audio ||
-                   slot->public_site !=
-                     (hdr->type == MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1))) {
+                   slot->media_kind != media_kind)) {
         LOG_WARN("Browser request ID reused with different offer metadata");
         slot = NULL;
       } else if (!slot) {
@@ -849,8 +817,6 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
             slot->offer = proposed;
             slot->context = context;
             slot->media_kind = media_kind;
-            slot->site_format = site_format;
-            slot->public_site = hdr->type == MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1;
             slot->offer.offer_id = id;
             slot->touched_at = time(NULL);
             LOG_INFO("Browser offer %u registered", id);
@@ -892,22 +858,14 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     uint32_t id = 0;
     IpcBrowserSiteFormatV1 info = {0};
     if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0) return;
-    BrowserOfferSlot *slot = browser_find_offer(id);
-    if (slot) info = slot->site_format;
+    (void)id; /* Retired metadata is always empty. */
     ipc_write_exact(client_fd, &info, sizeof(info));
     break;
   }
   case MSG_BROWSER_SITE_CAPABILITY_V1: {
     uint32_t id = 0, eligible = 0;
     if (ipc_read_exact(client_fd, &id, sizeof(id)) != 0) return;
-    BrowserOfferSlot *slot = browser_find_offer(id);
-    DownloadManagerConfig config; config_get(&config);
-    if (slot && slot->offer.state == IPC_BROWSER_WAITING &&
-        (slot->media_kind == IPC_BROWSER_MEDIA_NONE ||
-         slot->media_kind == IPC_BROWSER_MEDIA_VIDEO) &&
-        config.use_yt_dlp && spawn_site_tool_available() &&
-        (slot->public_site ? site_grab_public_url_allowed(slot->offer.url)
-                           : site_grab_url_allowed(slot->offer.url))) eligible = 1;
+    (void)id; /* Retired message number remains reserved for old clients. */
     ipc_write_exact(client_fd, &eligible, sizeof(eligible));
     break;
   }
@@ -931,6 +889,8 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     bool duplicate = false;
     if (ipc_read_exact(client_fd, payload, hdr->length) != 0)
       return;
+    if (hdr->type == MSG_BROWSER_CONFIRM_SITE_V1)
+      goto confirm_response;
     uint32_t offer_id = 0, path_len = 0;
     memcpy(&offer_id, payload, sizeof(offer_id));
     memcpy(&path_len, payload + sizeof(offer_id), sizeof(path_len));
@@ -949,29 +909,9 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
                   slot->media_kind == IPC_BROWSER_MEDIA_HLS ||
                   slot->media_kind == IPC_BROWSER_MEDIA_DASH ||
                   slot->media_kind == IPC_BROWSER_MEDIA_VIDEO)) {
-        bool site = hdr->type == MSG_BROWSER_CONFIRM_SITE_V1;
-        DownloadManagerConfig config; config_get(&config);
-        if (!site && slot->site_format.id[0])
-          goto confirm_response;
-        if (site && (!config.use_yt_dlp || !spawn_site_tool_available() ||
-                     !(slot->public_site
-                         ? site_grab_public_url_allowed(slot->offer.url)
-                         : site_grab_url_allowed(slot->offer.url)) ||
-                     (slot->media_kind != IPC_BROWSER_MEDIA_NONE &&
-                      slot->media_kind != IPC_BROWSER_MEDIA_VIDEO)))
-          goto confirm_response;
         RequestOptions opts = slot->context;
-        if (site) {
-          browser_clear(&opts, sizeof(opts));
-          opts.site_grab = true;
-          opts.site_grab_public = slot->public_site;
-          memcpy(opts.site_format_id, slot->site_format.id,
-                 sizeof(opts.site_format_id));
-          opts.site_format_has_audio = slot->site_format.has_audio != 0;
-        } else {
-          opts.media_kind = (DownloadMediaKind)slot->media_kind;
-        }
-        if (!site && !opts.browser_context)
+        opts.media_kind = (DownloadMediaKind)slot->media_kind;
+        if (!opts.browser_context)
           strcpy(opts.referrer, slot->offer.referrer);
         char normalized[IPC_MAX_URL_LEN];
         int found = 0;
@@ -980,17 +920,9 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         if (found == 1) {
           DownloadMediaKind existing_kind;
           bool existing_site = false;
-          bool existing_public = false;
-          char existing_format[64] = {0};
-          bool existing_audio = false;
           if (!queue_manager_get_media_kind(download_id, &existing_kind) ||
               !queue_manager_get_site_grab(download_id, &existing_site) ||
-              !queue_manager_get_site_public(download_id, &existing_public) ||
-              !queue_manager_get_site_format(download_id, existing_format, &existing_audio) ||
-              existing_site != site ||
-              (site && existing_public != opts.site_grab_public) ||
-              (site && (strcmp(existing_format, opts.site_format_id) != 0 ||
-                        existing_audio != opts.site_format_has_audio)) ||
+              existing_site ||
               ((existing_kind == DOWNLOAD_MEDIA_HLS || existing_kind == DOWNLOAD_MEDIA_DASH ||
              opts.media_kind == DOWNLOAD_MEDIA_HLS || opts.media_kind == DOWNLOAD_MEDIA_DASH) &&
              existing_kind != opts.media_kind)) {

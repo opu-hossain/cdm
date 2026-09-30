@@ -31,9 +31,9 @@ typedef enum {
 /* Request options (supplied by the user) */
 typedef struct {
   DownloadMediaKind media_kind;
-  bool site_grab; // opt-in external site extractor, internal only
-  bool site_grab_public; // explicit per-page consent for public HTTPS site
-  char site_format_id[64]; // selected yt-dlp format, empty = configured default
+  bool site_grab; // legacy persisted external-site flag; execution is disabled
+  bool site_grab_public; // legacy persisted consent flag
+  char site_format_id[64]; // legacy persisted format ID
   bool site_format_has_audio;
   char cookie[4097];
   char referrer[2049];

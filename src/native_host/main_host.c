@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Opu Hossain
 
-#include "../engine/site_grab.h"
 #include "../platform/ipc_socket.h"
 #include "../platform/spawn.h"
 #include "../platform/thread.h"
@@ -13,7 +12,6 @@
 #include <errno.h>
 #include <ctype.h>
 #include <curl/curl.h>
-#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -157,8 +155,7 @@ static bool copy_context_field(const cJSON *root, const char *key, char *out,
 }
 
 static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer,
-                        HostRequestContext *context, uint32_t *media_kind,
-                        IpcBrowserSiteFormatV1 *site_format, bool *public_site) {
+                        HostRequestContext *context, uint32_t *media_kind) {
   const cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
   if (!cJSON_IsString(type)) return false;
   *media_kind = IPC_BROWSER_MEDIA_NONE;
@@ -174,8 +171,6 @@ static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer,
   }
   memset(offer, 0, sizeof(*offer));
   memset(context, 0, sizeof(*context));
-  memset(site_format, 0, sizeof(*site_format));
-  *public_site = false;
   if (!copy_field(root, "request_id", offer->request_id,
                   sizeof(offer->request_id), true) ||
       !copy_field(root, "url", offer->url, sizeof(offer->url), true) ||
@@ -191,33 +186,11 @@ static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer,
       !copy_context_field(root, "referer", context->referer,
                           sizeof(context->referer)))
     return false;
-  const cJSON *format_id = cJSON_GetObjectItemCaseSensitive(root, "site_format_id");
-  if (format_id) {
-    const cJSON *audio = cJSON_GetObjectItemCaseSensitive(root, "site_format_has_audio");
-    if (*media_kind != IPC_BROWSER_MEDIA_VIDEO ||
-        !copy_field(root, "site_format_id", site_format->id,
-                    sizeof(site_format->id), true) ||
-        !copy_field(root, "site_format_label", site_format->label,
-                    sizeof(site_format->label), true) ||
-        !site_grab_format_id_valid(site_format->id) ||
-        !cJSON_IsBool(audio) ||
-        !valid_utf8((const unsigned char *)site_format->label) ||
-        context->cookie[0] || context->user_agent[0] || context->referer[0])
-      return false;
-    for (const unsigned char *p = (const unsigned char *)site_format->label; *p; p++)
-      if (*p < 0x20 || *p == 0x7f) return false;
-    site_format->has_audio = cJSON_IsTrue(audio) ? 1u : 0u;
-  } else if (cJSON_GetObjectItemCaseSensitive(root, "site_format_label") ||
-             cJSON_GetObjectItemCaseSensitive(root, "site_format_has_audio")) {
+  if (cJSON_GetObjectItemCaseSensitive(root, "site_format_id") ||
+      cJSON_GetObjectItemCaseSensitive(root, "site_format_label") ||
+      cJSON_GetObjectItemCaseSensitive(root, "site_format_has_audio") ||
+      cJSON_GetObjectItemCaseSensitive(root, "site_public_consent"))
     return false;
-  }
-  const cJSON *consent = cJSON_GetObjectItemCaseSensitive(root, "site_public_consent");
-  if (consent) {
-    if (!cJSON_IsTrue(consent) || !site_format->id[0] ||
-        !site_grab_public_url_allowed(offer->url))
-      return false;
-    *public_site = true;
-  }
   const cJSON *total = cJSON_GetObjectItemCaseSensitive(root, "total_bytes");
   if (total && (!cJSON_IsNumber(total) || total->valuedouble < 0 ||
                 total->valuedouble > 9007199254740991.0))
@@ -249,9 +222,7 @@ static void clear_context_fields(cJSON *root) {
 }
 
 static char *context_offer_json(const IpcBrowserOffer *offer,
-                                const HostRequestContext *context, uint32_t media_kind,
-                                const IpcBrowserSiteFormatV1 *site_format,
-                                bool public_site) {
+                                const HostRequestContext *context, uint32_t media_kind) {
   cJSON *root = cJSON_CreateObject();
   if (!root) return NULL;
   bool ok = cJSON_AddStringToObject(root, "request_id", offer->request_id) &&
@@ -268,13 +239,6 @@ static char *context_offer_json(const IpcBrowserOffer *offer,
                        media_kind == IPC_BROWSER_MEDIA_DASH ? "dash" : "video";
     ok = ok && cJSON_AddStringToObject(root, "kind", kind);
   }
-  if (site_format->id[0])
-    ok = ok && cJSON_AddStringToObject(root, "site_format_id", site_format->id) &&
-         cJSON_AddStringToObject(root, "site_format_label", site_format->label) &&
-         cJSON_AddBoolToObject(root, "site_format_has_audio",
-                               site_format->has_audio != 0);
-  if (public_site)
-    ok = ok && cJSON_AddBoolToObject(root, "site_public_consent", true);
   char *json = ok ? cJSON_PrintUnformatted(root) : NULL;
   clear_context_fields(root);
   cJSON_Delete(root);
@@ -311,82 +275,6 @@ static bool send_error(const char *request_id, const char *message) {
   cJSON_AddStringToObject(reply, "type", "error");
   cJSON_AddStringToObject(reply, "request_id", request_id ? request_id : "");
   cJSON_AddStringToObject(reply, "error", message);
-  bool ok = native_send(reply);
-  cJSON_Delete(reply);
-  return ok;
-}
-
-static bool valid_probe_text(const char *text) {
-  if (!valid_utf8((const unsigned char *)text)) return false;
-  for (const unsigned char *p = (const unsigned char *)text; *p; p++)
-    if (*p < 0x20 || *p == 0x7f) return false;
-  return true;
-}
-
-/* Site probes run in a dedicated native host process; no daemon IPC is held. */
-static bool handle_site_probe(const cJSON *root) {
-  char request_id[128];
-  char url[2048];
-  const cJSON *consent = cJSON_GetObjectItemCaseSensitive(root, "explicit_consent");
-  if (!copy_field(root, "request_id", request_id, sizeof(request_id), true) ||
-      !valid_probe_text(request_id) ||
-      !copy_field(root, "url", url, sizeof(url), true) ||
-      !valid_probe_text(url) ||
-      cJSON_GetObjectItemCaseSensitive(root, "cookie") ||
-      cJSON_GetObjectItemCaseSensitive(root, "headers") ||
-      cJSON_GetObjectItemCaseSensitive(root, "referer") ||
-      cJSON_GetObjectItemCaseSensitive(root, "user_agent"))
-    return send_error(NULL, "invalid site probe");
-  if (consent && !cJSON_IsBool(consent))
-    return send_error(NULL, "invalid site probe");
-  bool public_site = cJSON_IsTrue(consent);
-  SiteGrabProbe probe = {0};
-  if (site_grab_probe_with_consent(url, public_site, NULL, &probe) != 0)
-    return send_error(request_id, "site probe unavailable or unsupported");
-
-  cJSON *reply = cJSON_CreateObject();
-  cJSON *formats = cJSON_CreateArray();
-  if (!reply || !formats) {
-    cJSON_Delete(reply);
-    cJSON_Delete(formats);
-    return false;
-  }
-  if (!cJSON_AddStringToObject(reply, "type", "site_probe_result") ||
-      !cJSON_AddStringToObject(reply, "request_id", request_id) ||
-      !cJSON_AddStringToObject(reply, "title", probe.title)) {
-    cJSON_Delete(formats);
-    cJSON_Delete(reply);
-    return false;
-  }
-  if (!cJSON_AddItemToObject(reply, "formats", formats)) {
-    cJSON_Delete(formats);
-    cJSON_Delete(reply);
-    return false;
-  }
-  for (size_t i = 0; i < probe.format_count; i++) {
-    const SiteGrabFormat *source = &probe.formats[i];
-    char size_bytes[32];
-    int written = snprintf(size_bytes, sizeof(size_bytes), "%" PRIu64,
-                           source->size_bytes);
-    if (written < 0 || (size_t)written >= sizeof(size_bytes)) {
-      cJSON_Delete(reply);
-      return false;
-    }
-    cJSON *format = cJSON_CreateObject();
-    if (!format || !cJSON_AddStringToObject(format, "id", source->id) ||
-        !cJSON_AddStringToObject(format, "ext", source->ext) ||
-        !cJSON_AddNumberToObject(format, "width", source->width) ||
-        !cJSON_AddNumberToObject(format, "height", source->height) ||
-        !cJSON_AddStringToObject(format, "size_bytes", size_bytes) ||
-        !cJSON_AddBoolToObject(format, "size_estimated", source->size_estimated) ||
-        !cJSON_AddBoolToObject(format, "has_video", source->has_video) ||
-        !cJSON_AddBoolToObject(format, "has_audio", source->has_audio) ||
-        !cJSON_AddItemToArray(formats, format)) {
-      cJSON_Delete(format);
-      cJSON_Delete(reply);
-      return false;
-    }
-  }
   bool ok = native_send(reply);
   cJSON_Delete(reply);
   return ok;
@@ -568,17 +456,20 @@ static bool handle_message(const char *json) {
     return ok;
   }
   if (cJSON_IsString(type) && strcmp(type->valuestring, "site_probe") == 0) {
-    bool ok = handle_site_probe(root);
+    char request_id[128] = {0};
+    bool valid_id = copy_field(root, "request_id", request_id,
+                               sizeof(request_id), true);
+    for (const unsigned char *p = (const unsigned char *)request_id; *p; p++)
+      if (*p < 0x20 || *p == 0x7f) valid_id = false;
+    bool ok = send_error(valid_id ? request_id : NULL,
+                         "site downloads are not supported");
     cJSON_Delete(root);
     return ok;
   }
   IpcBrowserOffer offered = {0};
   HostRequestContext context = {0};
   uint32_t media_kind = IPC_BROWSER_MEDIA_NONE;
-  IpcBrowserSiteFormatV1 site_format = {0};
-  bool public_site = false;
-  if (!parse_offer(root, &offered, &context, &media_kind, &site_format,
-                   &public_site)) {
+  if (!parse_offer(root, &offered, &context, &media_kind)) {
     const cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "request_id");
     bool ok = send_error(cJSON_IsString(id) ? id->valuestring : NULL,
                          tr("host.error.invalid_offer"));
@@ -604,10 +495,9 @@ static bool handle_message(const char *json) {
 
   bool has_context = context.cookie[0] || context.user_agent[0] ||
                      context.referer[0];
-  bool use_json = has_context || media_kind || site_format.id[0];
+  bool use_json = has_context || media_kind;
   char *context_json = use_json
-      ? context_offer_json(&offered, &context, media_kind, &site_format,
-                           public_site) : NULL;
+      ? context_offer_json(&offered, &context, media_kind) : NULL;
   clear_context(&context);
   if (use_json) {
     /* Check the 16 KiB daemon frame before starting or contacting it. */
@@ -637,25 +527,13 @@ static bool handle_message(const char *json) {
     clear_json(context_json);
     return send_error(offered.request_id, tr("host.error.media_unsupported"));
   }
-  if (site_format.id[0] && daemon_version < 14) {
-    ipc_client_disconnect(daemon);
-    clear_json(context_json);
-    return send_error(offered.request_id, "daemon does not support selected site formats");
-  }
-  if (public_site && daemon_version < 15) {
-    ipc_client_disconnect(daemon);
-    clear_json(context_json);
-    return send_error(offered.request_id, "daemon does not support public site offers");
-  }
   if (has_context && daemon_version < 8) {
     ipc_client_disconnect(daemon);
     clear_json(context_json);
     return send_error(offered.request_id, tr("host.error.context_unsupported"));
   }
   IpcBrowserOffer registered = {0};
-  int result = use_json ? forward_context_offer(daemon,
-      public_site ? MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1 :
-      site_format.id[0] ? MSG_BROWSER_OFFER_FORMAT_V1 : MSG_BROWSER_OFFER_V2,
+  int result = use_json ? forward_context_offer(daemon, MSG_BROWSER_OFFER_V2,
       context_json, &registered)
                            : ipc_browser_offer(daemon, &offered, &registered);
   clear_json(context_json);

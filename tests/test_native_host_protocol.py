@@ -113,8 +113,7 @@ def main(host: str) -> None:
     probe_replies = decode_frames(result.stdout)
     assert len(probe_replies) == len(probes), probe_replies
     assert all(reply["type"] == "error" for reply in probe_replies), probe_replies
-    assert [reply["request_id"] for reply in probe_replies] == [
-        "probe-1", "probe-2", "", "", "", "", "probe-7", "probe-8", ""], probe_replies
+    assert all("not supported" in reply["error"] for reply in probe_replies)
     assert b"secret" not in result.stdout + result.stderr
     for field, value in (("cookie", "x\r\nY"), ("cookie", "x" * 4097),
                          ("user_agent", "x" * 257), ("referer", "x" * 2049),
@@ -160,12 +159,10 @@ def main(host: str) -> None:
                     ("filename", ctypes.c_char * 512), ("mime", ctypes.c_char * 128),
                     ("referrer", ctypes.c_char * 2048)]
 
-    for media, version, with_context, format_id, public in (
-            (None, 8, True, None, False), ("hls", 10, True, None, False),
-            ("dash", 10, False, None, False), ("video", 10, True, None, False),
-            ("hls", 9, False, None, False), ("video", 14, False, "18", False),
-            ("video", 13, False, "18", False), ("video", 15, False, "18", True),
-            ("video", 14, False, "18", True)):
+    for media, version, with_context in (
+            (None, 8, True), ("hls", 10, True),
+            ("dash", 10, False), ("video", 10, True),
+            ("hls", 9, False)):
         with tempfile.TemporaryDirectory(prefix="cdm-host-context-") as root:
             runtime = Path(root) / "runtime"
             runtime.mkdir(mode=0o700)
@@ -194,8 +191,7 @@ def main(host: str) -> None:
                         header = exact(peer, 8)
                         assert struct.unpack("=II", header) == (0, 41), header
                         peer.sendall(struct.pack("=H", version))
-                        if (media and version < 10) or (format_id and version < 14) or (
-                                public and version < 15):
+                        if media and version < 10:
                             assert peer.recv(1) == b"", "media sent to an old daemon"
                             return
                         header = exact(peer, 8)
@@ -222,34 +218,21 @@ def main(host: str) -> None:
                 payload.update(cookie="x" * 4096, user_agent="u" * 256, referer="r" * 2048)
             if media:
                 payload.update(type="media_offer", kind=media)
-            if format_id:
-                payload.update(site_format_id=format_id, site_format_label="360p MP4",
-                               site_format_has_audio=True)
-            if public:
-                payload["site_public_consent"] = True
             result = subprocess.run([host], input=frame(json.dumps(configuration).encode()) +
                                     frame(json.dumps(payload).encode()),
                                     env=env, capture_output=True, timeout=5)
             worker.join(timeout=2)
             assert not worker.is_alive(), "fake daemon did not finish"
             assert not failures, failures
-            if (media and version < 10) or (format_id and version < 14) or (
-                    public and version < 15):
+            if media and version < 10:
                 replies = decode_frames(result.stdout)
                 assert not observed
-                assert ("support media" if version < 10 else
-                        "selected site formats" if version < 14 else "public site offers"
-                        ) in replies[1]["error"], replies
+                assert "support media" in replies[1]["error"], replies
                 continue
             assert observed, result.stderr.decode(errors="replace")
-            assert observed[0][0] == (65 if public else 63 if format_id else 56), observed
+            assert observed[0][0] == 56, observed
             if media:
                 assert observed[0][1]["kind"] == media, observed
-            if format_id:
-                assert observed[0][1]["site_format_id"] == format_id, observed
-                assert observed[0][1]["site_format_has_audio"] is True, observed
-            if public:
-                assert observed[0][1]["site_public_consent"] is True, observed
             assert all(observed[0][1].get(key, "") == payload.get(key, "")
                        for key in ("cookie", "user_agent", "referer")), observed
             replies = decode_frames(result.stdout)

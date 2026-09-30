@@ -32,13 +32,6 @@ async function verify(file, globalName, expectedBrowser) {
   const wireMessages = [];
   let storageFails = false;
   let cookieReads = 0;
-  let siteProbeMode = false;
-  let siteProbeConnections = 0;
-  const siteProbeMessages = [];
-  let siteProbeReply = {type: "site_probe_result", request_id: "media-99",
-    title: "Fixture title", formats: [{id: "18", ext: "mp4", width: 640,
-      height: 360, size_bytes: "1234567", size_estimated: true,
-      has_video: true, has_audio: true}]};
   let cookieRows = [{name: "session", value: "fixture"}];
   const permissionRequests = [];
   const port = {
@@ -63,16 +56,6 @@ async function verify(file, globalName, expectedBrowser) {
       onMessage: {addListener(listener) { runtimeListener = listener; }}, onInstalled: {addListener(listener) { installListener = listener; }},
       connectNative(name) {
       assert.equal(name, "org.cdm.browser");
-      if (siteProbeMode) {
-        siteProbeConnections++;
-        let listener;
-        return {postMessage(message) {
-          siteProbeMessages.push(message);
-          queueMicrotask(() => listener?.({...siteProbeReply, request_id: message.request_id}));
-        }, disconnect() {},
-        onMessage: {addListener(callback) { listener = callback; }},
-        onDisconnect: {addListener() {}}};
-      }
       return port;
     } },
     contextMenus: {
@@ -360,66 +343,9 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal(messages.at(-1).cookie, undefined);
   assert.equal(canceled.length, beforeMediaCancel, "media selection must not cancel downloads");
   assert.equal((await callRuntime({type: "cdm_media_list"})).length, 0);
-  siteProbeMode = true;
-  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"}, 7, 1)).manual_required,
-    true);
-  assert.equal(siteProbeConnections, 0);
-  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"})).manual_required, true);
-  assert.equal(siteProbeConnections, 0, "broader sites require an explicit click");
-  assert.equal(runtimeListener({type: "cdm_site_probe_tab", explicit: true,
-      page_id: "private-page"},
-    {url: "https://example.invalid/page", tab: {id: 9, incognito: true},
-      frameId: 0}, () => {}), undefined);
-  assert.equal(siteProbeConnections, 0);
-  const site = await callTabRuntime({type: "cdm_site_probe_tab", explicit: true});
-  assert.equal(site.title, "Fixture title");
-  assert.equal(site.formats[0].size_bytes, "1234567");
-  assert.equal(siteProbeConnections, 1);
-  assert.equal(siteProbeMessages[0].type, "site_probe");
-  assert.equal(siteProbeMessages[0].url, "https://example.invalid/page");
-  assert.equal(siteProbeMessages[0].explicit_consent, true);
-  assert.equal(siteProbeMessages[0].cookie, undefined);
-  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"})).title, "Fixture title");
-  assert.equal(siteProbeConnections, 1, "site metadata should be cached per page");
-  assert.equal((await callTabRuntime(
-    {type: "cdm_site_probe_tab", page_id: "page-2", explicit: true})).title, "Fixture title");
-  assert.equal(siteProbeConnections, 2, "reload with the same URL needs a fresh probe");
-  assert.equal((await callTabRuntime(
-    {type: "cdm_site_select_tab", page_id: "page-1", id: "18"})).ok, false);
-  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab", explicit: true}, 8)).title, "Fixture title");
-  assert.equal(siteProbeConnections, 3, "another tab needs its own probe");
-  assert.equal((await callTabRuntime({type: "cdm_site_select_tab", id: "18"}, 8)).ok, true);
-  assert.equal(messages.at(-1).type, "media_offer");
-  assert.equal(messages.at(-1).site_format_id, "18");
-  assert.equal(messages.at(-1).site_format_has_audio, true);
-  assert.equal(messages.at(-1).site_public_consent, true);
-  assert.equal(messages.at(-1).url, "https://example.invalid/page");
-  assert.equal(messages.at(-1).cookie, undefined);
-  siteProbeReply = {type: "site_probe_result", title: "Next page",
-    formats: [{id: "22", ext: "mp4", width: 1280, height: 720,
-      size_bytes: "0", size_estimated: false, has_video: true, has_audio: true}]};
-  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab", explicit: true}, 7, 0,
-    "https://example.invalid/other")).title, "Next page");
-  assert.equal((await callTabRuntime({type: "cdm_site_select_tab", id: "18"}, 7, 0,
-    "https://example.invalid/other")).ok, false, "old page selection must expire");
-  assert.equal(siteProbeConnections, 4);
-  assert.equal((await callTabRuntime({type: "cdm_site_select_tab", id: "missing"})).ok, false);
-  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"}, 7, 1)).manual_required,
-    true);
-  siteProbeReply = {type: "error", error: "unsupported"};
-  clock += 600001;
-  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab", explicit: true})).formats.length, 0);
-  assert.equal(siteProbeConnections, 5);
-  assert.equal(messages.at(-1).site_format_id, "18",
-    "failed probes must not create another offer");
-  const supportedUrl = "https://www." + "youtube.com/watch";
-  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab"}, 10, 0,
-    supportedUrl)).formats.length, 0);
-  assert.equal(siteProbeConnections, 6);
-  assert.equal((await callTabRuntime({type: "cdm_site_probe_tab", explicit: true}, 10, 0,
-    supportedUrl)).formats.length, 0);
-  assert.equal(siteProbeConnections, 7,
-    "an in-page click must retry a failed automatic site probe");
+  assert.equal(await callTabRuntime({type: "cdm_site_probe_tab", explicit: true}), undefined);
+  assert.equal(await callTabRuntime({type: "cdm_site_select_tab", id: "18"}), undefined);
+  assert.equal(wireMessages.some(message => message.type === "site_probe"), false);
   await mediaListener({...response, url: "https://example.invalid/overlay.mp4"});
   const pageRows = await callTabRuntime({type: "cdm_media_list_tab"});
   assert.equal((await callTabRuntime({type: "cdm_media_offer_tab", id: pageRows[0].id})).ok, true);
@@ -568,7 +494,7 @@ async function verifyOptions(file, globalName) {
   assert.equal(elements.mediaCandidates.children.length, 0);
   assert.equal(elements.mediaOffer.disabled, true);
   await elements.mediaRefresh.listeners.click();
-  assert.match(elements.mediaStatus.textContent, /YouTube.*yt-dlp/i);
+  assert.match(elements.mediaStatus.textContent, /YouTube.*not supported/i);
   grantedMedia = false;
   await elements.mediaRefresh.listeners.click();
   assert.match(elements.mediaStatus.textContent, /permission/i);
@@ -660,22 +586,11 @@ async function verifyMediaOverlay(file, globalName) {
     return {left: 20, top: 30, right: 820, bottom: 480, width: 800, height: 450};
   }};
   let rows = [{id: "media-overlay-fixture", kind: "hls", filename: "master.m3u8"}];
-  let site = {title: "Fixture title", formats: [{id: "18", ext: "mp4", width: 640,
-    height: 360, size_bytes: "1234567", size_estimated: true,
-    has_video: true, has_audio: true}]};
-  const supportedSite = site;
   const offers = [];
   let tick;
-  let releaseInitialProbe;
   const sandbox = vm.createContext({
     [globalName]: {runtime: {sendMessage(message) {
       if (message.type === "cdm_media_list_tab") return Promise.resolve(rows);
-      if (message.type === "cdm_site_probe_tab") {
-        if (message.explicit) { offers.push(message); site = supportedSite; }
-        else if (!releaseInitialProbe)
-          return new Promise(resolve => { releaseInitialProbe = () => resolve(site); });
-        return Promise.resolve(site);
-      }
       offers.push(message); return Promise.resolve({ok: true});
     }}},
     document: {documentElement: root, title: "Fixture video",
@@ -691,7 +606,6 @@ async function verifyMediaOverlay(file, globalName) {
   assert.equal(root.children.length, 1,
     "playing video should show its control before format probing finishes");
   assert.equal(root.children[0].style.display, "block");
-  releaseInitialProbe();
   await new Promise(setImmediate);
   assert.equal(typeof tick, "function");
   assert.equal(root.children.length, 1);
@@ -705,42 +619,22 @@ async function verifyMediaOverlay(file, globalName) {
   assert.match(button.textContent, /Download with cdm/);
   await button.click();
   assert.equal(panel.hidden, false);
-  assert.match(panel.children[0].textContent, /Fixture title/);
+  assert.match(panel.children[0].textContent, /Fixture video/);
   assert.match(panel.children[1].textContent, /master.m3u8/);
-  assert.match(panel.children[2].textContent, /360/);
-  assert.match(panel.children[2].textContent, /1.2/);
   const firstChoice = panel.children[1];
   await tick();
   assert.equal(panel.children[1], firstChoice, "polling must not replace a choice under the pointer");
   await panel.children[1].click();
   assert.equal(offers[0].type, "cdm_media_offer_tab");
   assert.equal(offers[0].id, "media-overlay-fixture");
-  await panel.children[2].click();
-  assert.equal(offers[1].type, "cdm_site_select_tab");
-  assert.equal(offers[1].id, "18");
-  assert.equal(offers[1].page_id, "overlay-page");
   assert.equal(button.textContent, "Offered to cdm");
   rows = [];
-  site = {title: "", formats: []};
   await tick();
   assert.equal(host.style.display, "block", "playing video keeps an in-frame control");
   assert.equal(button.textContent, "Download with cdm");
   await button.click();
-  assert.equal(offers[2].type, "cdm_site_probe_tab");
-  assert.equal(offers[2].explicit, true);
-  assert.equal(panel.hidden, false);
-  site = {title: "", formats: [], manual_required: true};
-  await tick();
-  assert.equal(host.style.display, "block");
-  assert.equal(button.textContent, "Download with cdm");
-  assert.match(panel.children[1].textContent, /No supported formats/);
-  await panel.children[2].click();
-  assert.equal(offers[3].type, "cdm_site_probe_tab");
-  assert.equal(offers[3].explicit, true);
-  assert.equal(panel.hidden, false);
-  assert.match(panel.children[1].textContent, /360/);
-  await panel.children[1].click();
-  assert.equal(offers[4].type, "cdm_site_select_tab");
+  assert.match(panel.children[1].textContent, /No direct media detected/);
+  assert.equal(offers.length, 1, "empty picker must not probe the site");
   rows = [{id: "media-overlay-fixture", kind: "hls", filename: "master.m3u8"}];
   video.paused = true;
   await tick();

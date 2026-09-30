@@ -207,11 +207,6 @@ async function offerDownload(item, url, automatic = false, media = null) {
     port.postMessage({
       type: media ? "media_offer" : "download_offer",
       ...(media ? {kind: media.kind} : {}),
-      ...(media?.site_format_id ? {
-        site_format_id: media.site_format_id,
-        site_format_label: media.site_format_label,
-        site_format_has_audio: media.site_format_has_audio,
-        ...(media.site_public_consent ? {site_public_consent: true} : {})} : {}),
       automatic,
       request_id: requestId,
       url,
@@ -265,71 +260,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // Background/service worker is the sole owner; URLs/context never enter storage.
 // Ten-minute TTL and 64 total entries bound memory; manifests survive video churn.
 const mediaCandidates = new Map();
-// Solely owned by this service worker. A page refresh or URL change gets a new probe.
-const siteProbeCache = new Map();
-const emptySiteProbe = () => ({title: "", formats: []});
-function siteProbeResult(message) {
-  if (message?.type !== "site_probe_result" ||
-      typeof message.title !== "string" || !Array.isArray(message.formats))
-    return emptySiteProbe();
-  return {title: message.title.slice(0, 255),
-    formats: message.formats.slice(0, 64).filter(format =>
-      format && typeof format === "object" &&
-      typeof format.id === "string" &&
-      /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(format.id) &&
-      typeof format.ext === "string" &&
-      /^[A-Za-z0-9][A-Za-z0-9._-]{0,14}$/.test(format.ext) &&
-      Number.isInteger(format.width) && format.width >= 0 && format.width <= 16384 &&
-      Number.isInteger(format.height) && format.height >= 0 && format.height <= 16384 &&
-      typeof format.size_bytes === "string" && /^\d{1,20}$/.test(format.size_bytes) &&
-      typeof format.has_video === "boolean" && format.has_video &&
-      typeof format.has_audio === "boolean" &&
-      typeof format.size_estimated === "boolean").map(format => ({
-        id: format.id, ext: format.ext, width: format.width, height: format.height,
-        size_bytes: format.size_bytes, size_estimated: format.size_estimated,
-        has_video: format.has_video, has_audio: format.has_audio}))};
-}
-function siteHostAllowed(host) {
-  return ["youtube.com", "youtu.be", "vimeo.com", "dailymotion.com"]
-    .some(domain => host === domain || host.endsWith("." + domain));
-}
-function probeSiteNative(url, publicSite) {
-  return new Promise(resolve => {
-    let port, finished = false;
-    const requestId = crypto.randomUUID();
-    const finish = result => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      try { port?.disconnect(); } catch (_) {}
-      resolve(result);
-    };
-    const timer = setTimeout(() => finish(emptySiteProbe()), 35000);
-    try {
-      port = chrome.runtime.connectNative(HOST_NAME);
-      port.onMessage.addListener(message => {
-        if (message?.request_id === requestId)
-          finish(siteProbeResult(message));
-      });
-      port.onDisconnect.addListener(() => finish(emptySiteProbe()));
-      port.postMessage({type: "site_probe", request_id: requestId, url,
-        ...(publicSite ? {explicit_consent: true} : {})});
-    } catch (_) { finish(emptySiteProbe()); }
-  });
-}
-async function siteProbeForTab(tabId, url, pageId, publicSite, force = false) {
-  const now = Date.now();
-  for (const [id, entry] of siteProbeCache)
-    if (now - entry.at > 600000) siteProbeCache.delete(id);
-  const cached = siteProbeCache.get(tabId);
-  if (!force && cached?.url === url && cached.pageId === pageId &&
-      cached.publicSite === publicSite) return cached.promise;
-  if (siteProbeCache.size >= 64) siteProbeCache.delete(siteProbeCache.keys().next().value);
-  const entry = {url, pageId, publicSite, at: now,
-    promise: probeSiteNative(url, publicSite)};
-  siteProbeCache.set(tabId, entry);
-  return entry.promise;
-}
 function pruneMedia() {
   for (const [key, value] of mediaCandidates)
     if (Date.now() - value.at > 600000) mediaCandidates.delete(key);
@@ -424,7 +354,6 @@ chrome.permissions?.onAdded?.addListener(() => {
 });
 chrome.permissions?.onRemoved?.addListener(() => {
   mediaCandidates.clear();
-  siteProbeCache.clear();
   queueMediaScriptSync();
 });
 
@@ -434,73 +363,14 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   const fromPage = Number.isInteger(sender.tab?.id) && !sender.tab.incognito &&
     Number.isInteger(sender.frameId) && sender.frameId >= 0 &&
     !!originFor(sender.url) &&
-    ["cdm_media_list_tab", "cdm_media_offer_tab",
-      "cdm_site_probe_tab", "cdm_site_select_tab"].includes(message?.type);
+    ["cdm_media_list_tab", "cdm_media_offer_tab"].includes(message?.type);
   if (!fromOptions && !fromPage) return;
   (async () => {
     const stored = await chrome.storage.sync.get("mediaDetection");
     if (stored.mediaDetection !== true) {
       mediaCandidates.clear();
-      siteProbeCache.clear();
     }
     pruneMedia();
-    if (message.type === "cdm_site_probe_tab" || message.type === "cdm_site_select_tab") {
-      const tabId = sender.tab.id;
-      const frameKey = `${tabId}:${sender.frameId}`;
-      const url = sender.url;
-      const pageId = message.page_id;
-      if (typeof pageId !== "string" || !/^[a-zA-Z0-9-]{1,128}$/.test(pageId) ||
-          stored.mediaDetection !== true ||
-          !url.startsWith("https://") ||
-          !!new URL(url).username || !!new URL(url).password ||
-          new TextEncoder().encode(url).length > 2047 ||
-          (message.type === "cdm_site_probe_tab" && !message.explicit &&
-            CdmFilters.excluded(url, CdmFilters.normalizeSites(
-            (await chrome.storage.sync.get("siteExclusions")).siteExclusions))) ||
-          ![undefined, true].includes(message.explicit) ||
-          !await chrome.permissions.contains({permissions: ["webRequest"],
-            origins: ["http://*/*", "https://*/*"]})) {
-        reply(message.type === "cdm_site_probe_tab" ? emptySiteProbe() : {ok: false});
-        return;
-      }
-      if (message.type === "cdm_site_probe_tab") {
-        const allowed = siteHostAllowed(new URL(url).hostname.toLowerCase());
-        if (!allowed && message.explicit !== true) {
-          const cached = siteProbeCache.get(frameKey);
-          if (cached?.url === url && cached.pageId === pageId &&
-              cached.publicSite) {
-            const result = await cached.promise;
-            reply(result.formats.length ? result : {...result, manual_required: true});
-          } else {
-            reply({...emptySiteProbe(), manual_required: true});
-          }
-          return;
-        }
-        reply(await siteProbeForTab(frameKey, url, pageId, !allowed,
-                                    message.explicit === true));
-        return;
-      }
-      const entry = siteProbeCache.get(frameKey);
-      const result = entry?.url === url && entry.pageId === pageId &&
-        Date.now() - entry.at <= 600000
-        ? await entry.promise : emptySiteProbe();
-      const selected = result.formats.find(format => format.id === message.id);
-      if (!selected) { reply({ok: false}); return; }
-      const title = (result.title || "video").replace(/[\/\\\x00-\x1f\x7f]/g, "_")
-        .trim().slice(0, 200) || "video";
-      const size = Number(selected.size_bytes);
-      const label = (selected.height || "?") + "p " + selected.ext.toUpperCase() +
-        (size > 0 ? " " + (selected.size_estimated || !selected.has_audio ? "~" : "") +
-          (size / 1000000).toFixed(1) + " MB" : "") +
-        (selected.has_audio ? "" : " + audio");
-      const ok = await offerDownload(
-        {filename: title + "." + selected.ext, incognito: false},
-        url, false, {kind: "video", context: {}, site_format_id: selected.id,
-          site_format_label: label, site_format_has_audio: selected.has_audio,
-          site_public_consent: entry.publicSite});
-      reply({ok});
-      return;
-    }
     if (message.type === "cdm_media_list" || message.type === "cdm_media_list_tab") {
       reply([...mediaCandidates.values()].filter(value =>
         fromOptions || (value.tabId === sender.tab.id &&
@@ -526,7 +396,6 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "sync" && changes.mediaDetection && changes.mediaDetection.newValue !== true) {
     mediaCandidates.clear();
-    siteProbeCache.clear();
   }
   if (area === "sync" && changes.mediaDetection) queueMediaScriptSync();
 });

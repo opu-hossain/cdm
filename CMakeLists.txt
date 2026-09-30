@@ -162,7 +162,6 @@ set(UTILS_SOURCES
 
 set(ENGINE_SOURCES
     src/engine/dash.c
-    src/engine/site_grab.c
     src/engine/engine_runner.c
     src/engine/hls.c
     src/engine/segmenter.c
@@ -330,11 +329,6 @@ if(BUILD_TESTING)
     add_subdirectory(tests)
     add_executable(test_hls tests/test_hls.c)
     add_executable(test_dash tests/test_dash.c)
-    add_executable(test_site_grab tests/test_site_grab.c)
-    downloadmgr_enable_warnings(test_site_grab)
-    downloadmgr_enable_sanitizer(test_site_grab)
-    target_link_libraries(test_site_grab PRIVATE downloadmgr_core PkgConfig::CRITERION)
-    add_test(NAME test_site_grab COMMAND test_site_grab)
     downloadmgr_enable_warnings(test_dash)
     downloadmgr_enable_sanitizer(test_dash)
     target_link_libraries(test_dash PRIVATE downloadmgr_core PkgConfig::CRITERION)
@@ -349,9 +343,6 @@ if(BUILD_TESTING)
         downloadmgr_enable_warnings(hls_download_driver)
         downloadmgr_enable_sanitizer(hls_download_driver)
         target_link_libraries(hls_download_driver PRIVATE downloadmgr_core)
-        add_test(NAME test_site_grab_download COMMAND ${Python3_EXECUTABLE} -B
-                 ${CMAKE_SOURCE_DIR}/tests/test_site_grab_download.py
-                 $<TARGET_FILE:hls_download_driver>)
         add_test(NAME test_dash_download COMMAND ${Python3_EXECUTABLE} -B
                  ${CMAKE_SOURCE_DIR}/tests/test_dash_download.py
                  $<TARGET_FILE:hls_download_driver>)

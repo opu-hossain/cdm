@@ -55,6 +55,11 @@ Test(engine_runner, hls_dispatch_preserves_lost_context_guard) {
   cr_assert_eq(hls_calls, 1);
 }
 
+Test(engine_runner, retired_site_jobs_do_not_start_an_external_tool) {
+  Download d = {.site_grab = true, .requires_browser_context = true};
+  cr_assert_eq(engine_run_download(&d), -8);
+}
+
 int dash_run_download(Download *d) { cr_assert_eq(d->media_kind, DOWNLOAD_MEDIA_DASH); return -7; }
 Test(engine_runner, dash_dispatch_preserves_lost_context_guard) {
  Download d = {.media_kind = DOWNLOAD_MEDIA_DASH};

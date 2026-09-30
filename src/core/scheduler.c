@@ -128,17 +128,20 @@ static int download_thread_fn(void *arg) {
     return rc;
   }
 
-  if (rc == -3 || rc == -4 || rc == -5 || rc == -6) {
+  if (rc == -3 || rc == -4 || rc == -5 || rc == -6 || rc == -8) {
     dl->retry_count = 0;
     dl->next_retry_at = 0;
-    if (rc == -6)
-      queue_manager_set_site_error(dl->id, "Blocked by scanner");
+    if (rc == -6 || rc == -8)
+      queue_manager_set_site_error(dl->id, rc == -8
+        ? "External site downloads are no longer supported" : "Blocked by scanner");
     queue_manager_update_status(dl->id, DOWNLOAD_ERROR);
     db_update_status(dl->id, "ERROR");
-    ipc_broadcast_status(dl->id, rc == -6 ? "Blocked by scanner" :
+    ipc_broadcast_status(dl->id, rc == -8 ? "Unsupported site download" :
+                          rc == -6 ? "Blocked by scanner" :
                           rc == -5 ? "Fresh browser session required" : "Error",
                           dl->progress);
     LOG_WARN("Download %u failed — %s, not retrying: %s", dl->id,
+             rc == -8 ? "external site downloads are unsupported" :
              rc == -6 ? "blocked by scanner" :
              rc == -5 ? "fresh browser session required" :
              rc == -4 ? "resume file is missing" : "destination already exists",

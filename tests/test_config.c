@@ -252,18 +252,3 @@ Test(config, network_controls_round_trip_and_clamp_on_load) {
   unlink(path);
   remove_home(home);
 }
-
-Test(config, site_grabber_defaults_and_round_trip) {
-  char home[64]; isolated_home(home);
-  DownloadManagerConfig cfg; config_get(&cfg);
-  cr_assert_not(cfg.use_yt_dlp);
-  cr_assert_str_eq(cfg.yt_dlp_path,"yt-dlp");
-  cr_assert_str_eq(cfg.yt_dlp_format,"bestvideo+bestaudio/best");
-  cfg.use_yt_dlp=true;
-  strcpy(cfg.yt_dlp_path,"/tmp/yt-dlp-mock");
-  strcpy(cfg.yt_dlp_format,"bestvideo/best");
-  cr_assert(config_save(&cfg)); config_init(NULL); config_get(&cfg);
-  cr_assert(cfg.use_yt_dlp); cr_assert_str_eq(cfg.yt_dlp_path,"/tmp/yt-dlp-mock");
-  cr_assert_str_eq(cfg.yt_dlp_format,"bestvideo/best");
-  remove_home(home);
-}

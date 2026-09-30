@@ -65,9 +65,6 @@ typedef struct {
   uint16_t daemon_version;
   uint32_t context_flags;
   uint32_t media_kind;
-  IpcBrowserSiteFormatV1 site_format;
-  bool site_available;
-  bool use_site_tool;
   bool duplicate;
   char filename[IPC_BROWSER_FILENAME_MAX];
   char folder[IPC_MAX_PATH_LEN];
@@ -189,14 +186,12 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
   if (state->context_flags) {
     nk_layout_row_dynamic(ctx, 18, 1);
     nk_label_colored(ctx,
-        state->use_site_tool ? tr("gui.site_tool_uses_the_page_url_browser_headers_are_ignored")
-        : state->context_flags & IPC_BROWSER_HAS_COOKIE
+        state->context_flags & IPC_BROWSER_HAS_COOKIE
             ? tr("gui.includes_browser_cookies") : tr("gui.includes_browser_request_headers"),
         NK_TEXT_LEFT, MUTED);
     nk_layout_row_dynamic(ctx, 18, 1);
     nk_label_colored(ctx,
-        state->use_site_tool ? tr("gui.only_the_page_url_is_sent_to_yt_dlp")
-        : (state->context_flags & (IPC_BROWSER_HAS_USER_AGENT | IPC_BROWSER_HAS_REFERER)) ==
+        (state->context_flags & (IPC_BROWSER_HAS_USER_AGENT | IPC_BROWSER_HAS_REFERER)) ==
             (IPC_BROWSER_HAS_USER_AGENT | IPC_BROWSER_HAS_REFERER)
             ? tr("gui.user_agent_and_referer_available")
             : state->context_flags & IPC_BROWSER_HAS_USER_AGENT
@@ -204,16 +199,6 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
                 : state->context_flags & IPC_BROWSER_HAS_REFERER
                     ? tr("gui.referer_available") : tr("gui.confirm_to_use_this_browser_session"),
         NK_TEXT_LEFT, MUTED);
-  }
-  if (state->site_format.id[0]) {
-    nk_layout_row_dynamic(ctx, 28, 1);
-    nk_label_colored(ctx, state->site_format.label, NK_TEXT_LEFT, MUTED);
-    state->use_site_tool = true;
-  } else if (state->site_available) {
-    nk_bool checked = state->use_site_tool;
-    nk_layout_row_dynamic(ctx, 28, 1);
-    nk_checkbox_label(ctx, tr("gui.use_yt_dlp_for_this_site"), &checked);
-    state->use_site_tool = checked != 0;
   }
   nk_layout_row_dynamic(ctx, 20, 1);
   nk_label_colored(ctx, state->error, NK_TEXT_LEFT,
@@ -235,10 +220,7 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
                tr("gui.choose_a_valid_folder_and_filename"));
     } else {
       IpcAddResponse response = {0};
-      int result = state->use_site_tool
-          ? ipc_browser_confirm_site_v1(daemon, state->offer.offer_id,
-                                        state->full_path, &response)
-          : state->daemon_version >= 3
+      int result = state->daemon_version >= 3
           ? ipc_browser_confirm_v2(daemon, state->offer.offer_id,
                                    state->full_path, &response)
           : ipc_browser_confirm(daemon, state->offer.offer_id,
@@ -525,19 +507,6 @@ int run_browser_popup(uint32_t offer_id) {
     ipc_client_disconnect(daemon);
     return 1;
   }
-  if (daemon_version >= 11 &&
-      ipc_browser_site_capability_v1(daemon, offer_id,
-                                     &state.site_available) != 0) {
-    ipc_client_disconnect(daemon);
-    return 1;
-  }
-  if (daemon_version >= 14 &&
-      ipc_browser_site_format_info_v1(daemon, offer_id, &state.site_format) != 0) {
-    ipc_client_disconnect(daemon);
-    return 1;
-  }
-  if (state.site_format.id[0])
-    state.use_site_tool = true;
   snprintf(state.filename, sizeof(state.filename), "%s",
            state.offer.filename);
   if (state.media_kind == IPC_BROWSER_MEDIA_HLS) {
@@ -557,7 +526,6 @@ int run_browser_popup(uint32_t offer_id) {
   file_ensure_directory(state.folder);
   int height = state.context_flags ? 418 : 370;
   if (state.media_kind) height += 24;
-  if (state.site_available || state.site_format.id[0]) height += 28;
   GuiSdlBackendConfig settings = {.width = 480, .height = height,
                                   .title = tr("gui.cdm_browser_download"),
                                   .font_size = 13};
