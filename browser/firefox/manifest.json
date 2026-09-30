@@ -7,7 +7,7 @@
   "options_ui": {"page": "options.html", "open_in_tab": true},
   "optional_permissions": ["cookies", "webRequest"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
-  "background": {"scripts": ["filters.js", "background.js"]},
+  "background": {"scripts": ["filters.js", "youtube_probe.js", "background.js"]},
   "action": {"default_title": "Core Download Manager"},
   "browser_specific_settings": {
     "gecko": {"id": "browser@cdm.local", "strict_min_version": "109.0"}

@@ -203,7 +203,7 @@ async function offerDownload(item, url, automatic = false, media = null) {
       automatic,
       request_id: requestId,
       url,
-      referrer: context.referer || "",
+      referrer: media?.pageReferrer || context.referer || "",
       filename,
       mime: item.mime || "",
       total_bytes: item.totalBytes > 0 ? item.totalBytes : 0,
@@ -253,6 +253,45 @@ const mediaCandidates = new Map();
 function pruneMedia() {
   for (const [key, value] of mediaCandidates)
     if (Date.now() - value.at > 600000) mediaCandidates.delete(key);
+}
+
+async function probeYouTube(sender) {
+  if (!CdmYouTubeProbe.isYouTubePage(sender.url) ||
+      !await browser.permissions.contains({permissions: ["webRequest"],
+        origins: ["http://*/*", "https://*/*"]})) return null;
+  const injected = await browser.scripting.executeScript({
+    target: {tabId: sender.tab.id, frameIds: [sender.frameId]},
+    world: "MAIN", func: CdmYouTubeProbe.pageProbe
+  });
+  const result = injected?.[0]?.result;
+  const page = new URL(sender.url);
+  const expectedId = page.pathname === "/watch" ? page.searchParams.get("v")
+    : page.pathname.slice(7).split("/")[0];
+  if (result?.videoId !== expectedId || !Array.isArray(result.formats)) return null;
+  const title = safeValue(result.title, 180) || "Video";
+  const formats = [];
+  for (const format of result.formats.slice(0, 16)) {
+    if (!Number.isInteger(format.itag) || format.itag < 0 ||
+        !safeValue(format.quality, 32) || format.mime !== "video/mp4" ||
+        !safeValue(format.url, 2047) ||
+        !Number.isSafeInteger(format.totalBytes) || format.totalBytes < 0)
+      continue;
+    let endpoint;
+    try { endpoint = new URL(format.url); } catch (_) { continue; }
+    const host = endpoint.hostname;
+    if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password ||
+        (endpoint.port && endpoint.port !== "443") ||
+        host === "localhost" || host.endsWith(".localhost") ||
+        host.endsWith(".local") || host.endsWith(".internal") ||
+        /^[0-9.]+$/.test(host) || host.includes(":")) continue;
+    formats.push(format);
+  }
+  return {videoId: expectedId, title, formats};
+}
+
+function youtubeFilename(title, quality) {
+  const stem = title.replace(/[\\/\x00-\x1f\x7f]/g, "_").trim().slice(0, 120) || "Video";
+  return `${stem} ${quality}.mp4`;
 }
 async function observeMediaHeaders(details) {
   if (details.incognito || details.tabId < 0 || details.method !== "GET" ||
@@ -358,7 +397,8 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
   const fromPage = Number.isInteger(sender.tab?.id) && !sender.tab.incognito &&
     Number.isInteger(sender.frameId) && sender.frameId >= 0 &&
     !!originFor(sender.url) &&
-    ["cdm_media_list_tab", "cdm_media_offer_tab"].includes(message?.type);
+    ["cdm_media_list_tab", "cdm_media_offer_tab",
+      "cdm_youtube_formats_tab"].includes(message?.type);
   if (!fromOptions && !fromPage) return;
   (async () => {
     const stored = await browser.storage.sync.get("mediaDetection");
@@ -366,25 +406,67 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
       mediaCandidates.clear();
     }
     pruneMedia();
+    if (message.type === "cdm_youtube_formats_tab") {
+      const found = stored.mediaDetection === true ? await probeYouTube(sender) : null;
+      const current = await browser.storage.sync.get("mediaDetection");
+      if (!found || current.mediaDetection !== true ||
+          !await browser.permissions.contains({permissions: ["webRequest"],
+            origins: ["http://*/*", "https://*/*"]})) { reply([]); return; }
+      for (const [key, value] of mediaCandidates)
+        if (value.youtube && value.tabId === sender.tab.id &&
+            value.frameId === sender.frameId) mediaCandidates.delete(key);
+      const rows = [];
+      for (const format of found.formats) {
+        if (mediaCandidates.size >= 64)
+          mediaCandidates.delete(mediaCandidates.keys().next().value);
+        const id = crypto.randomUUID();
+        const filename = youtubeFilename(found.title, format.quality);
+        const key = `youtube\n${sender.tab.id}\n${sender.frameId}\n${found.videoId}\n${format.itag}`;
+        mediaCandidates.set(key, {id, url: format.url, kind: "video",
+          mime: format.mime, filename, totalBytes: format.totalBytes,
+          quality: format.quality, tabId: sender.tab.id, frameId: sender.frameId,
+          context: {}, pageReferrer: sender.url,
+          youtube: {videoId: found.videoId, itag: format.itag}, at: Date.now()});
+        rows.push({id, kind: "video", filename, quality: format.quality,
+          totalBytes: format.totalBytes});
+      }
+      reply(rows);
+      return;
+    }
     if (message.type === "cdm_media_list" || message.type === "cdm_media_list_tab") {
       reply([...mediaCandidates.values()].filter(value =>
-        fromOptions || (value.tabId === sender.tab.id &&
-          value.frameId === sender.frameId)).map(({id, url, kind, mime, filename, tabId}) =>
+        !value.youtube && (fromOptions || (value.tabId === sender.tab.id &&
+          value.frameId === sender.frameId))).map(({id, url, kind, mime, filename, tabId}) =>
         fromOptions ? {id, url, kind, mime, filename, tabId} : {id, kind, mime, filename}));
       return;
     }
     const selected = [...mediaCandidates].find(([, value]) => value.id === message.id &&
+      (!value.youtube || !fromOptions) &&
       (fromOptions || (value.tabId === sender.tab.id &&
         value.frameId === sender.frameId)));
     if (!selected) { reply({ok: false}); return; }
     const [key, candidate] = selected;
     if (!await browser.permissions.contains({permissions: ["webRequest"],
         origins: ["http://*/*", "https://*/*"]})) { reply({ok: false}); return; }
+    if (candidate.youtube) {
+      const fresh = await probeYouTube(sender);
+      const format = fresh?.videoId === candidate.youtube.videoId &&
+        fresh.formats.find(item => item.itag === candidate.youtube.itag);
+      const current = await browser.storage.sync.get("mediaDetection");
+      if (!format || current.mediaDetection !== true ||
+          !await browser.permissions.contains({permissions: ["webRequest"],
+            origins: ["http://*/*", "https://*/*"]})) {
+        reply({ok: false}); return;
+      }
+      candidate.url = format.url;
+      candidate.totalBytes = format.totalBytes;
+    }
     const ok = await offerDownload(candidate, candidate.url, false, candidate);
     if (ok) mediaCandidates.delete(key);
     reply({ok});
   })().catch(() => reply(message.type === "cdm_media_list" ||
-    message.type === "cdm_media_list_tab" ? [] : {ok: false}));
+    message.type === "cdm_media_list_tab" ||
+    message.type === "cdm_youtube_formats_tab" ? [] : {ok: false}));
   return true; // Callback reply works in Firefox and older Chrome releases.
 });
 

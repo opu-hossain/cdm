@@ -291,6 +291,7 @@ add_custom_target(browser_extension_validate ALL
             browser/chromium/filters.js browser/firefox/filters.js
             browser/chromium/options.js browser/firefox/options.js
             browser/chromium/media_overlay.js browser/firefox/media_overlay.js
+            browser/chromium/youtube_probe.js browser/firefox/youtube_probe.js
     VERBATIM
 )
 
@@ -315,6 +316,7 @@ foreach(_browser IN ITEMS chromium firefox)
                 browser/${_browser}/filters.js
                 browser/${_browser}/options.js
                 browser/${_browser}/media_overlay.js
+                browser/${_browser}/youtube_probe.js
                 cmake/BundleBrowserExtension.py
         VERBATIM
     )

@@ -3,6 +3,22 @@
   const api = typeof browser !== "undefined" ? browser : chrome;
   let host, button, panel, title, rows = [];
   let refreshing = false, rendered = "";
+  let youtubePage = null, youtubeLoading = false;
+
+  function onYouTube() {
+    try {
+      const page = new URL(location.href);
+      return ["www.youtube.com", "m.youtube.com", "www.youtube-nocookie.com"]
+        .includes(page.hostname) &&
+        (page.pathname === "/watch" || page.pathname.startsWith("/embed/"));
+    } catch (_) { return false; }
+  }
+
+  function formatSize(bytes) {
+    if (!Number.isSafeInteger(bytes) || bytes <= 0) return "size unknown";
+    if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
 
   function playingVideo() {
     let chosen = null, area = 0;
@@ -35,7 +51,26 @@
     button = document.createElement("button");
     button.type = "button";
     button.textContent = "Download with cdm";
-    button.addEventListener("click", () => { panel.hidden = !panel.hidden; });
+    button.addEventListener("click", async () => {
+      const opening = panel.hidden;
+      panel.hidden = !panel.hidden;
+      if (!opening || !onYouTube()) return;
+      youtubePage = location.href;
+      youtubeLoading = true;
+      rows = [];
+      render();
+      try {
+        const found = await api.runtime.sendMessage({type: "cdm_youtube_formats_tab"});
+        if (location.href !== youtubePage) return;
+        rows = Array.isArray(found) ? found.filter(item =>
+          typeof item.id === "string" && item.id.length <= 128 &&
+          item.kind === "video" && typeof item.filename === "string" &&
+          item.filename.length <= 511 && typeof item.quality === "string" &&
+          item.quality.length <= 32 && Number.isSafeInteger(item.totalBytes) &&
+          item.totalBytes >= 0).slice(0, 16) : [];
+      } catch (_) { rows = []; }
+      finally { youtubeLoading = false; render(); }
+    });
     panel = document.createElement("div");
     panel.className = "panel";
     panel.hidden = true;
@@ -64,7 +99,9 @@
     for (const item of rows) {
       const choice = document.createElement("button");
       choice.type = "button";
-      choice.textContent = `${item.kind.toUpperCase()} · ${item.filename || "media"}`;
+      choice.textContent = item.quality
+        ? `${item.quality} · ${formatSize(item.totalBytes)} · ${item.filename}`
+        : `${item.kind.toUpperCase()} · ${item.filename || "media"}`;
       choice.addEventListener("click", async () => {
         choice.disabled = true;
         try {
@@ -79,7 +116,9 @@
     }
     if (!rows.length) {
       const unavailable = document.createElement("p");
-      unavailable.textContent = "No direct media detected for this video.";
+      unavailable.textContent = youtubeLoading ? "Checking YouTube formats…" :
+        youtubePage ? "No supported direct formats for this video." :
+        "No direct media detected for this video.";
       panel.appendChild(unavailable);
     }
   }
@@ -92,10 +131,18 @@
     }
     ensureUi();
     position();
+    if (youtubePage && (!onYouTube() || location.href !== youtubePage)) {
+      youtubePage = null;
+      youtubeLoading = false;
+      panel.hidden = true;
+      rows = [];
+    }
+    if (youtubePage && !panel.hidden) return;
     if (refreshing) return;
     refreshing = true;
     try {
       const found = await api.runtime.sendMessage({type: "cdm_media_list_tab"});
+      if (youtubePage && !panel.hidden) return;
       rows = Array.isArray(found) ? found.filter(item =>
         typeof item.id === "string" && item.id.length <= 128 &&
         ["hls", "dash", "video"].includes(item.kind) &&
@@ -108,6 +155,7 @@
       }
       position();
     } catch (_) {
+      if (youtubePage && !panel.hidden) return;
       rows = [];
       render();
       button.textContent = "Download with cdm";

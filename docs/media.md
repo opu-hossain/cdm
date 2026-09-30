@@ -7,15 +7,21 @@ appears at the top right of its frame. Choose a detected stream, review the
 native confirmation popup, and confirm. Extension Options also lists retained
 candidates. Detection alone does not enqueue a download.
 
-YouTube site streams and other streams that require site extraction are not
-supported. The former external site downloader has been removed. Existing
+On public YouTube watch pages, opening the in-player picker requests available
+combined MP4 formats from YouTube's player endpoint. The selected signed URL
+uses cdm's existing HTTP engine after confirmation. This uses no new dependency
+and does not forward browser cookies. Separate audio/video tracks, SABR-only
+responses without a combined direct URL, live streams, protected videos, and
+expired signed URLs remain unsupported. Available quality and size depend on
+the player response; size is shown as unknown when absent. The former external
+site downloader has been removed. Existing
 site-tool records remain readable in SQLite, but attempting to resume one
 fails with **External site downloads are no longer supported**. Historical IPC
 message numbers and database columns remain reserved for upgrade compatibility.
 
 | Format | Implemented path | Limits |
 |---|---|---|
-| Direct video | `src/engine/engine_runner.c` ordinary HTTP engine | Requires a usable media URL; protected, blob, or site-specific streams are unsupported. |
+| Direct video and combined YouTube MP4 | `src/engine/engine_runner.c` ordinary HTTP engine | Requires a usable direct media URL; protected, blob, and separate-track streams are unsupported. |
 | HLS | `src/engine/hls.c`, `hls_parse()` and `hls_run_download()` | Finite VOD with `#EXT-X-ENDLIST`; highest-bandwidth master variant; AES-128 identity keys and whole-file initialization maps. No live reload, byte ranges, discontinuities, DRM, or separate audio rendition. |
 | DASH | `src/engine/dash.c`, `dash_parse()` and `dash_run_download()` | Static single-period MPD with inherited BaseURL, SegmentTemplate/SegmentList and finite timelines; highest-bandwidth audio/video representation, first on ties. No dynamic/live, DRM, SegmentBase, byte ranges or multiple periods. |
 

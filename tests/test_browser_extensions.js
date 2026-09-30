@@ -11,6 +11,8 @@ async function verify(file, globalName, expectedBrowser) {
   let runtimeListener;
   let mediaDetection;
   let mediaSequence = 0;
+  let youtubeProbes = 0;
+  let youtubeMediaUrl = "https://media.example.invalid/videoplayback?token=fixture";
   let clock = Date.now();
   let storageListener;
   let permissionAddedListener;
@@ -72,7 +74,18 @@ async function verify(file, globalName, expectedBrowser) {
     scripting: {
       getRegisteredContentScripts() { return Promise.resolve(registeredMediaScripts); },
       registerContentScripts(scripts) { registeredMediaScripts.push(...scripts); return Promise.resolve(); },
-      unregisterContentScripts() { registeredMediaScripts.length = 0; return Promise.resolve(); }
+      unregisterContentScripts() { registeredMediaScripts.length = 0; return Promise.resolve(); },
+      executeScript({target, world, func}) {
+        assert.equal(world, "MAIN");
+        assert.equal(target.tabId, 7);
+        assert.deepEqual(Array.from(target.frameIds), [0]);
+        assert.equal(typeof func, "function");
+        youtubeProbes++;
+        return Promise.resolve([{result: {videoId: "fixture123", title: "Fixture video",
+          formats: [{itag: 18, quality: "360p", mime: "video/mp4",
+            url: `${youtubeMediaUrl}${youtubeProbes}`,
+            totalBytes: 2048}]}}]);
+      }
     },
     permissions: {
       onAdded: {addListener(listener) { permissionAddedListener = listener; }},
@@ -98,13 +111,16 @@ async function verify(file, globalName, expectedBrowser) {
     crypto: { randomUUID: () => mediaDetection ? `media-${++mediaSequence}` : "browser-test-request" },
     Date: {now: () => clock},
     console, URL, TextEncoder, setTimeout, clearTimeout,
-    importScripts(name) {
-      vm.runInContext(fs.readFileSync(path.join(path.dirname(file), name), "utf8"), sandbox);
+    importScripts(...names) {
+      for (const name of names)
+        vm.runInContext(fs.readFileSync(path.join(path.dirname(file), name), "utf8"), sandbox);
     }
   };
   const sandbox = vm.createContext(context);
   if (globalName === "browser")
     vm.runInContext(fs.readFileSync(path.join(path.dirname(file), "filters.js"), "utf8"), sandbox);
+  if (globalName === "browser")
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(file), "youtube_probe.js"), "utf8"), sandbox);
   vm.runInContext(fs.readFileSync(file, "utf8"), sandbox);
   assert.equal(typeof downloadListener, "function");
   assert.equal(typeof actionListener, "function");
@@ -346,6 +362,27 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal(await callTabRuntime({type: "cdm_site_probe_tab", explicit: true}), undefined);
   assert.equal(await callTabRuntime({type: "cdm_site_select_tab", id: "18"}), undefined);
   assert.equal(wireMessages.some(message => message.type === "site_probe"), false);
+  const youtubePage = "https://www.youtube.com/watch?v=fixture123";
+  const ytRows = await callTabRuntime({type: "cdm_youtube_formats_tab"}, 7, 0,
+    youtubePage);
+  assert.equal(ytRows.length, 1);
+  assert.equal(ytRows[0].quality, "360p");
+  assert.equal(ytRows[0].totalBytes, 2048);
+  assert(!Object.hasOwn(ytRows[0], "url"));
+  assert.equal((await callTabRuntime({type: "cdm_youtube_formats_tab"}, 7, 0,
+    "https://example.invalid/watch?v=fixture123")).length, 0);
+  assert.equal((await callTabRuntime({type: "cdm_media_offer_tab", id: ytRows[0].id},
+    7, 0, youtubePage)).ok, true);
+  assert.equal(youtubeProbes, 2, "refresh the signed URL before offering it");
+  assert.equal(messages.at(-1).kind, "video");
+  assert.equal(messages.at(-1).url,
+    "https://media.example.invalid/videoplayback?token=fixture2");
+  assert.equal(messages.at(-1).filename, "Fixture video 360p.mp4");
+  assert.equal(messages.at(-1).referrer, youtubePage);
+  assert.equal(messages.at(-1).cookie, undefined);
+  youtubeMediaUrl = "https://127.0.0.1/private?token=fixture";
+  assert.equal((await callTabRuntime({type: "cdm_youtube_formats_tab"}, 7, 0,
+    youtubePage)).length, 0, "player data must not offer loopback URLs");
   await mediaListener({...response, url: "https://example.invalid/overlay.mp4"});
   const pageRows = await callTabRuntime({type: "cdm_media_list_tab"});
   assert.equal((await callTabRuntime({type: "cdm_media_offer_tab", id: pageRows[0].id})).ok, true);
@@ -654,6 +691,111 @@ async function verifyMediaOverlay(file, globalName) {
   assert.equal(host.style.display, "none");
 }
 
+async function verifyYouTubeProbe(file) {
+  const script = path.join(path.dirname(file), "youtube_probe.js");
+  const response = {videoDetails: {videoId: "fixture123", title: "Fixture / video",
+    isLive: false}, playabilityStatus: {status: "OK"}, streamingData: {formats: [
+    {itag: 18, qualityLabel: "360p", mimeType: 'video/mp4; codecs="avc1, mp4a"',
+      audioQuality: "AUDIO_QUALITY_MEDIUM", contentLength: "2048",
+      url: "https://media.example.invalid/videoplayback?token=fixture"},
+    {itag: 22, qualityLabel: "720p", mimeType: "video/mp4",
+      audioQuality: "AUDIO_QUALITY_MEDIUM", signatureCipher: "s=encrypted"},
+    {itag: 137, qualityLabel: "1080p", mimeType: "video/mp4",
+      url: "https://media.example.invalid/video-only"}
+  ]}};
+  const webFormats = response.streamingData.formats;
+  response.streamingData.formats = []; // Current watch pages can expose SABR only.
+  const calls = [];
+  let rejectAndroid = false;
+  const sandbox = vm.createContext({
+    location: {href: "https://www.youtube.com/watch?v=fixture123"},
+    document: {getElementById: () => ({getPlayerResponse: () => response})},
+    ytcfg: {get: key => key === "INNERTUBE_API_KEY" ? "synthetic-key" : ""},
+    fetch: async (url, options) => {
+      calls.push({url, options});
+      if (rejectAndroid) throw new Error("fixture unavailable");
+      return {ok: true, json: async () => ({videoDetails: response.videoDetails,
+        playabilityStatus: {status: "OK"},
+        streamingData: {formats: [{itag: 18, qualityLabel: "360p",
+          mimeType: 'video/mp4; codecs="avc1, mp4a"',
+          audioQuality: "AUDIO_QUALITY_MEDIUM", contentLength: "2048",
+          url: "https://media.example.invalid/android-direct?token=fixture"}]}})};
+    },
+    AbortController, clearTimeout, setTimeout, URL
+  });
+  vm.runInContext(fs.readFileSync(script, "utf8"), sandbox);
+  const result = await sandbox.CdmYouTubeProbe.pageProbe();
+  assert.equal(result.videoId, "fixture123");
+  assert.equal(result.title, "Fixture / video");
+  assert.equal(result.formats.length, 1);
+  assert.equal(result.formats[0].quality, "360p");
+  assert.equal(result.formats[0].url,
+    "https://media.example.invalid/android-direct?token=fixture");
+  assert.equal(calls.length, 1);
+  assert.equal(new URL(calls[0].url).pathname, "/youtubei/v1/player");
+  assert.equal(calls[0].options.credentials, "omit");
+  assert.equal(JSON.parse(calls[0].options.body).context.client.clientName,
+    "ANDROID");
+  response.streamingData.formats = webFormats;
+  rejectAndroid = true;
+  assert.equal((await sandbox.CdmYouTubeProbe.pageProbe()).formats[0].url,
+    "https://media.example.invalid/videoplayback?token=fixture");
+  response.videoDetails.videoId = "staleVideo";
+  assert.equal((await sandbox.CdmYouTubeProbe.pageProbe()).formats.length, 0,
+    "SPA navigation must not offer formats for the previous video");
+  assert.equal(calls.length, 2, "stale pages must not probe another video");
+}
+
+async function verifyYouTubeOverlay(file, globalName) {
+  class Element {
+    constructor(tag) {
+      this.tagName = tag; this.children = []; this.listeners = {}; this.style = {};
+      this.textContent = ""; this.hidden = false;
+    }
+    appendChild(child) { this.children.push(child); return child; }
+    append(...children) { children.forEach(child => this.appendChild(child)); }
+    replaceChildren(...children) { this.children = children; }
+    addEventListener(type, listener) { this.listeners[type] = listener; }
+    attachShadow() { this.shadow = new Element("shadow"); return this.shadow; }
+    click() { return this.listeners.click?.(); }
+  }
+  const root = new Element("html");
+  const video = {paused: false, ended: false, getBoundingClientRect() {
+    return {left: 20, top: 30, right: 820, bottom: 480, width: 800, height: 450};
+  }};
+  const calls = [];
+  const sandbox = vm.createContext({
+    [globalName]: {runtime: {sendMessage(message) {
+      calls.push(message);
+      if (message.type === "cdm_media_list_tab") return Promise.resolve([]);
+      if (message.type === "cdm_youtube_formats_tab") return Promise.resolve([
+        {id: "yt-fixture", kind: "video", filename: "Fixture video 360p.mp4",
+          quality: "360p", totalBytes: 2048}]);
+      return Promise.resolve({ok: true});
+    }}},
+    location: {href: "https://www.youtube.com/watch?v=fixture123"}, URL,
+    document: {documentElement: root, title: "Fixture video - YouTube",
+      querySelectorAll() { return [video]; }, createElement(tag) { return new Element(tag); },
+      addEventListener() {}},
+    window: {addEventListener() {}}, setInterval() {}, console
+  });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(file), "media_overlay.js"), "utf8"),
+    sandbox);
+  await new Promise(setImmediate);
+  const host = root.children[0];
+  const button = host.shadow.children[1];
+  const panel = host.shadow.children[2];
+  await button.click();
+  assert.equal(panel.hidden, false);
+  assert(calls.some(call => call.type === "cdm_youtube_formats_tab"));
+  assert.match(panel.children[1].textContent, /360p/);
+  assert.match(panel.children[1].textContent, /2\.0 KB/);
+  await panel.children[1].click();
+  assert.equal(calls.at(-1).type, "cdm_media_offer_tab");
+  assert.equal(calls.at(-1).id, "yt-fixture");
+  assert.equal(button.textContent, "Offered to cdm");
+}
+
 for (const file of [process.argv[2], process.argv[3]]) {
   const manifest = JSON.parse(fs.readFileSync(
     path.join(path.dirname(file), "manifest.json"), "utf8"));
@@ -674,5 +816,9 @@ Promise.all([
   verifyOptions(process.argv[2], "chrome"),
   verifyOptions(process.argv[3], "browser"),
   verifyMediaOverlay(process.argv[2], "chrome"),
-  verifyMediaOverlay(process.argv[3], "browser")
+  verifyMediaOverlay(process.argv[3], "browser"),
+  verifyYouTubeProbe(process.argv[2]),
+  verifyYouTubeProbe(process.argv[3]),
+  verifyYouTubeOverlay(process.argv[2], "chrome"),
+  verifyYouTubeOverlay(process.argv[3], "browser")
 ]).catch(error => { console.error(error); process.exitCode = 1; });
