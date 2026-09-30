@@ -164,6 +164,7 @@ set(ENGINE_SOURCES
     src/engine/dash.c
     src/engine/engine_runner.c
     src/engine/hls.c
+    src/engine/youtube_sabr.c
     src/engine/segmenter.c
     src/engine/worker_pool.c
     src/engine/finalize.c

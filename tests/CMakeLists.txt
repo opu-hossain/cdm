@@ -21,6 +21,7 @@ set(TEST_SOURCES
     test_config.c
     test_i18n.c
     test_url.c
+    test_youtube_sabr.c
 )
 
 foreach(TEST_SOURCE ${TEST_SOURCES})
