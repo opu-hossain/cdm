@@ -273,6 +273,11 @@ async function observeMediaHeaders(details) {
     pruneMedia();
     const frameId = Number.isInteger(details.frameId) && details.frameId >= 0
       ? details.frameId : 0;
+    const hasManifest = [...mediaCandidates.values()].some(value =>
+      value.tabId === details.tabId && value.frameId === frameId &&
+      (value.kind === "hls" || value.kind === "dash"));
+    if (CdmFilters.playbackFragment(details.url, kind, details.statusCode,
+                                    details.responseHeaders, hasManifest)) return;
     const key = `${details.tabId}\n${frameId}\n${details.url}`;
     if (mediaCandidates.has(key)) return;
     const context = await offerContext({incognito: false}, details.url);

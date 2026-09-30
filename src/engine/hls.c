@@ -1296,11 +1296,23 @@ static int run_asset_playlist(Download *d, const char *destination,
       HlsBody body = {
           .data = data, .limit = HLS_MAX_PLAYLIST_BYTES, .download = d};
       char effective[HLS_URL_MAX], error[128];
-      if (!fetch_body(d, &context, url, &body, effective) ||
-          hls_parse((char *)data, body.size, effective, &playlist, error,
-                    sizeof(error)) != HLS_OK)
+      if (!fetch_body(d, &context, url, &body, effective))
         break;
+      HlsResult parse_result = hls_parse((char *)data, body.size, effective,
+                                         &playlist, error, sizeof(error));
+      if (parse_result != HLS_OK) {
+        if (parse_result != HLS_NO_MEMORY) {
+          queue_manager_set_site_error(d->id, error);
+          result = -9;
+        }
+        break;
+      }
       if (playlist.is_master) {
+        if (depth == 4) {
+          queue_manager_set_site_error(d->id,
+                                       "HLS playlist nesting limit exceeded");
+          result = -9;
+        }
         strcpy(url, playlist.selected_url);
         hls_playlist_free(&playlist);
         continue;
@@ -1333,6 +1345,10 @@ static int run_asset_playlist(Download *d, const char *destination,
   }
   if (!parsed || !playlist.end_list) {
     LOG_WARN("HLS download %u requires a supported finite VOD playlist", d->id);
+    if (parsed && !playlist.end_list) {
+      queue_manager_set_site_error(d->id, "Live HLS playlist is unsupported");
+      result = -9;
+    }
     hls_playlist_free(&playlist);
     goto finish;
   }

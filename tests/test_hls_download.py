@@ -208,7 +208,10 @@ def main(driver):
             else:
                 print("SKIP: real ffmpeg remux fixture (ffmpeg missing)")
             rc, dest = run("/live.m3u8", root / "live")
-            assert rc != 0 and dest.read_bytes() == b""
+            assert rc == -9 and dest.read_bytes() == b""
+            with sqlite3.connect(root / "live" / "db.sqlite") as db:
+                assert "Live HLS" in db.execute(
+                    "SELECT last_error FROM downloads").fetchone()[0]
     finally:
         other.shutdown()
         other.server_close()

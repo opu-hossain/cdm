@@ -875,9 +875,14 @@ int dash_run_download(Download *d) {
   if (rc != 0)
     goto finish;
   rc = -1;
-  if (dash_parse((char *)buffer, length, base, &manifest, error,
-                 sizeof(error)) != DASH_OK) {
+  DashResult parse_result = dash_parse((char *)buffer, length, base, &manifest,
+                                       error, sizeof(error));
+  if (parse_result != DASH_OK) {
     LOG_WARN("DASH download %u: %s", d->id, error);
+    if (parse_result != DASH_NO_MEMORY) {
+      queue_manager_set_site_error(d->id, error);
+      rc = -9;
+    }
     goto finish;
   }
   atomic_store(&d->bytes_downloaded, 0);

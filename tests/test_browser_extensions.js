@@ -369,6 +369,15 @@ async function verify(file, globalName, expectedBrowser) {
   await mediaListener({...response, url: "https://example.invalid/stream",
     responseHeaders: [{name: "content-type", value: "video/webm"}]});
   assert.equal((await callRuntime({type: "cdm_media_list"})).length, 3);
+  await mediaListener({...response, url: "https://example.invalid/ranged.mp4",
+    statusCode: 206, responseHeaders: [{name: "Content-Range", value: "bytes 0-999/5000"}]});
+  await mediaListener({...response, url: "https://example.invalid/chunk.m4s",
+    responseHeaders: [{name: "Content-Type", value: "video/mp4"}]});
+  await mediaListener({...response, url: "https://example.invalid/tiny.mp4",
+    responseHeaders: [{name: "Content-Type", value: "video/mp4"},
+      {name: "Content-Length", value: "8192"}]});
+  assert.equal((await callRuntime({type: "cdm_media_list"})).length, 3,
+    "playback fragments must not appear as complete videos");
   for (const item of [{...response, incognito: true}, {...response, statusCode: 404},
       {...response, method: "POST"}, {...response, tabId: -1},
       {...response, url: "blob:https://example.invalid/fixture"}])
@@ -381,7 +390,7 @@ async function verify(file, globalName, expectedBrowser) {
   for (let i = 0; i < 80; i++)
     await mediaListener({...response, url: `https://example.invalid/segment-${i}.mp4`});
   candidates = await callRuntime({type: "cdm_media_list"});
-  assert.equal(candidates.length, 64);
+  assert.equal(candidates.length, 3);
   assert(candidates.some(c => c.kind === "dash"), "segments must not crowd out manifests");
   clock += 600001;
   assert.equal((await callRuntime({type: "cdm_media_list"})).length, 0);
@@ -499,6 +508,10 @@ async function verifyOptions(file, globalName) {
   await elements.mediaRefresh.listeners.click();
   assert.match(elements.mediaStatus.textContent, /permission/i);
   const filters = context.CdmFilters;
+  assert.equal(filters.mediaKind("https://example.invalid/part.m4s", "video/mp4"), "");
+  assert.equal(filters.mediaKind("https://example.invalid/segment.ts", "video/mp2t"), "");
+  assert.equal(filters.playbackFragment("https://example.invalid/short.mp4",
+    "video", 200, [{name: "Content-Length", value: "8192"}], false), false);
   assert.equal(filters.mediaKind("https://example.invalid/file.MPD?q=1"), "dash");
   assert.equal(filters.mediaKind("https://example.invalid/video", "Video/MP4; charset=x"), "video");
   assert.equal(filters.mediaKind("https://example.invalid/videoplayback",

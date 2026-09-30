@@ -8,11 +8,26 @@ globalThis.CdmFilters = Object.freeze({
       pathname = decodeURIComponent(parsed.pathname).toLowerCase();
     } catch (_) { return ""; }
     const type = mime.split(";", 1)[0].trim().toLowerCase();
+    if (/\.(?:m4s|cmfv|cmfa|ts|m2ts)$/.test(pathname)) return "";
     if (pathname.endsWith(".m3u8") || type === "application/vnd.apple.mpegurl" ||
         type === "application/x-mpegurl") return "hls";
     if (pathname.endsWith(".mpd") || type === "application/dash+xml") return "dash";
     return /\.(mp4|webm|ogv|ogg|mov|m4v|mkv|avi)$/.test(pathname) ||
       /^video\/[a-z0-9.+-]+$/.test(type) ? "video" : "";
+  },
+  playbackFragment(url, kind, status, headers = [], hasManifest = false) {
+    if (kind !== "video") return false;
+    if (status === 206 || headers.some(header =>
+        header.name.toLowerCase() === "content-range")) return true;
+    let path;
+    try { path = decodeURIComponent(new URL(url).pathname).toLowerCase(); }
+    catch (_) { return true; }
+    if (/(?:^|[\/._-])(?:segment|chunk|frag|part)(?:[\/._-]|[0-9]|$)/.test(path))
+      return true;
+    const length = headers.find(header =>
+      header.name.toLowerCase() === "content-length")?.value;
+    return hasManifest && /^[0-9]+$/.test(length || "") &&
+      Number(length) < 512 * 1024;
   },
   normalizeSites(input = []) {
     if (!Array.isArray(input) || input.length > 64)

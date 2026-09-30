@@ -15,6 +15,7 @@ static _Atomic int active_workers;
 static _Atomic bool hold_workers;
 static _Atomic bool fail_workers;
 static _Atomic bool block_by_scanner;
+static _Atomic bool unsupported_manifest;
 static _Atomic int engine_runs;
 static _Atomic int post_action_runs;
 static _Atomic uint64_t tray_received;
@@ -53,6 +54,10 @@ int engine_run_download(struct Download *d) {
     return -1;
   if (atomic_load(&block_by_scanner))
     return -6;
+  if (atomic_load(&unsupported_manifest)) {
+    queue_manager_set_site_error(d->id, "Live HLS playlist is unsupported");
+    return -9;
+  }
   return 0;
 }
 
@@ -62,6 +67,7 @@ static void setup_scheduler(void) {
   atomic_store(&hold_workers, false);
   atomic_store(&fail_workers, false);
   atomic_store(&block_by_scanner, false);
+  atomic_store(&unsupported_manifest, false);
   atomic_store(&engine_runs, 0);
   atomic_store(&post_action_runs, 0);
   atomic_store(&tray_received, UINT64_MAX);
@@ -379,6 +385,32 @@ Test(scheduler, scanner_block_is_nonretryable_and_persisted) {
     dm_thread_sleep_ms(1);
   }
   cr_assert_null(queue_manager_find_by_id(id));
+}
+
+Test(scheduler, unsupported_manifest_is_not_retried) {
+  const char *url = "http://127.0.0.1/live.m3u8";
+  const char *path = "/tmp/cdm-live-manifest-fixture";
+  uint32_t id = queue_manager_add(url, path, NULL);
+  cr_assert_neq(id, 0);
+  cr_assert_eq(db_insert_download(id, url, path, NULL), 0);
+  atomic_store(&unsupported_manifest, true);
+  for (int i = 0; i < 1000; i++) {
+    scheduler_tick();
+    DownloadStatus status;
+    if (queue_manager_get_status(id, &status) && status == DOWNLOAD_ERROR)
+      break;
+    dm_thread_sleep_ms(1);
+  }
+  DownloadStatus status;
+  cr_assert(queue_manager_get_status(id, &status));
+  cr_assert_eq(status, DOWNLOAD_ERROR);
+  for (int i = 0; i < 10; i++) scheduler_tick();
+  cr_assert_eq(atomic_load(&engine_runs), 1);
+  char error[256];
+  cr_assert(queue_manager_get_error(id, error, sizeof(error)));
+  cr_assert_str_eq(error, "Live HLS playlist is unsupported");
+  scheduler_shutdown();
+  queue_manager_remove(id);
 }
 
 Test(scheduler, tick_starts_download) {

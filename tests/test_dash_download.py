@@ -13,6 +13,7 @@ import threading
 def main(driver):
     bodies = {"/video.mp4": b"synthetic-video", "/audio.m4a": b"synthetic-audio"}
     bodies["/main.mpd"] = b"""<MPD><Period><AdaptationSet contentType="video"><Representation bandwidth="100"><SegmentList><SegmentURL media="video.mp4"/></SegmentList></Representation></AdaptationSet><AdaptationSet contentType="audio"><Representation bandwidth="20"><SegmentList><SegmentURL media="audio.m4a"/></SegmentList></Representation></AdaptationSet></Period></MPD>"""
+    bodies["/live.mpd"] = b"""<MPD type="dynamic"><Period><AdaptationSet contentType="video"><Representation bandwidth="100"><SegmentList><SegmentURL media="video.mp4"/></SegmentList></Representation></AdaptationSet></Period></MPD>"""
     counts = {}
     fail_audio = False
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -43,12 +44,12 @@ def main(driver):
             root = Path(temp)
             config = root / "config.toml"
             config.write_text("[downloads]\nmax_connections_per_download = 2\n[retry]\nmax_attempts = 0\n")
-            def attempt(folder, path, control="dash"):
+            def attempt(folder, path, control="dash", manifest="/main.mpd"):
                 folder.mkdir(exist_ok=True)
                 env = os.environ.copy()
                 env["PATH"] = path
                 env["DOWNLOADMGR_ROOT"] = str(root)
-                result = subprocess.run([driver, f"http://127.0.0.1:{server.server_port}/main.mpd", str(folder / "output.mp4"), str(folder / "db.sqlite"), str(config), control], env=env, check=True, text=True, capture_output=True, timeout=30)
+                result = subprocess.run([driver, f"http://127.0.0.1:{server.server_port}{manifest}", str(folder / "output.mp4"), str(folder / "db.sqlite"), str(config), control], env=env, check=True, text=True, capture_output=True, timeout=30)
                 return int(result.stdout.split()[0]), result.stderr
             def run(folder, path):
                 rc, error = attempt(folder, path)
@@ -58,6 +59,11 @@ def main(driver):
                 assert row[3:] == ("QUEUED", 2), row
                 return row
             missing = root / "missing"
+            rc, _ = attempt(root / "live", "/definitely/missing", manifest="/live.mpd")
+            assert rc == -9, "dynamic DASH must fail without scheduler retries"
+            with sqlite3.connect(root / "live" / "db.sqlite") as db:
+                assert "dynamic MPD" in db.execute(
+                    "SELECT last_error FROM downloads").fetchone()[0]
             row = run(missing, "/definitely/missing")
             assert Path(row[0]).read_bytes() == bodies["/video.mp4"]
             assert Path(row[1]).read_bytes() == bodies["/audio.m4a"]
