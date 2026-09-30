@@ -94,7 +94,10 @@
   }
 
   function render() {
-    title.textContent = (document.title || "Video").slice(0, 120);
+    const pageTitle = document.title || "Video";
+    title.textContent = (onYouTube()
+      ? pageTitle.replace(/^\(\d+\)\s*/, "").replace(/\s+-\s+YouTube$/, "")
+      : pageTitle).slice(0, 120);
     panel.replaceChildren(title);
     for (const item of rows) {
       const choice = document.createElement("button");

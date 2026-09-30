@@ -724,6 +724,10 @@ async function verifyYouTubeProbe(file) {
     AbortController, clearTimeout, setTimeout, URL
   });
   vm.runInContext(fs.readFileSync(script, "utf8"), sandbox);
+  const injectedProbe = vm.runInContext(
+    `(${sandbox.CdmYouTubeProbe.pageProbe.toString()})`, sandbox);
+  assert.equal(typeof injectedProbe, "function",
+    "browser scripting must be able to deserialize the injected function");
   const result = await sandbox.CdmYouTubeProbe.pageProbe();
   assert.equal(result.videoId, "fixture123");
   assert.equal(result.title, "Fixture / video");
@@ -774,7 +778,7 @@ async function verifyYouTubeOverlay(file, globalName) {
       return Promise.resolve({ok: true});
     }}},
     location: {href: "https://www.youtube.com/watch?v=fixture123"}, URL,
-    document: {documentElement: root, title: "Fixture video - YouTube",
+    document: {documentElement: root, title: "(7) Fixture video - YouTube",
       querySelectorAll() { return [video]; }, createElement(tag) { return new Element(tag); },
       addEventListener() {}},
     window: {addEventListener() {}}, setInterval() {}, console
@@ -787,6 +791,8 @@ async function verifyYouTubeOverlay(file, globalName) {
   const panel = host.shadow.children[2];
   await button.click();
   assert.equal(panel.hidden, false);
+  assert.equal(panel.children[0].textContent, "Fixture video",
+    "YouTube notification counts and site suffix are not the video title");
   assert(calls.some(call => call.type === "cdm_youtube_formats_tab"));
   assert.match(panel.children[1].textContent, /360p/);
   assert.match(panel.children[1].textContent, /2\.0 KB/);

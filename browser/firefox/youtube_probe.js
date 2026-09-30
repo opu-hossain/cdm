@@ -10,7 +10,7 @@ globalThis.CdmYouTubeProbe = {
         (page.pathname === "/watch" || page.pathname.startsWith("/embed/"));
     } catch (_) { return false; }
   },
-  async pageProbe() {
+  pageProbe: async function pageProbe() {
     const empty = {videoId: "", title: "", formats: []};
     let videoId = "";
     try {
