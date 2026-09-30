@@ -163,7 +163,7 @@ CURLcode curl_apply_basic_auth(CURL *curl, const RequestContext *ctx) {
 int curl_client_head(const char *url, const RequestContext *ctx,
                      FileInfo *out) {
   memset(out, 0, sizeof(*out));
-  const char *log_url = ctx && ctx->sensitive ? "[REDACTED]" : url;
+  const char *log_url = "[REDACTED]";
   ProbeState state = {.info = out};
 
   CURL *curl = curl_easy_init();

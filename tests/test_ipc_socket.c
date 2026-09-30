@@ -149,6 +149,59 @@ Test(ipc, hls_confirmation_persists_kind_without_browser_credentials) {
   db_close(); unlink(path); rmdir(directory); unsetenv("DOWNLOADMGR_ROOT");
 }
 
+Test(ipc, ordinary_add_routes_manifest_urls_without_logging_signed_query) {
+  char directory[] = "/tmp/cdm-manifest-add-XXXXXX";
+  cr_assert_not_null(mkdtemp(directory));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", directory, 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  char log_path[256];
+  int length = snprintf(log_path, sizeof(log_path), "%s/daemon.log", directory);
+  cr_assert_gt(length, 0); cr_assert_lt((size_t)length, sizeof(log_path));
+  cr_assert(log_init(log_path, LOG_INFO));
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  const char *urls[] = {
+      "https://example.invalid/movie.m3u8?sec=synthetic-secret",
+      "https://example.invalid/movie.MPD?sec=synthetic-secret",
+      "https://example.invalid/movie.m3u8.bin?sec=synthetic-secret"};
+  const DownloadMediaKind kinds[] = {
+      DOWNLOAD_MEDIA_HLS, DOWNLOAD_MEDIA_DASH, DOWNLOAD_MEDIA_NONE};
+  uint32_t ids[3] = {0};
+  for (size_t i = 0; i < 3; i++) {
+    char path[256];
+    length = snprintf(path, sizeof(path), "%s/output-%zu", directory, i);
+    cr_assert_gt(length, 0); cr_assert_lt((size_t)length, sizeof(path));
+    IpcAddResponse response = {0};
+    cr_assert_eq(ipc_send_add_download_v3(client, urls[i], path, NULL,
+                                           false, &response), 0);
+    cr_assert_eq(response.result, IPC_RESULT_OK);
+    ids[i] = response.id;
+    Download *download = queue_manager_find_by_id(ids[i]);
+    cr_assert_not_null(download);
+    cr_assert_eq(download->media_kind, kinds[i]);
+    unlink(path);
+    queue_manager_remove(ids[i]);
+  }
+  FILE *log_file = fopen(log_path, "rb");
+  cr_assert_not_null(log_file);
+  char content[8192];
+  size_t read = fread(content, 1, sizeof(content) - 1, log_file);
+  content[read] = '\0';
+  cr_assert_eq(fclose(log_file), 0);
+  cr_assert_null(strstr(content, "synthetic-secret"));
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop(); db_close(); log_close();
+  unlink(log_path);
+  unsetenv("DOWNLOADMGR_ROOT");
+  rmdir(directory);
+}
+
 Test(ipc, browser_context_is_ephemeral_and_can_refresh_after_restore) {
   char root[] = "/tmp/cdm-browser-context-XXXXXX";
   cr_assert_not_null(mkdtemp(root));

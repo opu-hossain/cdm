@@ -294,8 +294,7 @@ static size_t worker_write_callback(void *data, size_t size, size_t nmemb,
  * Execute a single HTTP request for the current segment.
  */
 static void run_one_segment(WorkerContext *ctx) {
-  const char *log_url = ctx->request_ctx && ctx->request_ctx->sensitive
-                            ? "[REDACTED]" : ctx->url;
+  const char *log_url = "[REDACTED]";
   ctx->succeeded = false;
   ctx->truncated = false;
   atomic_store(&ctx->bytes_done, 0);

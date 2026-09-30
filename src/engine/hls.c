@@ -628,7 +628,9 @@ static bool context_allows(const Download *d, const RequestContext *ctx,
 
 /* GET bodies are bounded even when Content-Length is absent or gzip expands. */
 static bool fetch_body(Download *d, const RequestContext *ctx, const char *url,
-                       HlsBody *body, char *effective) {
+                       HlsBody *body, char *effective, long *http_status) {
+  if (http_status)
+    *http_status = 0;
   if (!context_allows(d, ctx, url) || stopped(d))
     return false;
   CURL *curl = curl_easy_init();
@@ -671,9 +673,14 @@ static bool fetch_body(Download *d, const RequestContext *ctx, const char *url,
 #undef HLS_SET
   long status = 0;
   char *final = NULL;
-  ok = ok && curl_easy_perform(curl) == CURLE_OK &&
-       curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status) == CURLE_OK &&
-       status == 200;
+  CURLcode transfer = CURLE_OK;
+  if (ok)
+    transfer = curl_easy_perform(curl);
+  bool has_status = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status) ==
+                    CURLE_OK;
+  if (http_status && has_status)
+    *http_status = status;
+  ok = ok && transfer == CURLE_OK && has_status && status == 200;
   if (ok && effective) {
     ok = curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &final) == CURLE_OK &&
          final && strlen(final) < HLS_URL_MAX;
@@ -683,6 +690,16 @@ static bool fetch_body(Download *d, const RequestContext *ctx, const char *url,
   curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
   return ok;
+}
+
+static const char *manifest_http_error(long status) {
+  switch (status) {
+  case 401: return "Manifest request failed: HTTP 401";
+  case 403: return "Manifest request failed: HTTP 403";
+  case 404: return "Manifest request failed: HTTP 404";
+  case 410: return "Manifest request failed: HTTP 410";
+  default: return NULL;
+  }
 }
 
 static bool digest_bytes(const void *data, size_t length, char *hex) {
@@ -852,7 +869,8 @@ static int segment_job(void *arg) {
     if (job->key->encrypted) {
       HlsBody body = {.data = key, .limit = 16, .download = job->download};
       ready =
-          fetch_body(job->download, job->context, job->key->url, &body, NULL) &&
+          fetch_body(job->download, job->context, job->key->url, &body, NULL,
+                     NULL) &&
           body.size == 16 && digest_bytes(key, sizeof(key), key_digest);
     }
     FileInfo info = {0};
@@ -1296,8 +1314,15 @@ static int run_asset_playlist(Download *d, const char *destination,
       HlsBody body = {
           .data = data, .limit = HLS_MAX_PLAYLIST_BYTES, .download = d};
       char effective[HLS_URL_MAX], error[128];
-      if (!fetch_body(d, &context, url, &body, effective))
+      long http_status = 0;
+      if (!fetch_body(d, &context, url, &body, effective, &http_status)) {
+        const char *error = manifest_http_error(http_status);
+        if (error) {
+          queue_manager_set_site_error(d->id, error);
+          result = -10;
+        }
         break;
+      }
       HlsResult parse_result = hls_parse((char *)data, body.size, effective,
                                          &playlist, error, sizeof(error));
       if (parse_result != HLS_OK) {
@@ -1535,8 +1560,15 @@ int hls_fetch_manifest(Download *d, unsigned char *buffer, size_t capacity,
   if (d->requires_browser_context && !context.sensitive)
     return -5;
   HlsBody body = {.data = buffer, .limit = capacity, .download = d};
-  if (!fetch_body(d, &context, d->url, &body, base))
+  long http_status = 0;
+  if (!fetch_body(d, &context, d->url, &body, base, &http_status)) {
+    const char *error = manifest_http_error(http_status);
+    if (error) {
+      queue_manager_set_site_error(d->id, error);
+      return -10;
+    }
     return -1;
+  }
   EVP_MD_CTX *digest = EVP_MD_CTX_new();
   unsigned char hash[32];
   unsigned int hash_size = 0;

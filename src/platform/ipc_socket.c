@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -676,9 +677,16 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         read_string(client_fd, dest, sizeof(dest)) != 0 ||
         read_string(client_fd, options_json, sizeof(options_json)) != 0)
       return;
-    LOG_INFO("MSG_ADD_DOWNLOAD received: url='%s' dest='%s'", url, dest);
+    LOG_INFO("MSG_ADD_DOWNLOAD received");
 
     RequestOptions opts = {0};
+    size_t url_path_len = strcspn(url, "?#");
+    if (url_path_len >= 5 &&
+        strncasecmp(url + url_path_len - 5, ".m3u8", 5) == 0)
+      opts.media_kind = DOWNLOAD_MEDIA_HLS;
+    else if (url_path_len >= 4 &&
+             strncasecmp(url + url_path_len - 4, ".mpd", 4) == 0)
+      opts.media_kind = DOWNLOAD_MEDIA_DASH;
     bool invalid_queue_id = false;
     bool auto_filename = hdr->type == MSG_ADD_DOWNLOAD_AUTO;
     bool auto_directory = false;

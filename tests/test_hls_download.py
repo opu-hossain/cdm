@@ -20,6 +20,7 @@ def main(driver):
         "/map.m3u8": b"#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:1\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:1,\na.ts\n#EXTINF:1,\nb.ts\n#EXT-X-ENDLIST\n",
         "/init.mp4": b"initialization",
         "/live.m3u8": b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\na.ts\n",
+        "/denied.m3u8": b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\na.ts\n#EXT-X-ENDLIST\n",
     }
     # Synthetic AES-CBC vectors generated with OpenSSL; not production keys.
     bodies["/key"] = bytes(range(16))
@@ -52,6 +53,9 @@ def main(driver):
                     broken = True
                     fail_once.remove(self.path)
                 body = bodies.get(self.path)
+            if self.path == "/denied.m3u8":
+                self.send_error(403)
+                return
             if body is None or broken:
                 self.send_error(503 if broken else 404)
                 return
@@ -211,6 +215,11 @@ def main(driver):
             assert rc == -9 and dest.read_bytes() == b""
             with sqlite3.connect(root / "live" / "db.sqlite") as db:
                 assert "Live HLS" in db.execute(
+                    "SELECT last_error FROM downloads").fetchone()[0]
+            rc, _ = run("/denied.m3u8", root / "denied")
+            assert rc == -10
+            with sqlite3.connect(root / "denied" / "db.sqlite") as db:
+                assert "HTTP 403" in db.execute(
                     "SELECT last_error FROM downloads").fetchone()[0]
     finally:
         other.shutdown()

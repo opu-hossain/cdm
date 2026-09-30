@@ -128,25 +128,29 @@ static int download_thread_fn(void *arg) {
     return rc;
   }
 
-  if (rc == -3 || rc == -4 || rc == -5 || rc == -6 || rc == -8 || rc == -9) {
+  if (rc == -3 || rc == -4 || rc == -5 || rc == -6 || rc == -8 || rc == -9 ||
+      rc == -10) {
     dl->retry_count = 0;
     dl->next_retry_at = 0;
     if (rc == -6 || rc == -8)
       queue_manager_set_site_error(dl->id, rc == -8
         ? "External site downloads are no longer supported" : "Blocked by scanner");
-    if (rc == -9) {
+    if (rc == -9 || rc == -10) {
       char reason[256];
       if (!queue_manager_get_error(dl->id, reason, sizeof(reason)) || !reason[0])
-        queue_manager_set_site_error(dl->id, "Unsupported media manifest");
+        queue_manager_set_site_error(dl->id, rc == -10
+          ? "Manifest request failed" : "Unsupported media manifest");
     }
     queue_manager_update_status(dl->id, DOWNLOAD_ERROR);
     db_update_status(dl->id, "ERROR");
-    ipc_broadcast_status(dl->id, rc == -9 ? "Unsupported media" :
+    ipc_broadcast_status(dl->id, rc == -10 ? "Manifest unavailable" :
+                          rc == -9 ? "Unsupported media" :
                           rc == -8 ? "Unsupported site download" :
                           rc == -6 ? "Blocked by scanner" :
                           rc == -5 ? "Fresh browser session required" : "Error",
                           dl->progress);
     LOG_WARN("Download %u failed — %s, not retrying: %s", dl->id,
+             rc == -10 ? "manifest unavailable" :
              rc == -9 ? "unsupported media manifest" :
              rc == -8 ? "external site downloads are unsupported" :
              rc == -6 ? "blocked by scanner" :

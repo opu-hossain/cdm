@@ -316,5 +316,5 @@ void gui_model_add_local_row(uint32_t id, const char *url,
     g_row_count++;
   }
   dm_mutex_unlock(&g_mutex);
-  LOG_INFO("id=%u url='%s'", id, url ? url : "");
+  LOG_INFO("id=%u queued", id);
 }

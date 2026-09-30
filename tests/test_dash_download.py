@@ -14,12 +14,16 @@ def main(driver):
     bodies = {"/video.mp4": b"synthetic-video", "/audio.m4a": b"synthetic-audio"}
     bodies["/main.mpd"] = b"""<MPD><Period><AdaptationSet contentType="video"><Representation bandwidth="100"><SegmentList><SegmentURL media="video.mp4"/></SegmentList></Representation></AdaptationSet><AdaptationSet contentType="audio"><Representation bandwidth="20"><SegmentList><SegmentURL media="audio.m4a"/></SegmentList></Representation></AdaptationSet></Period></MPD>"""
     bodies["/live.mpd"] = b"""<MPD type="dynamic"><Period><AdaptationSet contentType="video"><Representation bandwidth="100"><SegmentList><SegmentURL media="video.mp4"/></SegmentList></Representation></AdaptationSet></Period></MPD>"""
+    bodies["/denied.mpd"] = bodies["/main.mpd"]
     counts = {}
     fail_audio = False
     class Handler(http.server.BaseHTTPRequestHandler):
         def serve(self, head):
             if self.path not in bodies:
                 self.send_error(404)
+                return
+            if self.path == "/denied.mpd":
+                self.send_error(403)
                 return
             if self.path == "/audio.m4a" and fail_audio:
                 self.send_error(500)
@@ -63,6 +67,12 @@ def main(driver):
             assert rc == -9, "dynamic DASH must fail without scheduler retries"
             with sqlite3.connect(root / "live" / "db.sqlite") as db:
                 assert "dynamic MPD" in db.execute(
+                    "SELECT last_error FROM downloads").fetchone()[0]
+            rc, _ = attempt(root / "denied", "/definitely/missing",
+                            manifest="/denied.mpd")
+            assert rc == -10
+            with sqlite3.connect(root / "denied" / "db.sqlite") as db:
+                assert "HTTP 403" in db.execute(
                     "SELECT last_error FROM downloads").fetchone()[0]
             row = run(missing, "/definitely/missing")
             assert Path(row[0]).read_bytes() == bodies["/video.mp4"]
