@@ -165,6 +165,8 @@ set(ENGINE_SOURCES
     src/engine/engine_runner.c
     src/engine/hls.c
     src/engine/youtube_sabr.c
+    src/engine/youtube_download.c
+    src/engine/youtube_transfer.c
     src/engine/segmenter.c
     src/engine/worker_pool.c
     src/engine/finalize.c
@@ -293,6 +295,8 @@ add_custom_target(browser_extension_validate ALL
             browser/chromium/options.js browser/firefox/options.js
             browser/chromium/media_overlay.js browser/firefox/media_overlay.js
             browser/chromium/youtube_probe.js browser/firefox/youtube_probe.js
+            browser/chromium/youtube_sabr_capture.js
+            browser/firefox/youtube_sabr_capture.js
     VERBATIM
 )
 
@@ -318,6 +322,7 @@ foreach(_browser IN ITEMS chromium firefox)
                 browser/${_browser}/options.js
                 browser/${_browser}/media_overlay.js
                 browser/${_browser}/youtube_probe.js
+                browser/${_browser}/youtube_sabr_capture.js
                 cmake/BundleBrowserExtension.py
         VERBATIM
     )

@@ -120,7 +120,7 @@
     if (!rows.length) {
       const unavailable = document.createElement("p");
       unavailable.textContent = youtubeLoading ? "Checking YouTube formats…" :
-        youtubePage ? "No supported direct formats for this video." :
+        youtubePage ? "No supported formats for this video." :
         "No direct media detected for this video.";
       panel.appendChild(unavailable);
     }

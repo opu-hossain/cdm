@@ -4,6 +4,9 @@ const pending = new Map();
 // The background context owns these in-memory values; restart resets opt-in.
 const enabledOrigins = new Set();
 const observedHeaders = new Map();
+const youtubeSessions = new Map();
+let mediaCaptureEnabled = false;
+const YOUTUBE_SESSION_MS = 120000;
 const HEADER_WINDOW_MS = 10000;
 
 function originFor(url) {
@@ -13,6 +16,32 @@ function originFor(url) {
   } catch (_) {
     return null;
   }
+}
+
+function observeYouTubePlayback(details) {
+  if (!mediaCaptureEnabled || details.incognito || details.tabId < 0) return;
+  try {
+    const initiator = new URL(details.initiator || details.originUrl ||
+                              details.documentUrl || "");
+    if (!["www.youtube.com", "m.youtube.com",
+          "www.youtube-nocookie.com"].includes(initiator.hostname) ||
+        initiator.protocol !== "https:") return;
+    const session = CdmYouTubeSabrCapture.parseRequest(details);
+    if (!session) return;
+    if (youtubeSessions.size >= 64 && !youtubeSessions.has(details.tabId))
+      youtubeSessions.delete(youtubeSessions.keys().next().value);
+    youtubeSessions.set(details.tabId, {session, at: Date.now()});
+  } catch (_) { /* Ignore other requests and malformed playback data. */ }
+}
+
+function youtubeSession(tabId) {
+  const entry = youtubeSessions.get(tabId);
+  if (!entry) return null;
+  if (Date.now() - entry.at > YOUTUBE_SESSION_MS) {
+    youtubeSessions.delete(tabId);
+    return null;
+  }
+  return entry.session;
 }
 
 function safeValue(value, limit) {
@@ -193,6 +222,12 @@ async function offerDownload(item, url, automatic = false, media = null) {
       media.context = {};
       context = {};
     }
+    if (media?.youtubeSession) {
+      const userAgent = typeof navigator === "undefined" ? "" :
+        safeValue(navigator.userAgent, 256);
+      context = {...context, referer: media.pageReferrer || "",
+        ...(userAgent ? {user_agent: userAgent} : {})};
+    }
     const port = connectHost();
     // Configure each new native-host connection before its first offer;
     // refreshing per offer also picks up sync edits without cached policy.
@@ -200,6 +235,12 @@ async function offerDownload(item, url, automatic = false, media = null) {
     port.postMessage({
       type: media ? "media_offer" : "download_offer",
       ...(media ? {kind: media.kind} : {}),
+      ...(media?.youtubeItag ? {youtube_itag: media.youtubeItag} : {}),
+      ...(media?.youtubeSession ? {
+        youtube_sabr_url: media.youtubeSession.url,
+        youtube_request: media.youtubeSession.request,
+        youtube_height: media.youtubeHeight
+      } : {}),
       automatic,
       request_id: requestId,
       url,
@@ -273,9 +314,14 @@ async function probeYouTube(sender) {
   for (const format of result.formats.slice(0, 16)) {
     if (!Number.isInteger(format.itag) || format.itag < 0 ||
         !safeValue(format.quality, 32) || format.mime !== "video/mp4" ||
-        !safeValue(format.url, 2047) ||
         !Number.isSafeInteger(format.totalBytes) || format.totalBytes < 0)
       continue;
+    if (format.adaptive === true) {
+      formats.push({...format,
+        url: `https://www.youtube.com/watch?v=${expectedId}`});
+      continue;
+    }
+    if (!safeValue(format.url, 2047)) continue;
     let endpoint;
     try { endpoint = new URL(format.url); } catch (_) { continue; }
     const host = endpoint.hostname;
@@ -341,6 +387,7 @@ async function observeMediaHeaders(details) {
 // Keep ordinary downloads registered even when header/media observation cannot.
 let headerObserverRegistered = false;
 let mediaObserverRegistered = false;
+let youtubeObserverRegistered = false;
 const MEDIA_SCRIPT_ID = "cdm-media-overlay";
 // The background context serializes registration updates; browser scripting owns the registration.
 let mediaScriptSync = Promise.resolve();
@@ -350,6 +397,8 @@ function queueMediaScriptSync() {
     const enabled = stored.mediaDetection === true &&
       await browser.permissions.contains({permissions: ["webRequest"],
         origins: ["http://*/*", "https://*/*"]});
+    mediaCaptureEnabled = enabled;
+    if (!enabled) youtubeSessions.clear();
     const registered = await browser.scripting.getRegisteredContentScripts({ids: [MEDIA_SCRIPT_ID]});
     if (enabled && registered[0]?.allFrames !== true) {
       if (registered.length)
@@ -379,6 +428,14 @@ function registerOptionalObservers() {
       mediaObserverRegistered = true;
     } catch (_) { /* Retry if the optional permission is granted later. */ }
   }
+  if (!youtubeObserverRegistered && webRequest.onBeforeRequest) {
+    try {
+      webRequest.onBeforeRequest.addListener(observeYouTubePlayback,
+        {urls: ["https://*.googlevideo.com/videoplayback*"]},
+        ["requestBody"]);
+      youtubeObserverRegistered = true;
+    } catch (_) { /* Retry after the optional permission is granted. */ }
+  }
 }
 registerOptionalObservers();
 queueMediaScriptSync();
@@ -388,6 +445,8 @@ browser.permissions?.onAdded?.addListener(() => {
 });
 browser.permissions?.onRemoved?.addListener(() => {
   mediaCandidates.clear();
+  youtubeSessions.clear();
+  mediaCaptureEnabled = false;
   queueMediaScriptSync();
 });
 
@@ -417,6 +476,8 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
             value.frameId === sender.frameId) mediaCandidates.delete(key);
       const rows = [];
       for (const format of found.formats) {
+        if (format.adaptive === true && !CdmYouTubeSabrCapture.select(
+              youtubeSession(sender.tab.id), format.itag)) continue;
         if (mediaCandidates.size >= 64)
           mediaCandidates.delete(mediaCandidates.keys().next().value);
         const id = crypto.randomUUID();
@@ -426,7 +487,10 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
           mime: format.mime, filename, totalBytes: format.totalBytes,
           quality: format.quality, tabId: sender.tab.id, frameId: sender.frameId,
           context: {}, pageReferrer: sender.url,
-          youtube: {videoId: found.videoId, itag: format.itag}, at: Date.now()});
+          youtube: {videoId: found.videoId, itag: format.itag,
+            adaptive: format.adaptive === true},
+          youtubeItag: format.adaptive === true ? format.itag : 0,
+          at: Date.now()});
         rows.push({id, kind: "video", filename, quality: format.quality,
           totalBytes: format.totalBytes});
       }
@@ -451,7 +515,8 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
     if (candidate.youtube) {
       const fresh = await probeYouTube(sender);
       const format = fresh?.videoId === candidate.youtube.videoId &&
-        fresh.formats.find(item => item.itag === candidate.youtube.itag);
+        fresh.formats.find(item => item.itag === candidate.youtube.itag &&
+          (item.adaptive === true) === candidate.youtube.adaptive);
       const current = await browser.storage.sync.get("mediaDetection");
       if (!format || current.mediaDetection !== true ||
           !await browser.permissions.contains({permissions: ["webRequest"],
@@ -460,6 +525,17 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
       }
       candidate.url = format.url;
       candidate.totalBytes = format.totalBytes;
+      candidate.youtubeItag = format.adaptive === true ? format.itag : 0;
+      if (format.adaptive === true) {
+        candidate.youtubeSession = CdmYouTubeSabrCapture.select(
+          youtubeSession(sender.tab.id), format.itag);
+        candidate.youtubeHeight = parseInt(format.quality, 10);
+        if (!candidate.youtubeSession ||
+            !Number.isInteger(candidate.youtubeHeight) ||
+            candidate.youtubeHeight < 1 || candidate.youtubeHeight > 4320) {
+          reply({ok: false}); return;
+        }
+      }
     }
     const ok = await offerDownload(candidate, candidate.url, false, candidate);
     if (ok) mediaCandidates.delete(key);
@@ -473,6 +549,9 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === "sync" && changes.mediaDetection && changes.mediaDetection.newValue !== true) {
     mediaCandidates.clear();
+    youtubeSessions.clear();
+    mediaCaptureEnabled = false;
   }
   if (area === "sync" && changes.mediaDetection) queueMediaScriptSync();
 });
+browser.tabs?.onRemoved?.addListener(tabId => youtubeSessions.delete(tabId));

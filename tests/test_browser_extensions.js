@@ -8,10 +8,12 @@ async function verify(file, globalName, expectedBrowser) {
   let actionListener;
   let headerListener;
   let mediaListener;
+  let youtubeRequestListener;
   let runtimeListener;
   let mediaDetection;
   let mediaSequence = 0;
   let youtubeProbes = 0;
+  let youtubeAdaptive = false;
   let youtubeMediaUrl = "https://media.example.invalid/videoplayback?token=fixture";
   let clock = Date.now();
   let storageListener;
@@ -84,7 +86,9 @@ async function verify(file, globalName, expectedBrowser) {
         return Promise.resolve([{result: {videoId: "fixture123", title: "Fixture video",
           formats: [{itag: 18, quality: "360p", mime: "video/mp4",
             url: `${youtubeMediaUrl}${youtubeProbes}`,
-            totalBytes: 2048}]}}]);
+            totalBytes: 2048},
+          ...(youtubeAdaptive ? [{itag: 401, quality: "2160p", mime: "video/mp4",
+            adaptive: true, totalBytes: 4096}] : [])]}}]);
       }
     },
     permissions: {
@@ -98,7 +102,10 @@ async function verify(file, globalName, expectedBrowser) {
     cookies: {
       getAll() { cookieReads++; return Promise.resolve(cookieRows); }
     },
-    webRequest: {onHeadersReceived: {addListener(listener, filter, options) {
+    webRequest: {onBeforeRequest: {addListener(listener, filter, options) {
+      youtubeRequestListener = listener;
+      assert.deepEqual(Array.from(options), ["requestBody"]);
+    }}, onHeadersReceived: {addListener(listener, filter, options) {
       mediaListener = listener;
       assert.deepEqual(Array.from(options), ["responseHeaders"]);
     }}, onSendHeaders: { addListener(listener, _filter, options) {
@@ -110,7 +117,7 @@ async function verify(file, globalName, expectedBrowser) {
     [globalName]: api,
     crypto: { randomUUID: () => mediaDetection ? `media-${++mediaSequence}` : "browser-test-request" },
     Date: {now: () => clock},
-    console, URL, TextEncoder, setTimeout, clearTimeout,
+    console, URL, TextEncoder, btoa, setTimeout, clearTimeout,
     importScripts(...names) {
       for (const name of names)
         vm.runInContext(fs.readFileSync(path.join(path.dirname(file), name), "utf8"), sandbox);
@@ -121,6 +128,8 @@ async function verify(file, globalName, expectedBrowser) {
     vm.runInContext(fs.readFileSync(path.join(path.dirname(file), "filters.js"), "utf8"), sandbox);
   if (globalName === "browser")
     vm.runInContext(fs.readFileSync(path.join(path.dirname(file), "youtube_probe.js"), "utf8"), sandbox);
+  if (globalName === "browser")
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(file), "youtube_sabr_capture.js"), "utf8"), sandbox);
   vm.runInContext(fs.readFileSync(file, "utf8"), sandbox);
   assert.equal(typeof downloadListener, "function");
   assert.equal(typeof actionListener, "function");
@@ -380,6 +389,30 @@ async function verify(file, globalName, expectedBrowser) {
   assert.equal(messages.at(-1).filename, "Fixture video 360p.mp4");
   assert.equal(messages.at(-1).referrer, youtubePage);
   assert.equal(messages.at(-1).cookie, undefined);
+  youtubeAdaptive = true;
+  assert.equal(typeof youtubeRequestListener, "function");
+  const sabrBody = new Uint8Array([0x2a, 3, 1, 2, 3,
+    0x8a, 1, 3, 8, 0x91, 3, 0x82, 1, 3, 8, 0x8c, 1,
+    0x9a, 1, 34, 0x12, 32, ...Array(32).fill(7)]);
+  youtubeRequestListener({method: "POST", tabId: 7,
+    initiator: "https://www.youtube.com",
+    url: "https://rr1.googlevideo.com/videoplayback?sabr=1",
+    requestBody: {raw: [{bytes: sabrBody.buffer}]}});
+  const adaptiveRows = await callTabRuntime({type: "cdm_youtube_formats_tab"},
+    7, 0, youtubePage);
+  assert.equal(adaptiveRows.length, 2);
+  assert.equal(adaptiveRows[1].quality, "2160p");
+  assert.equal((await callTabRuntime({type: "cdm_media_offer_tab",
+    id: adaptiveRows[1].id}, 7, 0, youtubePage)).ok, true);
+  assert.equal(messages.at(-1).youtube_itag, 401);
+  assert.equal(messages.at(-1).youtube_height, 2160);
+  assert.equal(messages.at(-1).youtube_sabr_url,
+    "https://rr1.googlevideo.com/videoplayback?sabr=1");
+  assert.equal(messages.at(-1).youtube_request,
+    btoa(String.fromCharCode(...sabrBody)));
+  assert.equal(messages.at(-1).url, youtubePage);
+  assert.equal(messages.at(-1).filename, "Fixture video 2160p.mp4");
+  youtubeAdaptive = false;
   youtubeMediaUrl = "https://127.0.0.1/private?token=fixture";
   assert.equal((await callTabRuntime({type: "cdm_youtube_formats_tab"}, 7, 0,
     youtubePage)).length, 0, "player data must not offer loopback URLs");
@@ -540,7 +573,7 @@ async function verifyOptions(file, globalName) {
   assert.equal(elements.mediaCandidates.children.length, 0);
   assert.equal(elements.mediaOffer.disabled, true);
   await elements.mediaRefresh.listeners.click();
-  assert.match(elements.mediaStatus.textContent, /YouTube.*not supported/i);
+  assert.match(elements.mediaStatus.textContent, /in-player picker for YouTube/i);
   grantedMedia = false;
   await elements.mediaRefresh.listeners.click();
   assert.match(elements.mediaStatus.textContent, /permission/i);
@@ -716,10 +749,19 @@ async function verifyYouTubeProbe(file) {
       if (rejectAndroid) throw new Error("fixture unavailable");
       return {ok: true, json: async () => ({videoDetails: response.videoDetails,
         playabilityStatus: {status: "OK"},
-        streamingData: {formats: [{itag: 18, qualityLabel: "360p",
+        playerConfig: {mediaCommonConfig: {mediaUstreamerRequestConfig:
+          {videoPlaybackUstreamerConfig: "AQID"}}},
+        streamingData: {serverAbrStreamingUrl:
+          "https://media.example.invalid/sabr?token=fixture",
+          formats: [{itag: 18, qualityLabel: "360p",
           mimeType: 'video/mp4; codecs="avc1, mp4a"',
           audioQuality: "AUDIO_QUALITY_MEDIUM", contentLength: "2048",
-          url: "https://media.example.invalid/android-direct?token=fixture"}]}})};
+          url: "https://media.example.invalid/android-direct?token=fixture"}],
+          adaptiveFormats: [{itag: 140, mimeType: "audio/mp4", contentLength: "100"},
+            {itag: 401, height: 2160, qualityLabel: "2160p",
+              mimeType: "video/mp4", contentLength: "4000"},
+            {itag: 160, height: 144, qualityLabel: "144p",
+              mimeType: "video/mp4", contentLength: "500"}]}})};
     },
     AbortController, clearTimeout, setTimeout, URL
   });
@@ -731,9 +773,12 @@ async function verifyYouTubeProbe(file) {
   const result = await sandbox.CdmYouTubeProbe.pageProbe();
   assert.equal(result.videoId, "fixture123");
   assert.equal(result.title, "Fixture / video");
-  assert.equal(result.formats.length, 1);
-  assert.equal(result.formats[0].quality, "360p");
-  assert.equal(result.formats[0].url,
+  assert.equal(result.formats.length, 3);
+  assert.equal(result.formats[0].quality, "2160p");
+  assert.equal(result.formats[0].adaptive, true);
+  assert.equal(result.formats[0].totalBytes, 4100);
+  assert.equal(result.formats[1].quality, "360p");
+  assert.equal(result.formats[1].url,
     "https://media.example.invalid/android-direct?token=fixture");
   assert.equal(calls.length, 1);
   assert.equal(new URL(calls[0].url).pathname, "/youtubei/v1/player");

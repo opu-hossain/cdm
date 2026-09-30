@@ -41,6 +41,10 @@ int spawn_ffmpeg_remux(const char *input, const char *output,
 
 int spawn_ffmpeg_merge(const char *video, const char *audio, const char *output,
                        const _Atomic bool *cancel, const _Atomic bool *pause, int timeout_sec);
+/* Copy video and encode WebM/Opus audio as AAC for a compatible MP4. */
+int spawn_ffmpeg_merge_opus(const char *video, const char *audio, const char *output,
+                            const _Atomic bool *cancel, const _Atomic bool *pause,
+                            int timeout_sec);
 
 /* No shell. scanner_args supports quotes/backslashes; file_path is last argv.
  * 0 clean, positive child exit (124 timeout), -1 launch/parse error,

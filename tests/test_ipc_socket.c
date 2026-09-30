@@ -149,6 +149,125 @@ Test(ipc, hls_confirmation_persists_kind_without_browser_credentials) {
   db_close(); unlink(path); rmdir(directory); unsetenv("DOWNLOADMGR_ROOT");
 }
 
+Test(ipc, youtube_selection_requires_versioned_offer_and_persists_quality) {
+  char directory[] = "/tmp/cdm-youtube-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(directory));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", directory, 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  uint32_t saved[2] = {0};
+  for (size_t i = 0; i < 2; i++) {
+    char json[256], path[256];
+    int n = snprintf(json, sizeof(json),
+        "{\"request_id\":\"yt-%zu\",\"url\":\"https://www.youtube.com/watch?v=fixture1234\","
+        "\"kind\":\"video\",\"youtube_itag\":%s}", i,
+        i == 0 ? "401" : "160");
+    cr_assert_gt(n, 0); cr_assert_lt((size_t)n, sizeof(json));
+    MsgHeader header = {.length = (uint32_t)n,
+                        .type = i == 0 ? MSG_BROWSER_OFFER_V2 :
+                                         MSG_BROWSER_OFFER_YOUTUBE_V1};
+    cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+    cr_assert_eq(ipc_write_exact(client, json, (size_t)n), 0);
+    IpcBrowserOffer offer = {0};
+    cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+    if (i == 0) {
+      cr_assert_eq(offer.offer_id, 0,
+          "older JSON offer cannot silently download a watch page");
+      header.type = MSG_BROWSER_OFFER_YOUTUBE_V1;
+      cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+      cr_assert_eq(ipc_write_exact(client, json, (size_t)n), 0);
+      cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+    }
+    cr_assert_neq(offer.offer_id, 0);
+    n = snprintf(path, sizeof(path), "%s/output-%zu.mp4", directory, i);
+    cr_assert_gt(n, 0); cr_assert_lt((size_t)n, sizeof(path));
+    IpcAddResponse response = {0};
+    cr_assert_eq(ipc_browser_confirm_v2(client, offer.offer_id, path,
+                                        &response), 0);
+    cr_assert_neq(response.id, 0);
+    saved[i] = response.id;
+    Download *d = queue_manager_find_by_id(response.id);
+    cr_assert_not_null(d);
+    cr_assert_eq(d->media_kind, DOWNLOAD_MEDIA_VIDEO);
+    cr_assert_str_eq(d->site_format_id, i == 0 ? "401" : "160");
+    cr_assert_not(d->site_grab);
+  }
+  cr_assert_neq(saved[0], saved[1],
+                "one video can have separate quality downloads");
+  queue_manager_remove(saved[0]);
+  queue_manager_remove(saved[1]);
+  cr_assert_eq(db_restore_queue(), 0);
+  Download *restored = queue_manager_find_by_id(saved[0]);
+  cr_assert_not_null(restored);
+  cr_assert_str_eq(restored->site_format_id, "401");
+  queue_manager_remove(saved[0]);
+  queue_manager_remove(saved[1]);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  db_close();
+  char path[256];
+  for (size_t i = 0; i < 2; i++) {
+    int n = snprintf(path, sizeof(path), "%s/output-%zu.mp4", directory, i);
+    cr_assert_gt(n, 0); cr_assert_lt((size_t)n, sizeof(path));
+    unlink(path);
+  }
+  rmdir(directory);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
+Test(ipc, youtube_browser_session_stays_in_memory_and_requires_refresh) {
+  char directory[] = "/tmp/cdm-youtube-session-XXXXXX";
+  cr_assert_not_null(mkdtemp(directory));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", directory, 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  const char *json = "{\"request_id\":\"yt-session\","
+      "\"url\":\"https://www.youtube.com/watch?v=fixture1234\","
+      "\"kind\":\"video\",\"youtube_itag\":401,"
+      "\"youtube_height\":2160,"
+      "\"youtube_sabr_url\":\"https://rr1.googlevideo.com/videoplayback?sabr=1\","
+      "\"youtube_request\":\"AQIDBA==\"}";
+  MsgHeader header = {.length = (uint32_t)strlen(json),
+                      .type = MSG_BROWSER_OFFER_YOUTUBE_V2};
+  cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+  cr_assert_eq(ipc_write_exact(client, json, header.length), 0);
+  IpcBrowserOffer offer = {0};
+  cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+  cr_assert_neq(offer.offer_id, 0);
+  char path[256];
+  cr_assert_gt(snprintf(path, sizeof(path), "%s/output.mp4", directory), 0);
+  IpcAddResponse response = {0};
+  cr_assert_eq(ipc_browser_confirm_v2(client, offer.offer_id, path,
+                                      &response), 0);
+  Download *download = queue_manager_find_by_id(response.id);
+  cr_assert_not_null(download);
+  cr_assert(download->requires_browser_context);
+  cr_assert_not_null(download->request);
+  cr_assert_str_eq(download->request->youtube_request_b64, "AQIDBA==");
+  queue_manager_remove(response.id);
+  cr_assert_eq(db_restore_queue(), 0);
+  download = queue_manager_find_by_id(response.id);
+  cr_assert_not_null(download);
+  cr_assert(download->requires_browser_context);
+  cr_assert_null(download->request);
+  queue_manager_remove(response.id);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  db_close(); unlink(path); rmdir(directory); unsetenv("DOWNLOADMGR_ROOT");
+}
+
 Test(ipc, ordinary_add_routes_manifest_urls_without_logging_signed_query) {
   char directory[] = "/tmp/cdm-manifest-add-XXXXXX";
   cr_assert_not_null(mkdtemp(directory));

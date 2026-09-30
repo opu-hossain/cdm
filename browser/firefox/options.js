@@ -67,7 +67,7 @@ async function refreshMedia() {
     }
     mediaOffer.disabled = candidates.length === 0;
     mediaStatus.textContent = candidates.length ? "Select a candidate to offer to cdm."
-        : "No direct media candidates retained. YouTube site streams are not supported yet.";
+        : "No direct media candidates retained. Use the in-player picker for YouTube.";
   } catch (_) {
     mediaStatus.textContent = "Could not load detected media. Reopen this page to retry.";
   }

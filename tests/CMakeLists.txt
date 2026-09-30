@@ -134,6 +134,11 @@ endif()
 
 find_program(NODE_EXECUTABLE node)
 if(NODE_EXECUTABLE)
+    add_test(NAME test_youtube_sabr_capture
+             COMMAND ${NODE_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_youtube_sabr_capture.js
+                     ${CMAKE_SOURCE_DIR}/browser/chromium/youtube_sabr_capture.js
+                     ${CMAKE_SOURCE_DIR}/browser/firefox/youtube_sabr_capture.js)
     add_test(NAME test_browser_extensions
              COMMAND ${NODE_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/test_browser_extensions.js

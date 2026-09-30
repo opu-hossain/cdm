@@ -1,5 +1,5 @@
 // Serialized into the page's MAIN world on an explicit picker click.
-// Return only direct, already signed, muxed formats; never eval player source.
+// Return direct MP4 or advertised MP4 adaptive tracks; never eval player source.
 globalThis.CdmYouTubeProbe = {
   isYouTubePage(url) {
     try {
@@ -52,9 +52,14 @@ globalThis.CdmYouTubeProbe = {
           const android = await result.json();
           if (android?.videoDetails?.videoId === videoId &&
               android.playabilityStatus?.status === "OK" &&
-              Array.isArray(android.streamingData?.formats) &&
-              android.streamingData.formats.some(format => format?.url))
+              (android.streamingData?.formats?.some(format => format?.url) ||
+               (android.streamingData?.serverAbrStreamingUrl &&
+                android.playerConfig?.mediaCommonConfig?.mediaUstreamerRequestConfig
+                  ?.videoPlaybackUstreamerConfig &&
+                Array.isArray(android.streamingData?.adaptiveFormats))))
             streaming = android.streamingData;
+          if (streaming === android.streamingData)
+            response = android;
         }
       } catch (_) { /* A failed optional probe leaves the page's own formats. */ }
       finally { clearTimeout(timeout); }
@@ -62,6 +67,7 @@ globalThis.CdmYouTubeProbe = {
     const title = typeof response.videoDetails.title === "string"
       ? response.videoDetails.title.slice(0, 180) : "Video";
     const formats = [];
+    const offered = new Set();
     for (const format of Array.isArray(streaming?.formats) ? streaming.formats : []) {
       if (formats.length >= 16) break;
       if (!format || !Number.isInteger(format.itag) || format.itag < 0 ||
@@ -75,7 +81,41 @@ globalThis.CdmYouTubeProbe = {
       formats.push({itag: format.itag, quality: String(format.qualityLabel).slice(0, 32),
         mime: "video/mp4", url: format.url,
         totalBytes: Number.isSafeInteger(bytes) && bytes > 0 ? bytes : 0});
+      offered.add(String(format.qualityLabel));
     }
+    const config = response.playerConfig?.mediaCommonConfig
+      ?.mediaUstreamerRequestConfig?.videoPlaybackUstreamerConfig;
+    if (typeof streaming?.serverAbrStreamingUrl === "string" &&
+        streaming.serverAbrStreamingUrl.startsWith("https://") &&
+        typeof config === "string" && config.length > 0 &&
+        config.length <= 44000) {
+      const adaptive = Array.isArray(streaming.adaptiveFormats)
+        ? streaming.adaptiveFormats : [];
+      const audio = adaptive.find(format => format?.itag === 140 &&
+        typeof format.mimeType === "string" &&
+        format.mimeType.startsWith("audio/mp4"));
+      const audioBytes = Number(audio?.contentLength);
+      if (audio) for (const format of adaptive) {
+        if (formats.length >= 16) break;
+        if (!Number.isInteger(format?.itag) || format.itag < 1 ||
+            format.itag > 100000 || !Number.isInteger(format.height) ||
+            format.height < 1 || format.height > 4320 ||
+            typeof format.mimeType !== "string" ||
+            !format.mimeType.startsWith("video/mp4") ||
+            typeof format.qualityLabel !== "string" ||
+            offered.has(format.qualityLabel)) continue;
+        const videoBytes = Number(format.contentLength);
+        const total = Number.isSafeInteger(videoBytes) && videoBytes > 0 &&
+            Number.isSafeInteger(audioBytes) && audioBytes > 0 &&
+            Number.isSafeInteger(videoBytes + audioBytes)
+          ? videoBytes + audioBytes : 0;
+        formats.push({itag: format.itag, quality: format.qualityLabel.slice(0, 32),
+          mime: "video/mp4", adaptive: true, totalBytes: total});
+        offered.add(format.qualityLabel);
+      }
+    }
+    formats.sort((a, b) => (parseInt(b.quality, 10) || 0) -
+      (parseInt(a.quality, 10) || 0));
     return {videoId, title, formats};
   }
 };

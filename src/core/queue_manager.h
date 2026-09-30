@@ -35,6 +35,9 @@ typedef struct {
   bool site_grab_public; // legacy persisted consent flag
   char site_format_id[64]; // legacy persisted format ID
   bool site_format_has_audio;
+  char youtube_sabr_url[2048]; // ephemeral, signed browser stream URL
+  char youtube_request_b64[22000]; // ephemeral, includes playback token
+  uint32_t youtube_height; // selected adaptive track height in pixels
   char cookie[4097];
   char referrer[2049];
   char user_agent[257]; // ephemeral browser override only

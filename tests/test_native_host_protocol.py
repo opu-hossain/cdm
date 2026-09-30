@@ -145,6 +145,12 @@ def main(host: str) -> None:
                                 env=invalid_env, capture_output=True, timeout=5)
         assert "invalid" in decode_frames(result.stdout)[0]["error"]
         assert b"secret" not in result.stdout + result.stderr
+    for value in ("401", -1, 0, 1.5, 100001):
+        offer = {**base, "type": "media_offer", "kind": "video",
+                 "youtube_itag": value}
+        result = subprocess.run([host], input=frame(json.dumps(offer).encode()),
+                                env=invalid_env, capture_output=True, timeout=5)
+        assert "invalid" in decode_frames(result.stdout)[0]["error"]
     malformed = json.dumps({**base, "cookie": "REPLACE"}).encode().replace(
         b"REPLACE", b"\xc0\x80")
     result = subprocess.run([host], input=frame(malformed), env=invalid_env,
@@ -159,10 +165,13 @@ def main(host: str) -> None:
                     ("filename", ctypes.c_char * 512), ("mime", ctypes.c_char * 128),
                     ("referrer", ctypes.c_char * 2048)]
 
-    for media, version, with_context in (
-            (None, 8, True), ("hls", 10, True),
-            ("dash", 10, False), ("video", 10, True),
-            ("hls", 9, False)):
+    for media, version, with_context, youtube, playback in (
+            (None, 8, True, False, False), ("hls", 10, True, False, False),
+            ("dash", 10, False, False, False), ("video", 10, True, False, False),
+            ("hls", 9, False, False, False), ("video", 15, False, True, False),
+            ("video", 16, False, True, False),
+            ("video", 16, False, True, True),
+            ("video", 17, False, True, True)):
         with tempfile.TemporaryDirectory(prefix="cdm-host-context-") as root:
             runtime = Path(root) / "runtime"
             runtime.mkdir(mode=0o700)
@@ -191,12 +200,13 @@ def main(host: str) -> None:
                         header = exact(peer, 8)
                         assert struct.unpack("=II", header) == (0, 41), header
                         peer.sendall(struct.pack("=H", version))
-                        if media and version < 10:
+                        if (media and version < 10) or (youtube and version < 16) or \
+                                (playback and version < 17):
                             assert peer.recv(1) == b"", "media sent to an old daemon"
                             return
                         header = exact(peer, 8)
                         size, kind = struct.unpack("=II", header)
-                        assert size <= 16384, size
+                        assert size <= 32768, size
                         payload = exact(peer, size)
                         observed.append((kind, json.loads(payload)))
                         reply = Offer(offer_id=1, state=2, request_id=b"context-1",
@@ -218,6 +228,12 @@ def main(host: str) -> None:
                 payload.update(cookie="x" * 4096, user_agent="u" * 256, referer="r" * 2048)
             if media:
                 payload.update(type="media_offer", kind=media)
+            if youtube:
+                payload.update(url="https://www.youtube.com/watch?v=fixture1234",
+                               youtube_itag=401)
+            if playback:
+                payload.update(youtube_sabr_url="https://rr1.googlevideo.com/videoplayback?sabr=1",
+                               youtube_request="A" * 18000, youtube_height=2160)
             result = subprocess.run([host], input=frame(json.dumps(configuration).encode()) +
                                     frame(json.dumps(payload).encode()),
                                     env=env, capture_output=True, timeout=5)
@@ -229,8 +245,23 @@ def main(host: str) -> None:
                 assert not observed
                 assert "support media" in replies[1]["error"], replies
                 continue
+            if youtube and version < 16:
+                replies = decode_frames(result.stdout)
+                assert not observed
+                assert "Update cdm daemon" in replies[1]["error"], replies
+                continue
+            if playback and version < 17:
+                replies = decode_frames(result.stdout)
+                assert not observed
+                assert "Update cdm daemon" in replies[1]["error"], replies
+                continue
             assert observed, result.stderr.decode(errors="replace")
-            assert observed[0][0] == 56, observed
+            assert observed[0][0] == (67 if playback else 66 if youtube else 56), observed
+            if youtube:
+                assert observed[0][1]["youtube_itag"] == 401, observed
+            if playback:
+                assert observed[0][1]["youtube_height"] == 2160
+                assert observed[0][1]["youtube_request"] == payload["youtube_request"]
             if media:
                 assert observed[0][1]["kind"] == media, observed
             assert all(observed[0][1].get(key, "") == payload.get(key, "")

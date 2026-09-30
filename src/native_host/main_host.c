@@ -31,6 +31,9 @@ typedef struct {
   char cookie[4097];
   char user_agent[257];
   char referer[2049];
+  char youtube_sabr_url[2048];
+  char youtube_request_b64[22000];
+  uint32_t youtube_height;
 } HostRequestContext;
 
 typedef struct {
@@ -150,15 +153,20 @@ static bool copy_context_field(const cJSON *root, const char *key, char *out,
       strchr(field->valuestring, '\r') || strchr(field->valuestring, '\n') ||
       !valid_utf8((const unsigned char *)field->valuestring))
     return false;
+  for (const unsigned char *p = (const unsigned char *)field->valuestring;
+       *p; p++)
+    if (*p < 0x20 || *p == 0x7f) return false;
   strcpy(out, field->valuestring);
   return true;
 }
 
 static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer,
-                        HostRequestContext *context, uint32_t *media_kind) {
+                        HostRequestContext *context, uint32_t *media_kind,
+                        uint32_t *youtube_itag) {
   const cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
   if (!cJSON_IsString(type)) return false;
   *media_kind = IPC_BROWSER_MEDIA_NONE;
+  *youtube_itag = 0;
   const cJSON *kind = cJSON_GetObjectItemCaseSensitive(root, "kind");
   if (strcmp(type->valuestring, "media_offer") == 0) {
     if (!cJSON_IsString(kind)) return false;
@@ -184,13 +192,39 @@ static bool parse_offer(const cJSON *root, IpcBrowserOffer *offer,
       !copy_context_field(root, "user_agent", context->user_agent,
                           sizeof(context->user_agent)) ||
       !copy_context_field(root, "referer", context->referer,
-                          sizeof(context->referer)))
+                          sizeof(context->referer)) ||
+      !copy_context_field(root, "youtube_sabr_url", context->youtube_sabr_url,
+                          sizeof(context->youtube_sabr_url)) ||
+      !copy_context_field(root, "youtube_request", context->youtube_request_b64,
+                          sizeof(context->youtube_request_b64)))
     return false;
   if (cJSON_GetObjectItemCaseSensitive(root, "site_format_id") ||
       cJSON_GetObjectItemCaseSensitive(root, "site_format_label") ||
       cJSON_GetObjectItemCaseSensitive(root, "site_format_has_audio") ||
       cJSON_GetObjectItemCaseSensitive(root, "site_public_consent"))
     return false;
+  const cJSON *youtube = cJSON_GetObjectItemCaseSensitive(root, "youtube_itag");
+  if (youtube) {
+    if (!cJSON_IsNumber(youtube) || youtube->valuedouble < 1 ||
+        youtube->valuedouble > 100000 ||
+        youtube->valuedouble != (double)(uint32_t)youtube->valuedouble ||
+        *media_kind != IPC_BROWSER_MEDIA_VIDEO ||
+        strncmp(offer->url, "https://www.youtube.com/watch?v=", 32) != 0)
+      return false;
+    *youtube_itag = (uint32_t)youtube->valuedouble;
+  }
+  const cJSON *height = cJSON_GetObjectItemCaseSensitive(root,
+                                                         "youtube_height");
+  if (height) {
+    if (!cJSON_IsNumber(height) || height->valuedouble < 1 ||
+        height->valuedouble > 4320 ||
+        height->valuedouble != (double)(uint32_t)height->valuedouble)
+      return false;
+    context->youtube_height = (uint32_t)height->valuedouble;
+  }
+  if (!!context->youtube_sabr_url[0] != !!context->youtube_request_b64[0] ||
+      (!!context->youtube_sabr_url[0] != !!context->youtube_height) ||
+      (context->youtube_height && !*youtube_itag)) return false;
   const cJSON *total = cJSON_GetObjectItemCaseSensitive(root, "total_bytes");
   if (total && (!cJSON_IsNumber(total) || total->valuedouble < 0 ||
                 total->valuedouble > 9007199254740991.0))
@@ -209,7 +243,8 @@ static void clear_context(HostRequestContext *context) {
 }
 
 static void clear_context_fields(cJSON *root) {
-  const char *keys[] = {"cookie", "user_agent", "referer"};
+  const char *keys[] = {"cookie", "user_agent", "referer",
+                        "youtube_sabr_url", "youtube_request"};
   for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
     cJSON *field = cJSON_GetObjectItemCaseSensitive(root, keys[i]);
     if (cJSON_IsString(field) && field->valuestring) {
@@ -222,7 +257,8 @@ static void clear_context_fields(cJSON *root) {
 }
 
 static char *context_offer_json(const IpcBrowserOffer *offer,
-                                const HostRequestContext *context, uint32_t media_kind) {
+                                const HostRequestContext *context,
+                                uint32_t media_kind, uint32_t youtube_itag) {
   cJSON *root = cJSON_CreateObject();
   if (!root) return NULL;
   bool ok = cJSON_AddStringToObject(root, "request_id", offer->request_id) &&
@@ -239,6 +275,16 @@ static char *context_offer_json(const IpcBrowserOffer *offer,
                        media_kind == IPC_BROWSER_MEDIA_DASH ? "dash" : "video";
     ok = ok && cJSON_AddStringToObject(root, "kind", kind);
   }
+  if (youtube_itag)
+    ok = ok && cJSON_AddNumberToObject(root, "youtube_itag",
+                                       youtube_itag);
+  if (context->youtube_height)
+    ok = ok && cJSON_AddNumberToObject(root, "youtube_height",
+                                       context->youtube_height) &&
+         cJSON_AddStringToObject(root, "youtube_sabr_url",
+                                 context->youtube_sabr_url) &&
+         cJSON_AddStringToObject(root, "youtube_request",
+                                 context->youtube_request_b64);
   char *json = ok ? cJSON_PrintUnformatted(root) : NULL;
   clear_context_fields(root);
   cJSON_Delete(root);
@@ -469,7 +515,9 @@ static bool handle_message(const char *json) {
   IpcBrowserOffer offered = {0};
   HostRequestContext context = {0};
   uint32_t media_kind = IPC_BROWSER_MEDIA_NONE;
-  if (!parse_offer(root, &offered, &context, &media_kind)) {
+  uint32_t youtube_itag = 0;
+  if (!parse_offer(root, &offered, &context, &media_kind,
+                   &youtube_itag)) {
     const cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "request_id");
     bool ok = send_error(cJSON_IsString(id) ? id->valuestring : NULL,
                          tr("host.error.invalid_offer"));
@@ -495,12 +543,14 @@ static bool handle_message(const char *json) {
 
   bool has_context = context.cookie[0] || context.user_agent[0] ||
                      context.referer[0];
-  bool use_json = has_context || media_kind;
+  bool has_youtube_session = context.youtube_height != 0;
+  bool use_json = has_context || media_kind || youtube_itag;
   char *context_json = use_json
-      ? context_offer_json(&offered, &context, media_kind) : NULL;
+      ? context_offer_json(&offered, &context, media_kind,
+                           youtube_itag) : NULL;
   clear_context(&context);
   if (use_json) {
-    /* Check the 16 KiB daemon frame before starting or contacting it. */
+    /* Check the bounded daemon frame before starting or contacting it. */
     if (!context_json || strlen(context_json) > IPC_MAX_FRAME_SIZE) {
       clear_json(context_json);
       return send_error(offered.request_id, tr("host.error.invalid_or_oversized_offer"));
@@ -527,13 +577,25 @@ static bool handle_message(const char *json) {
     clear_json(context_json);
     return send_error(offered.request_id, tr("host.error.media_unsupported"));
   }
+  if (youtube_itag && daemon_version < 16) {
+    ipc_client_disconnect(daemon);
+    clear_json(context_json);
+    return send_error(offered.request_id, "Update cdm daemon for YouTube formats");
+  }
+  if (has_youtube_session && daemon_version < 17) {
+    ipc_client_disconnect(daemon);
+    clear_json(context_json);
+    return send_error(offered.request_id, "Update cdm daemon for browser playback");
+  }
   if (has_context && daemon_version < 8) {
     ipc_client_disconnect(daemon);
     clear_json(context_json);
     return send_error(offered.request_id, tr("host.error.context_unsupported"));
   }
   IpcBrowserOffer registered = {0};
-  int result = use_json ? forward_context_offer(daemon, MSG_BROWSER_OFFER_V2,
+  int result = use_json ? forward_context_offer(daemon,
+      has_youtube_session ? MSG_BROWSER_OFFER_YOUTUBE_V2 :
+      youtube_itag ? MSG_BROWSER_OFFER_YOUTUBE_V1 : MSG_BROWSER_OFFER_V2,
       context_json, &registered)
                            : ipc_browser_offer(daemon, &offered, &registered);
   clear_json(context_json);

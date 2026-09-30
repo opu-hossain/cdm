@@ -63,9 +63,11 @@ typedef enum {
   MSG_BROWSER_OFFER_FORMAT_V1 = 63, // retired; returns empty offer
   MSG_BROWSER_FORMAT_INFO_V1 = 64, // retired; returns empty metadata
   MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1 = 65, // retired; returns empty offer
+  MSG_BROWSER_OFFER_YOUTUBE_V1 = 66, // JSON offer with selected adaptive itag
+  MSG_BROWSER_OFFER_YOUTUBE_V2 = 67, // browser SABR session, memory only
 } MsgType;
 
-#define IPC_PROTOCOL_VERSION 15
+#define IPC_PROTOCOL_VERSION 17
 #define IPC_BROWSER_HAS_COOKIE 1u
 #define IPC_BROWSER_HAS_USER_AGENT 2u
 #define IPC_BROWSER_HAS_REFERER 4u
@@ -113,7 +115,7 @@ typedef enum {
 
 #define IPC_MAX_URL_LEN 2048
 #define IPC_MAX_PATH_LEN 1024
-#define IPC_MAX_FRAME_SIZE 16384
+#define IPC_MAX_FRAME_SIZE 32768
 #define IPC_CATEGORY_MAX 256
 
 /* Offer metadata only; the legacy IpcBrowserOffer wire layout is unchanged. */

@@ -73,6 +73,10 @@ int spawn_ffmpeg_merge(const char *video, const char *audio, const char *output,
                        const _Atomic bool *cancel, const _Atomic bool *pause, int timeout_sec) {
  (void)video;(void)audio;(void)output;(void)cancel;(void)pause;(void)timeout_sec;return -1;
 }
+int spawn_ffmpeg_merge_opus(const char *video, const char *audio, const char *output,
+                           const _Atomic bool *cancel, const _Atomic bool *pause, int timeout_sec) {
+ (void)video;(void)audio;(void)output;(void)cancel;(void)pause;(void)timeout_sec;return -1;
+}
 
 int spawn_scanner(const char *command, const char *scanner_args,
                   const char *file_path, const _Atomic bool *cancel,
@@ -434,7 +438,7 @@ int spawn_scanner(const char *command, const char *scanner_args,
 
 static int run_ffmpeg(const char *input, const char *audio, const char *output,
                        const _Atomic bool *cancel, const _Atomic bool *pause,
-                       int timeout_sec) {
+                       int timeout_sec, bool transcode_audio) {
   if (!input || !output || timeout_sec < 1 || !spawn_ffmpeg_available()) return -1;
   if (remux_interrupted(cancel, pause)) return -2;
   char *argv[] = {ffmpeg_executable, "-nostdin", "-hide_banner", "-v", "error", "-y",
@@ -443,9 +447,15 @@ static int run_ffmpeg(const char *input, const char *audio, const char *output,
       (char *)output, NULL};
   char *merge_argv[] = {ffmpeg_executable, "-nostdin", "-hide_banner", "-v", "error", "-y",
       "-protocol_whitelist", "file,pipe", "-format_whitelist", "mpegts,mov,aac,mp3",
-      "-i", (char *)input, "-protocol_whitelist", "file,pipe", "-format_whitelist", "mpegts,mov,aac,mp3",
+      "-i", (char *)input, "-protocol_whitelist", "file,pipe", "-format_whitelist", "mpegts,mov,aac,mp3,matroska,webm,opus",
       "-i", (char *)audio, "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-f", "mp4", (char *)output, NULL};
-  char **chosen_argv = audio ? merge_argv : argv;
+  char *opus_argv[] = {ffmpeg_executable, "-nostdin", "-hide_banner", "-v", "error", "-y",
+      "-protocol_whitelist", "file,pipe", "-format_whitelist", "mpegts,mov,aac,mp3",
+      "-i", (char *)input, "-protocol_whitelist", "file,pipe", "-format_whitelist", "matroska,webm,opus",
+      "-i", (char *)audio, "-map", "0:v:0", "-map", "1:a:0",
+      "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-f", "mp4",
+      (char *)output, NULL};
+  char **chosen_argv = audio ? (transcode_audio ? opus_argv : merge_argv) : argv;
   posix_spawn_file_actions_t actions;
   if (posix_spawn_file_actions_init(&actions) != 0) return -1;
   int error = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
@@ -483,12 +493,17 @@ static int run_ffmpeg(const char *input, const char *audio, const char *output,
 
 int spawn_ffmpeg_remux(const char *input, const char *output,
                        const _Atomic bool *cancel, const _Atomic bool *pause, int timeout_sec) {
-  return run_ffmpeg(input, NULL, output, cancel, pause, timeout_sec);
+  return run_ffmpeg(input, NULL, output, cancel, pause, timeout_sec, false);
 }
 int spawn_ffmpeg_merge(const char *video, const char *audio, const char *output,
                        const _Atomic bool *cancel, const _Atomic bool *pause, int timeout_sec) {
   if (!audio || !*audio) return -1;
-  return run_ffmpeg(video, audio, output, cancel, pause, timeout_sec);
+  return run_ffmpeg(video, audio, output, cancel, pause, timeout_sec, false);
+}
+int spawn_ffmpeg_merge_opus(const char *video, const char *audio, const char *output,
+                            const _Atomic bool *cancel, const _Atomic bool *pause, int timeout_sec) {
+  if (!audio || !*audio) return -1;
+  return run_ffmpeg(video, audio, output, cancel, pause, timeout_sec, true);
 }
 
 #endif

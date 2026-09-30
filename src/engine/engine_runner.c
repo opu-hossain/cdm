@@ -15,6 +15,7 @@
 #include "finalize.h"
 #include "hls.h"
 #include "dash.h"
+#include "youtube_download.h"
 #include "segmenter.h"
 #include "worker_pool.h"
 
@@ -234,6 +235,10 @@ int engine_run_download(struct Download *d) {
   }
   if (d->media_kind == DOWNLOAD_MEDIA_DASH) {
     int rc = dash_run_download(d);
+    return rc == 0 ? scan_published_outputs(d) : rc;
+  }
+  if (d->media_kind == DOWNLOAD_MEDIA_VIDEO && d->site_format_id[0]) {
+    int rc = youtube_run_download(d);
     return rc == 0 ? scan_published_outputs(d) : rc;
   }
 

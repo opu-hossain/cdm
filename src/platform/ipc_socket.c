@@ -177,6 +177,7 @@ static once_flag g_client_mutex_once = ONCE_FLAG_INIT;
 typedef struct {
   IpcBrowserOffer offer;
   uint32_t media_kind; // IPC poll thread owns offer metadata
+  uint32_t youtube_itag; // selected adaptive format; 0 for ordinary offers
   IpcBrowserSiteFormatV1 site_format;
   bool public_site;
   RequestOptions context; // IPC-thread-owned until copied on confirmation
@@ -275,7 +276,8 @@ static bool browser_header_valid(const char *value) {
 }
 
 static bool browser_parse_offer(const char *json, IpcBrowserOffer *out,
-                                 RequestOptions *context, uint32_t *media_kind) {
+                                 RequestOptions *context, uint32_t *media_kind,
+                                 uint32_t *youtube_itag) {
   /* cJSON strings have no length; reject escaped NUL in all offer fields. */
   for (const char *p = json; *p; p++) {
     if (*p == '\\' && p[1]) {
@@ -289,6 +291,7 @@ static bool browser_parse_offer(const char *json, IpcBrowserOffer *out,
     return false;
   memset(out, 0, sizeof(*out));
   *media_kind = IPC_BROWSER_MEDIA_NONE;
+  *youtube_itag = 0;
   const cJSON *kind = cJSON_GetObjectItemCaseSensitive(root, "kind");
   bool kind_valid = !kind;
   if (cJSON_IsString(kind) && context) {
@@ -315,11 +318,31 @@ static bool browser_parse_offer(const char *json, IpcBrowserOffer *out,
                              sizeof(context->user_agent), false) &&
         browser_json_string(root, "referer", context->referrer,
                              sizeof(context->referrer), false) &&
+        browser_json_string(root, "youtube_sabr_url",
+                             context->youtube_sabr_url,
+                             sizeof(context->youtube_sabr_url), false) &&
+        browser_json_string(root, "youtube_request",
+                             context->youtube_request_b64,
+                             sizeof(context->youtube_request_b64), false) &&
         browser_header_valid(context->cookie) &&
         browser_header_valid(context->user_agent) &&
         browser_header_valid(context->referrer);
+    const cJSON *height = cJSON_GetObjectItemCaseSensitive(root,
+                                                           "youtube_height");
+    if (height) {
+      if (!cJSON_IsNumber(height) || height->valuedouble < 1 ||
+          height->valuedouble > 4320 ||
+          height->valuedouble != (double)(uint32_t)height->valuedouble)
+        valid = false;
+      else context->youtube_height = (uint32_t)height->valuedouble;
+    }
+    bool has_youtube_session = context->youtube_sabr_url[0] &&
+        context->youtube_request_b64[0] && context->youtube_height;
+    if ((context->youtube_sabr_url[0] || context->youtube_request_b64[0] ||
+         height) && (!has_youtube_session || *media_kind != IPC_BROWSER_MEDIA_VIDEO))
+      valid = false;
     context->browser_context = context->cookie[0] || context->user_agent[0] ||
-                               context->referrer[0];
+        context->referrer[0] || has_youtube_session;
     /* Sensitive Referer must never travel in the raw popup reply. */
     memset(out->referrer, 0, sizeof(out->referrer));
     for (cJSON *field = root->child; field; field = field->next)
@@ -327,7 +350,9 @@ static bool browser_parse_offer(const char *json, IpcBrowserOffer *out,
           (strcmp(field->string, "cookie") == 0 ||
            strcmp(field->string, "user_agent") == 0 ||
            strcmp(field->string, "referer") == 0 ||
-           strcmp(field->string, "referrer") == 0))
+           strcmp(field->string, "referrer") == 0 ||
+           strcmp(field->string, "youtube_sabr_url") == 0 ||
+           strcmp(field->string, "youtube_request") == 0))
         browser_clear(field->valuestring, strlen(field->valuestring));
   }
   if (cJSON_GetObjectItemCaseSensitive(root, "site_format_id") ||
@@ -335,6 +360,16 @@ static bool browser_parse_offer(const char *json, IpcBrowserOffer *out,
       cJSON_GetObjectItemCaseSensitive(root, "site_format_has_audio") ||
       cJSON_GetObjectItemCaseSensitive(root, "site_public_consent"))
     valid = false;
+  const cJSON *youtube = cJSON_GetObjectItemCaseSensitive(root, "youtube_itag");
+  if (youtube) {
+    if (!cJSON_IsNumber(youtube) || youtube->valuedouble < 1 ||
+        youtube->valuedouble > 100000 ||
+        youtube->valuedouble != (double)(uint32_t)youtube->valuedouble ||
+        *media_kind != IPC_BROWSER_MEDIA_VIDEO)
+      valid = false;
+    else
+      *youtube_itag = (uint32_t)youtube->valuedouble;
+  }
   const cJSON *total = cJSON_GetObjectItemCaseSensitive(root, "total_bytes");
   if (total) {
     if (!cJSON_IsNumber(total) || total->valuedouble < 0 ||
@@ -346,6 +381,10 @@ static bool browser_parse_offer(const char *json, IpcBrowserOffer *out,
   if (valid && strncmp(out->url, "https://", 8) != 0 &&
       strncmp(out->url, "http://", 7) != 0)
     valid = false;
+  if (*youtube_itag &&
+      strncmp(out->url, "https://www.youtube.com/watch?v=", 32) != 0)
+    valid = false;
+  if (context && context->youtube_height && !*youtube_itag) valid = false;
   if (valid && out->filename[0] == '\0')
     path_filename_from_url(out->url, out->filename, sizeof(out->filename));
   if (valid && (strchr(out->filename, '/') || strchr(out->filename, '\\') ||
@@ -495,6 +534,8 @@ static bool valid_message_header(const MsgHeader *header) {
   case MSG_ADD_DOWNLOAD_V3:
   case MSG_BROWSER_OFFER:
   case MSG_BROWSER_OFFER_V2:
+  case MSG_BROWSER_OFFER_YOUTUBE_V1:
+  case MSG_BROWSER_OFFER_YOUTUBE_V2:
   case MSG_BROWSER_OFFER_FORMAT_V1:
   case MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1:
     return header->length <= IPC_MAX_FRAME_SIZE;
@@ -787,6 +828,8 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
   }
   case MSG_BROWSER_OFFER:
   case MSG_BROWSER_OFFER_V2:
+  case MSG_BROWSER_OFFER_YOUTUBE_V1:
+  case MSG_BROWSER_OFFER_YOUTUBE_V2:
   case MSG_BROWSER_OFFER_FORMAT_V1:
   case MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1: {
     char json[IPC_MAX_FRAME_SIZE + 1];
@@ -797,14 +840,24 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
     IpcBrowserOffer proposed = {0};
     RequestOptions context = {0};
     uint32_t media_kind = IPC_BROWSER_MEDIA_NONE;
+    uint32_t youtube_itag = 0;
     if (hdr->type != MSG_BROWSER_OFFER_FORMAT_V1 &&
         hdr->type != MSG_BROWSER_OFFER_PUBLIC_FORMAT_V1 &&
         !memchr(json, '\0', hdr->length) &&
         browser_parse_offer(json, &proposed,
-            hdr->type == MSG_BROWSER_OFFER ? NULL : &context, &media_kind)) {
+            hdr->type == MSG_BROWSER_OFFER ? NULL : &context, &media_kind,
+            &youtube_itag) &&
+        (((hdr->type == MSG_BROWSER_OFFER_YOUTUBE_V1 ||
+           hdr->type == MSG_BROWSER_OFFER_YOUTUBE_V2) ==
+          (youtube_itag != 0))) &&
+        ((hdr->type == MSG_BROWSER_OFFER_YOUTUBE_V2) ==
+         (context.youtube_height != 0))) {
       BrowserOfferSlot *slot = browser_find_request(proposed.request_id);
       if (slot && (strcmp(slot->offer.url, proposed.url) != 0 ||
-                   slot->media_kind != media_kind)) {
+                   slot->media_kind != media_kind ||
+                   slot->youtube_itag != youtube_itag ||
+                   strcmp(slot->context.youtube_request_b64,
+                          context.youtube_request_b64) != 0)) {
         LOG_WARN("Browser request ID reused with different offer metadata");
         slot = NULL;
       } else if (!slot) {
@@ -825,6 +878,7 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
             slot->offer = proposed;
             slot->context = context;
             slot->media_kind = media_kind;
+            slot->youtube_itag = youtube_itag;
             slot->offer.offer_id = id;
             slot->touched_at = time(NULL);
             LOG_INFO("Browser offer %u registered", id);
@@ -919,6 +973,15 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
                   slot->media_kind == IPC_BROWSER_MEDIA_VIDEO)) {
         RequestOptions opts = slot->context;
         opts.media_kind = (DownloadMediaKind)slot->media_kind;
+        if (slot->youtube_itag) {
+          int count = snprintf(opts.site_format_id,
+              sizeof(opts.site_format_id), "%u", slot->youtube_itag);
+          if (count < 0 || (size_t)count >= sizeof(opts.site_format_id)) {
+            browser_clear(&opts, sizeof(opts));
+            goto confirm_response;
+          }
+          opts.site_format_has_audio = true;
+        }
         if (!opts.browser_context)
           strcpy(opts.referrer, slot->offer.referrer);
         char normalized[IPC_MAX_URL_LEN];
@@ -928,13 +991,26 @@ static void handle_message(int client_fd, MsgHeader *hdr) {
         if (found == 1) {
           DownloadMediaKind existing_kind;
           bool existing_site = false;
-          if (!queue_manager_get_media_kind(download_id, &existing_kind) ||
-              !queue_manager_get_site_grab(download_id, &existing_site) ||
-              existing_site ||
+          char existing_format[64] = {0};
+          bool existing_has_audio = false;
+          bool have_kind = queue_manager_get_media_kind(download_id,
+                                                       &existing_kind);
+          bool have_site = queue_manager_get_site_grab(download_id,
+                                                       &existing_site);
+          bool have_format = queue_manager_get_site_format(download_id,
+              existing_format, &existing_has_audio);
+          if (have_kind && have_site && have_format && slot->youtube_itag &&
+              existing_kind == DOWNLOAD_MEDIA_VIDEO && !existing_site &&
+              strcmp(existing_format, opts.site_format_id) != 0) {
+              found = 0;
+              download_id = 0;
+          } else if (!have_kind || !have_site || !have_format || existing_site ||
+              strcmp(existing_format, opts.site_format_id) != 0 ||
               ((existing_kind == DOWNLOAD_MEDIA_HLS || existing_kind == DOWNLOAD_MEDIA_DASH ||
-             opts.media_kind == DOWNLOAD_MEDIA_HLS || opts.media_kind == DOWNLOAD_MEDIA_DASH) &&
-             existing_kind != opts.media_kind)) {
-            found = -1; download_id = 0;
+               opts.media_kind == DOWNLOAD_MEDIA_HLS || opts.media_kind == DOWNLOAD_MEDIA_DASH) &&
+               existing_kind != opts.media_kind)) {
+            found = -1;
+            download_id = 0;
           }
         }
         if (found == 0)
