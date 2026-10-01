@@ -557,6 +557,7 @@ bool queue_manager_get_runtime_snapshot(uint32_t id,
   for (Download *cur = g_head; cur != NULL; cur = cur->next) {
     if (cur->id == id) {
       out->media_kind = cur->media_kind;
+      out->finishing = atomic_load(&cur->finishing);
       out->status = cur->status;
       out->total_size = cur->total_size;
       out->bytes_downloaded = atomic_load(&cur->bytes_downloaded);

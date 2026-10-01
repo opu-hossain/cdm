@@ -172,6 +172,7 @@ static void clear_resume_state(struct Download *d, bool also_delete_file) {
 /* Public API */
 
 static int scan_published_outputs(struct Download *d) {
+  atomic_store(&d->finishing, true);
   DownloadManagerConfig config;
   config_get(&config);
   if (!config.scanner_command[0])
@@ -224,6 +225,7 @@ static int scan_published_outputs(struct Download *d) {
 }
 
 int engine_run_download(struct Download *d) {
+  atomic_store(&d->finishing, false);
   const RequestOptions *request = d->request;
   /* Existing databases may contain jobs from the retired external site tool. */
   if (d->site_grab) return -8;
@@ -383,6 +385,7 @@ int engine_run_download(struct Download *d) {
              n_ranges, d->chunk_count);
 
     if (n_ranges == 0) {
+      atomic_store(&d->finishing, true);
       if (engine_finalize(d->dest_path, info.total_size,
                           request ? request->expected_sha256 : NULL) != 0) {
         clear_resume_state(d, true);
@@ -527,6 +530,7 @@ int engine_run_download(struct Download *d) {
   LOG_INFO("Downloaded %llu bytes\n",
            (unsigned long long)result.total_bytes_downloaded);
 
+  atomic_store(&d->finishing, true);
   if (engine_finalize(d->dest_path, info.total_size,
                       request ? request->expected_sha256 : NULL) != 0) {
     clear_resume_state(d, true);

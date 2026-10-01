@@ -89,6 +89,7 @@ typedef struct Download {
   float progress;
   struct Download *next;
 
+  _Atomic bool finishing; // local processing after transfer; never persisted
   _Atomic bool cancel_requested;
   _Atomic bool pause_requested;
   _Atomic uint64_t bytes_downloaded;
@@ -125,6 +126,7 @@ typedef struct {
 
 typedef struct {
   DownloadMediaKind media_kind;
+  bool finishing;
   DownloadStatus status;
   uint64_t total_size;
   uint64_t bytes_downloaded;

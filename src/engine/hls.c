@@ -1122,6 +1122,7 @@ void hls_discard_state(const char *destination) {
 }
 
 static int remux_output(Download *d, const char *directory) {
+  atomic_store(&d->finishing, true);
   if (!spawn_ffmpeg_available()) {
     LOG_WARN("HLS download %u: ffmpeg unavailable; retained native output",
              d->id);

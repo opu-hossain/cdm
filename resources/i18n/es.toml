@@ -289,3 +289,6 @@
 "gui.category_operation_failed" = "Falló una operación de categoría"
 "gui.queue_operation_failed" = "Falló una operación de cola"
 "gui.download_operation_failed" = "Falló una operación de descarga"
+
+"gui.finishing_file" = "Finalizando archivo…"
+"gui.transfer_finished" = "Transferencia finalizada"

@@ -73,6 +73,8 @@ static const struct { const char *key, *value; } builtin[] = {
   {"gui.opening_files_requires_an_absolute_destination_path", "Opening files requires an absolute destination path."},
   {"gui.all", "All"},
   {"gui.downloading", "Downloading"},
+  {"gui.finishing_file", "Finishing file…"},
+  {"gui.transfer_finished", "Transfer finished"},
   {"gui.completed", "Completed"},
   {"gui.queues", "Queues"},
   {"gui.search_downloads", "Search downloads..."},

@@ -669,6 +669,7 @@ int youtube_run_download(Download *d) {
   YoutubeTrackState audio = {.fd = audio_fd, .itag = selection->audio_itag};
   update_transfer_progress(d, 0, selection->expected_size);
   result = transfer_selected(d, selection, &video, &audio);
+  if (result == 0) atomic_store(&d->finishing, true);
   if (result == 0 && (fsync(video_fd) != 0 || fsync(audio_fd) != 0)) result = -1;
   close(video_fd);
   close(audio_fd);

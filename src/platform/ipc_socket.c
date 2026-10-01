@@ -405,6 +405,8 @@ static IpcBrowserProgress browser_progress_snapshot(uint32_t id,
   }
   snprintf(event.status, sizeof(event.status), "%s",
            status_to_string(snapshot.status));
+  if (snapshot.status == DOWNLOAD_ACTIVE && snapshot.finishing)
+    snprintf(event.status, sizeof(event.status), "FINISHING");
   event.total_bytes = snapshot.total_size;
   memcpy(event.dest_path, snapshot.dest_path, sizeof(event.dest_path));
   if (snapshot.status == DOWNLOAD_ACTIVE || snapshot.media_kind != DOWNLOAD_MEDIA_NONE)
@@ -2501,7 +2503,7 @@ void ipc_broadcast_status(uint32_t download_id, const char *status,
   DownloadRuntimeSnapshot transfer_snapshot = {0};
   rich_event.eta_seconds = UINT64_MAX;
   if (queue_manager_get_runtime_snapshot(download_id, &transfer_snapshot) &&
-      transfer_snapshot.status == DOWNLOAD_ACTIVE) {
+      transfer_snapshot.status == DOWNLOAD_ACTIVE && !transfer_snapshot.finishing) {
     rich_event.speed_bps = transfer_snapshot.transfer_metrics.speed_bps;
     rich_event.eta_seconds = transfer_snapshot.transfer_metrics.eta_seconds;
   } else if (transfer_snapshot.status == DOWNLOAD_DONE) {

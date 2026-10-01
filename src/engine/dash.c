@@ -898,6 +898,7 @@ int dash_run_download(Download *d) {
     rc = -1;
     goto finish;
   }
+  atomic_store(&d->finishing, true);
   const char *primary = manifest.video.present ? video : audio;
   bool muxed = false;
   if (spawn_ffmpeg_available() && reserve_track(merged)) {

@@ -354,11 +354,13 @@ static void poll_progress(PopupState *state) {
 
 static void draw_progress(struct nk_context *ctx, PopupState *state,
                           int daemon) {
+  bool finishing = strcmp(state->progress.status, "FINISHING") == 0;
   bool done = strcmp(state->progress.status, "DONE") == 0;
   bool stopped = strcmp(state->progress.status, "ERROR") == 0 ||
                  strcmp(state->progress.status, "CANCELED") == 0;
   nk_layout_row_dynamic(ctx, 30, 1);
-  nk_label(ctx, done ? tr("gui.download_complete") : tr("gui.downloading"), NK_TEXT_LEFT);
+  nk_label(ctx, done ? tr("gui.download_complete") :
+           finishing ? tr("gui.finishing_file") : tr("gui.downloading"), NK_TEXT_LEFT);
   if (state->duplicate) {
     nk_layout_row_dynamic(ctx, 22, 1);
     nk_labelf_colored(ctx, NK_TEXT_LEFT, ACCENT, "%s (ID %u)",
@@ -425,6 +427,10 @@ static void draw_progress(struct nk_context *ctx, PopupState *state,
     } else {
       copy_label(eta, sizeof(eta), tr("gui.time_remaining_unknown"));
     }
+  }
+  if (finishing) {
+    copy_label(speed, sizeof(speed), tr("gui.transfer_finished"));
+    copy_label(eta, sizeof(eta), tr("gui.finishing_file"));
   }
   nk_layout_row_dynamic(ctx, 20, 2);
   nk_label_colored(ctx, speed, NK_TEXT_LEFT, MUTED);

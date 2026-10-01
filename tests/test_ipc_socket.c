@@ -1070,6 +1070,20 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   dm_mutex_lock(queue_mutex);
   active->media_kind = DOWNLOAD_MEDIA_VIDEO;
   dm_mutex_unlock(queue_mutex);
+  queue_manager_update_status(download_id, DOWNLOAD_ACTIVE);
+  queue_manager_set_transfer_metrics(download_id, sample);
+  atomic_store(&active->finishing, true);
+  int finishing_client = ipc_client_connect_compatible(1500, NULL);
+  cr_assert_geq(finishing_client, 0);
+  IpcBrowserProgress finishing = {0};
+  cr_assert_eq(ipc_browser_subscribe_progress(finishing_client, download_id,
+                                              &finishing), 0);
+  cr_assert_str_eq(finishing.status, "FINISHING");
+  cr_assert_eq(finishing.bytes_received, 3000);
+  ipc_client_disconnect(finishing_client);
+  atomic_store(&active->finishing, false);
+  queue_manager_update_status(download_id, DOWNLOAD_QUEUED);
+
   int popup_client = ipc_client_connect_compatible(1500, NULL);
   cr_assert_geq(popup_client, 0);
   IpcBrowserProgress popup_initial = {0};
