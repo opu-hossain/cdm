@@ -116,13 +116,36 @@ globalThis.CdmYouTubeSabrCapture = (() => {
     return {url: details.url, config, context, audio: audio.value, formats};
   }
 
-  function select(session, itag) {
+  function advertisedFormat(itag, metadata) {
+    // Same FormatId fields used by the native SABR writer: itag, lastModified, xtags.
+    if (!metadata || typeof metadata.lastModified !== "string" ||
+        !/^[0-9]{1,20}$/.test(metadata.lastModified)) return null;
+    const modified = BigInt(metadata.lastModified);
+    if (modified <= 0n || modified > 18446744073709551615n) return null;
+    const tags = new TextEncoder().encode(metadata.xtags || "");
+    if (tags.length > 512) return null;
+    const out = [];
+    function number(field, value) {
+      out.push(field * 8);
+      do {
+        const byte = Number(value & 127n);
+        value >>= 7n;
+        out.push(byte | (value ? 128 : 0));
+      } while (value);
+    }
+    number(1, BigInt(itag));
+    number(2, modified);
+    if (tags.length) appendBytes(out, 3, tags);
+    return new Uint8Array(out);
+  }
+
+  function select(session, itag, metadata) {
     if (!session || !Number.isInteger(itag) ||
         itag < 1 || itag > 100000) return null;
     const request = [];
     appendBytes(request, 5, session.config);
     appendBytes(request, 16, session.audio);
-    const video = session.formats.get(itag);
+    const video = session.formats.get(itag) || advertisedFormat(itag, metadata);
     if (video) appendBytes(request, 17, video);
     appendBytes(request, 19, session.context);
     if (request.length > 16000) return null;

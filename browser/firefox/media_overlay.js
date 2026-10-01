@@ -7,7 +7,8 @@
   const api = typeof browser !== "undefined" ? browser : chrome;
   let host, button, panel, title, rows = [];
   let refreshing = false, rendered = "";
-  let youtubePage = null, youtubeLoading = false;
+  let youtubePage = null, youtubeLoading = false, youtubePending = null;
+  let nextYouTubeProbe = 0;
 
   function onYouTube() {
     try {
@@ -62,21 +63,7 @@
       const opening = panel.hidden;
       panel.hidden = !panel.hidden;
       if (!opening || !onYouTube()) return;
-      youtubePage = location.href;
-      youtubeLoading = true;
-      rows = [];
-      render();
-      try {
-        const found = await api.runtime.sendMessage({type: "cdm_youtube_formats_tab"});
-        if (location.href !== youtubePage) return;
-        rows = Array.isArray(found) ? found.filter(item =>
-          typeof item.id === "string" && item.id.length <= 128 &&
-          item.kind === "video" && typeof item.filename === "string" &&
-          item.filename.length <= 511 && typeof item.quality === "string" &&
-          item.quality.length <= 32 && Number.isSafeInteger(item.totalBytes) &&
-          item.totalBytes >= 0).slice(0, 16) : [];
-      } catch (_) { rows = []; }
-      finally { youtubeLoading = false; render(); }
+      await discoverYouTube();
     });
     panel = document.createElement("div");
     panel.className = "panel";
@@ -86,6 +73,38 @@
     shadow.append(style, button, panel);
     document.documentElement.appendChild(host);
     render();
+  }
+
+  async function discoverYouTube() {
+    if (youtubePending) return youtubePending;
+    const page = location.href;
+    youtubePage = page;
+    youtubeLoading = true;
+    if (!rows.length) render();
+    youtubePending = (async () => {
+      try {
+        const found = await api.runtime.sendMessage({type: "cdm_youtube_formats_tab"});
+        if (location.href !== page) return;
+        const next = Array.isArray(found) ? found.filter(item =>
+          typeof item.id === "string" && item.id.length <= 128 &&
+          item.kind === "video" && typeof item.filename === "string" &&
+          item.filename.length <= 511 && typeof item.quality === "string" &&
+          item.quality.length <= 32 && Number.isSafeInteger(item.totalBytes) &&
+          item.totalBytes >= 0).slice(0, 16) : [];
+        const changed = JSON.stringify(next) !== JSON.stringify(rows);
+        rows = next;
+        if (changed || !rows.length) render();
+      } catch (_) {
+        if (location.href === page) { rows = []; render(); }
+      } finally {
+        youtubeLoading = false;
+        youtubePending = null;
+        nextYouTubeProbe = location.href === page
+          ? Date.now() + (rows.length ? 10000 : 2000) : 0;
+        if (location.href === page && !rows.length) render();
+      }
+    })();
+    return youtubePending;
   }
 
   function position() {
@@ -106,12 +125,12 @@
       ? pageTitle.replace(/^\(\d+\)\s*/, "").replace(/\s+-\s+YouTube$/, "")
       : pageTitle).slice(0, 120);
     panel.replaceChildren(title);
-    for (const item of rows) {
+    for (const [index, item] of rows.entries()) {
       const choice = document.createElement("button");
       choice.type = "button";
       choice.textContent = item.quality
         ? `${item.quality} · ${formatSize(item.totalBytes)} · ${item.filename}`
-        : `${item.kind.toUpperCase()} · ${item.filename || "media"}`;
+        : `Video${rows.length > 1 ? ` ${index + 1}` : ""} · ${item.kind === "video" ? "Original quality" : "Automatic quality"} · ${formatSize(item.totalBytes)}`;
       choice.addEventListener("click", async () => {
         choice.disabled = true;
         try {
@@ -124,11 +143,16 @@
       });
       panel.appendChild(choice);
     }
+    if (rows.some(item => item.kind === "hls" || item.kind === "dash")) {
+      const note = document.createElement("p");
+      note.textContent = "Streaming video: cdm selects the available quality automatically and prepares the video file.";
+      panel.appendChild(note);
+    }
     if (!rows.length) {
       const unavailable = document.createElement("p");
       unavailable.textContent = youtubeLoading ? "Checking YouTube formats…" :
-        youtubePage ? "No supported formats for this video." :
-        "No direct media detected for this video.";
+        youtubePage ? "Waiting for playback information… Keep the video playing; this list updates automatically." :
+        "No downloadable video detected yet. Protected or unsupported streams cannot be offered.";
       panel.appendChild(unavailable);
     }
   }
@@ -146,8 +170,12 @@
       youtubeLoading = false;
       panel.hidden = true;
       rows = [];
+      nextYouTubeProbe = 0;
     }
-    if (youtubePage && !panel.hidden) return;
+    if (onYouTube()) {
+      if (Date.now() >= nextYouTubeProbe) await discoverYouTube();
+      return;
+    }
     if (refreshing) return;
     refreshing = true;
     try {

@@ -17,17 +17,37 @@ globalThis.CdmFilters = Object.freeze({
   },
   playbackFragment(url, kind, status, headers = [], hasManifest = false) {
     if (kind !== "video") return false;
-    if (status === 206 || headers.some(header =>
-        header.name.toLowerCase() === "content-range")) return true;
-    let path;
-    try { path = decodeURIComponent(new URL(url).pathname).toLowerCase(); }
+    let path, parsed;
+    try { parsed = new URL(url); path = decodeURIComponent(parsed.pathname).toLowerCase(); }
     catch (_) { return true; }
     if (/(?:^|[\/._-])(?:segment|chunk|frag|part)(?:[\/._-]|[0-9]|$)/.test(path))
       return true;
+    if (status === 206 || headers.some(header =>
+        header.name.toLowerCase() === "content-range")) {
+      // A standalone MP4/WebM often plays via byte ranges. Do not confuse it
+      // with a manifest segment or a URL that names one specific range.
+      return hasManifest || !/\.(mp4|webm|ogv|ogg|mov|m4v|mkv|avi)$/.test(path) ||
+        [...parsed.searchParams.keys()].some(key => /^(range|bytes|bytestart|byteend|start|end|sq)$/i.test(key)) ||
+        this.mediaSize(kind, status, headers) === 0;
+    }
     const length = headers.find(header =>
       header.name.toLowerCase() === "content-length")?.value;
     return hasManifest && /^[0-9]+$/.test(length || "") &&
       Number(length) < 512 * 1024;
+  },
+  mediaSize(kind, status, headers = []) {
+    if (kind !== "video") return 0;
+    let value;
+    if (status === 206) {
+      const range = headers.find(h => h.name.toLowerCase() === "content-range")?.value;
+      const parts = /^bytes ([0-9]+)-([0-9]+)\/([0-9]+)$/i.exec(range || "");
+      if (!parts || Number(parts[1]) > Number(parts[2]) ||
+          Number(parts[2]) >= Number(parts[3])) return 0;
+      value = Number(parts[3]);
+    } else if (status === 200) {
+      value = Number(headers.find(h => h.name.toLowerCase() === "content-length")?.value);
+    }
+    return Number.isSafeInteger(value) && value > 0 ? value : 0;
   },
   normalizeSites(input = []) {
     if (!Array.isArray(input) || input.length > 64)

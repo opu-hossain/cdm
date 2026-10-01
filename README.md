@@ -13,7 +13,7 @@ The current source builds Linux DEB and RPM packages and includes an Arch PKGBUI
 - **Desktop GUI:** Add single or multiple URLs, manage downloads and queues, see speed and ETA, search history, choose Light/Dark/System theme, and switch between English and Spanish.
 - **CLI:** Add, pause, resume, cancel, list, and export/import settings and history as JSON.
 - **Browser handoff:** Optional Chrome/Chromium and Firefox extensions offer supported downloads for confirmation; filters, context menus, and optional site-specific browser-session sharing are available.
-- **Video:** Select direct video, HLS, DASH, or an available combined YouTube MP4 from the in-page control. See [video downloads](#video-downloads).
+- **Video:** Download videos from the in-page control, including available YouTube resolutions and supported streaming video. See [video downloads](#video-downloads).
 - **Desktop extras:** On-demand or login-started daemon, notifications, optional tray and clipboard review, and an optional external antivirus scanner.
 
 ## Install a locally built package
@@ -86,7 +86,7 @@ The optional extensions hand supported GET downloads to cdm. Per-origin consent 
 
 ## Video downloads
 
-The extension's **ON** badge enables browser-session sharing for one site; it does not start video detection. In extension **Options**, enable **Media detection**, save, and grant the requested permission. Play a video and use **Download with cdm** at the top right of its frame to choose a detected direct video, HLS, or DASH stream. On YouTube, opening the picker also checks for a combined MP4 that cdm can download with its existing HTTP engine. Options lists retained direct-media candidates. Detection alone does not start a download. See [media downloads](docs/media.md) for format limits.
+The extension's **ON** badge enables browser-session sharing for one site; it does not start video detection. In extension **Options**, enable **Media detection**, save, and grant the requested permission. Play a video and use **Download with cdm** at the top right of its frame. YouTube qualities are discovered during playback and the picker updates automatically; changing playback quality or reloading should not be necessary. Other supported streams appear as **Video · Automatic quality**, while direct files show **Original quality**. Size is shown when known. **Finishing file…** means the transfer has ended and cdm is preparing or checking the output. Options also lists retained candidates. Detection alone does not start a download. See [media downloads](docs/media.md) for format limits.
 
 Browser-captured session values stay in memory. Cookies, proxy credentials, and request options entered directly into cdm use plaintext local storage; ordinary JSON exports omit secrets.
 

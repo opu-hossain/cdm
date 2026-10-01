@@ -1,4 +1,4 @@
-// Serialized into the page's MAIN world on an explicit picker click.
+// Serialized into the page's MAIN world while a permitted YouTube video is playing.
 // Return direct MP4 or advertised MP4 adaptive tracks; never eval player source.
 globalThis.CdmYouTubeProbe = {
   isYouTubePage(url) {
@@ -34,7 +34,8 @@ globalThis.CdmYouTubeProbe = {
         response.videoDetails.isLiveContent === true) return empty;
     let streaming = response.streamingData;
     const key = globalThis.ytcfg?.get?.("INNERTUBE_API_KEY");
-    if (typeof key === "string" && /^[A-Za-z0-9_-]{10,128}$/.test(key)) {
+    if (!streaming?.adaptiveFormats?.some(format => format?.qualityLabel) &&
+        typeof key === "string" && /^[A-Za-z0-9_-]{10,128}$/.test(key)) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 8000);
       try {
@@ -107,7 +108,10 @@ globalThis.CdmYouTubeProbe = {
             Number.isSafeInteger(videoBytes + audioBytes)
           ? videoBytes + audioBytes : 0;
         formats.push({itag: format.itag, quality: format.qualityLabel.slice(0, 32),
-          mime: "video/mp4", adaptive: true, totalBytes: total});
+          mime: "video/mp4", adaptive: true, totalBytes: total,
+          lastModified: typeof format.lastModified === "string" &&
+            /^[0-9]{1,20}$/.test(format.lastModified) ? format.lastModified : "",
+          xtags: typeof format.xtags === "string" ? format.xtags.slice(0, 512) : ""});
         offered.add(format.qualityLabel);
       }
     }

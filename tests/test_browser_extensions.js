@@ -606,6 +606,17 @@ async function verifyOptions(file, globalName) {
   assert.equal(filters.playbackFragment("https://example.invalid/short.mp4",
     "video", 200, [{name: "Content-Length", value: "8192"}], false), false);
   assert.equal(filters.mediaKind("https://example.invalid/file.MPD?q=1"), "dash");
+  const rangedVideo = [{name: "Content-Range", value: "bytes 0-999/2000000"}];
+  assert.equal(filters.playbackFragment("https://example.invalid/movie.mp4",
+    "video", 206, rangedVideo, false), false,
+    "ordinary range-based video playback must remain downloadable");
+  assert.equal(filters.mediaSize("video", 206, rangedVideo), 2000000);
+  assert.equal(filters.playbackFragment("https://example.invalid/movie.mp4?range=0-999",
+    "video", 206, rangedVideo, false), true);
+  assert.equal(filters.playbackFragment("https://example.invalid/movie.mp4",
+    "video", 206, rangedVideo, true), true,
+    "a manifest's fragments must stay hidden");
+
   assert.equal(filters.mediaKind("https://example.invalid/video", "Video/MP4; charset=x"), "video");
   assert.equal(filters.mediaKind("https://example.invalid/videoplayback",
     "application/vnd.yt-ump"), "");
@@ -730,7 +741,8 @@ async function verifyMediaOverlay(file, globalName) {
   await button.click();
   assert.equal(panel.hidden, false);
   assert.match(panel.children[0].textContent, /Fixture video/);
-  assert.match(panel.children[1].textContent, /master.m3u8/);
+  assert.match(panel.children[1].textContent, /Video.*Automatic quality/);
+  assert.doesNotMatch(panel.children[1].textContent, /HLS|m3u8/);
   const firstChoice = panel.children[1];
   await tick();
   assert.equal(panel.children[1], firstChoice, "polling must not replace a choice under the pointer");
@@ -743,7 +755,7 @@ async function verifyMediaOverlay(file, globalName) {
   assert.equal(host.style.display, "block", "playing video keeps an in-frame control");
   assert.equal(button.textContent, "Download with cdm");
   await button.click();
-  assert.match(panel.children[1].textContent, /No direct media detected/);
+  assert.match(panel.children[1].textContent, /No downloadable video detected/);
   assert.equal(offers.length, 1, "empty picker must not probe the site");
   rows = [{id: "media-overlay-fixture", kind: "hls", filename: "master.m3u8"}];
   video.paused = true;
@@ -826,7 +838,7 @@ async function verifyYouTubeProbe(file) {
   response.videoDetails.videoId = "staleVideo";
   assert.equal((await sandbox.CdmYouTubeProbe.pageProbe()).formats.length, 0,
     "SPA navigation must not offer formats for the previous video");
-  assert.equal(calls.length, 3, "stale pages must not probe another video");
+  assert.equal(calls.length, 2, "page adaptive metadata must not wait for a network probe");
 }
 
 async function verifyYouTubeOverlay(file, globalName) {
@@ -847,11 +859,12 @@ async function verifyYouTubeOverlay(file, globalName) {
     return {left: 20, top: 30, right: 820, bottom: 480, width: 800, height: 450};
   }};
   const calls = [];
+  let tick, now = 0, ready = false;
   const sandbox = vm.createContext({
     [globalName]: {runtime: {sendMessage(message) {
       calls.push(message);
       if (message.type === "cdm_media_list_tab") return Promise.resolve([]);
-      if (message.type === "cdm_youtube_formats_tab") return Promise.resolve([
+      if (message.type === "cdm_youtube_formats_tab") return Promise.resolve(!ready ? [] : [
         {id: "yt-fixture", kind: "video", filename: "Fixture video 360p.mp4",
           quality: "360p", totalBytes: 2048}]);
       return Promise.resolve({ok: true});
@@ -860,7 +873,8 @@ async function verifyYouTubeOverlay(file, globalName) {
     document: {documentElement: root, title: "(7) Fixture video - YouTube",
       querySelectorAll() { return [video]; }, createElement(tag) { return new Element(tag); },
       addEventListener() {}},
-    window: {addEventListener() {}}, setInterval() {}, console
+    window: {addEventListener() {}}, setInterval(callback) { tick = callback; },
+    Date: {now: () => now}, console
   });
   vm.runInContext(fs.readFileSync(path.join(path.dirname(file), "media_overlay.js"), "utf8"),
     sandbox);
@@ -868,11 +882,18 @@ async function verifyYouTubeOverlay(file, globalName) {
   const host = root.children[0];
   const button = host.shadow.children[1];
   const panel = host.shadow.children[2];
+  assert(calls.some(call => call.type === "cdm_youtube_formats_tab"),
+    "discover qualities during playback before the picker is clicked");
   await button.click();
   assert.equal(panel.hidden, false);
   assert.equal(panel.children[0].textContent, "Fixture video",
     "YouTube notification counts and site suffix are not the video title");
   assert(calls.some(call => call.type === "cdm_youtube_formats_tab"));
+  assert.match(panel.children[1].textContent, /Waiting for playback/);
+  ready = true;
+  now = 3000;
+  await tick();
+  assert.equal(panel.hidden, false, "an open picker updates without a page reload");
   assert.match(panel.children[1].textContent, /360p/);
   assert.match(panel.children[1].textContent, /2\.0 KB/);
   await panel.children[1].click();

@@ -378,7 +378,8 @@ async function observeMediaHeaders(details) {
       mediaCandidates.delete(video ? video[0] : mediaCandidates.keys().next().value);
     }
     const filename = safeValue(new URL(details.url).pathname.split("/").pop() || "", 511);
-    mediaCandidates.set(key, {id: crypto.randomUUID(), url: details.url, kind, mime,
+    const totalBytes = CdmFilters.mediaSize(kind, details.statusCode, details.responseHeaders);
+    mediaCandidates.set(key, {id: crypto.randomUUID(), url: details.url, kind, mime, totalBytes,
       filename, tabId: details.tabId, frameId, context, at: Date.now()});
   } catch (_) {
     // Unavailable storage/permissions fail closed; no native offer was sent.
@@ -494,16 +495,17 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
             origins: ["http://*/*", "https://*/*"]})) { reply([]); return; }
       for (const [key, value] of mediaCandidates)
         if (value.youtube && value.tabId === sender.tab.id &&
-            value.frameId === sender.frameId) mediaCandidates.delete(key);
+            value.frameId === sender.frameId &&
+            value.youtube.videoId !== found.videoId) mediaCandidates.delete(key);
       const rows = [];
       for (const format of found.formats) {
         if (format.adaptive === true && !CdmYouTubeSabrCapture.select(
-              youtubeSession(sender.tab.id), format.itag)) continue;
-        if (mediaCandidates.size >= 64)
-          mediaCandidates.delete(mediaCandidates.keys().next().value);
-        const id = crypto.randomUUID();
+              youtubeSession(sender.tab.id), format.itag, format)) continue;
         const filename = youtubeFilename(found.title, format.quality);
         const key = `youtube\n${sender.tab.id}\n${sender.frameId}\n${found.videoId}\n${format.itag}`;
+        if (!mediaCandidates.has(key) && mediaCandidates.size >= 64)
+          mediaCandidates.delete(mediaCandidates.keys().next().value);
+        const id = mediaCandidates.get(key)?.id || crypto.randomUUID();
         mediaCandidates.set(key, {id, url: format.url, kind: "video",
           mime: format.mime, filename, totalBytes: format.totalBytes,
           quality: format.quality, tabId: sender.tab.id, frameId: sender.frameId,
@@ -521,8 +523,8 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
     if (message.type === "cdm_media_list" || message.type === "cdm_media_list_tab") {
       reply([...mediaCandidates.values()].filter(value =>
         !value.youtube && (fromOptions || (value.tabId === sender.tab.id &&
-          value.frameId === sender.frameId))).map(({id, url, kind, mime, filename, tabId}) =>
-        fromOptions ? {id, url, kind, mime, filename, tabId} : {id, kind, mime, filename}));
+          value.frameId === sender.frameId))).map(({id, url, kind, mime, filename, tabId, totalBytes}) =>
+        fromOptions ? {id, url, kind, mime, filename, tabId} : {id, kind, mime, filename, totalBytes}));
       return;
     }
     const selected = [...mediaCandidates].find(([, value]) => value.id === message.id &&
@@ -549,7 +551,7 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
       candidate.youtubeItag = format.adaptive === true ? format.itag : 0;
       if (format.adaptive === true) {
         candidate.youtubeSession = CdmYouTubeSabrCapture.select(
-          youtubeSession(sender.tab.id), format.itag);
+          youtubeSession(sender.tab.id), format.itag, format);
         candidate.youtubeHeight = parseInt(format.quality, 10);
         if (!candidate.youtubeSession ||
             !Number.isInteger(candidate.youtubeHeight) ||
