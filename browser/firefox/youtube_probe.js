@@ -83,17 +83,14 @@ globalThis.CdmYouTubeProbe = {
         totalBytes: Number.isSafeInteger(bytes) && bytes > 0 ? bytes : 0});
       offered.add(String(format.qualityLabel));
     }
-    const config = response.playerConfig?.mediaCommonConfig
-      ?.mediaUstreamerRequestConfig?.videoPlaybackUstreamerConfig;
-    if (typeof streaming?.serverAbrStreamingUrl === "string" &&
-        streaming.serverAbrStreamingUrl.startsWith("https://") &&
-        typeof config === "string" && config.length > 0 &&
-        config.length <= 44000) {
-      const adaptive = Array.isArray(streaming.adaptiveFormats)
+    // The browser's SABR request supplies config and authorization separately.
+    // getPlayerResponse often exposes adaptive metadata without either field.
+    {
+      const adaptive = Array.isArray(streaming?.adaptiveFormats)
         ? streaming.adaptiveFormats : [];
-      const audio = adaptive.find(format => format?.itag === 140 &&
+      const audio = adaptive.find(format => [140, 251, 250, 249].includes(format?.itag) &&
         typeof format.mimeType === "string" &&
-        format.mimeType.startsWith("audio/mp4"));
+        format.mimeType.startsWith("audio/"));
       const audioBytes = Number(audio?.contentLength);
       if (audio) for (const format of adaptive) {
         if (formats.length >= 16) break;

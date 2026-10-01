@@ -315,10 +315,12 @@ async function probeYouTube(sender) {
     world: "MAIN", func: CdmYouTubeProbe.pageProbe
   });
   const result = injected?.[0]?.result;
-  const page = new URL(sender.url);
-  const expectedId = page.pathname === "/watch" ? page.searchParams.get("v")
-    : page.pathname.slice(7).split("/")[0];
-  if (result?.videoId !== expectedId || !Array.isArray(result.formats)) return null;
+  // MessageSender.url can retain the original document URL after SPA navigation.
+  // pageProbe validates the current MAIN-world location against the player ID.
+  const expectedId = result?.videoId;
+  if (typeof expectedId !== "string" ||
+      !/^[A-Za-z0-9_-]{1,32}$/.test(expectedId) ||
+      !Array.isArray(result.formats)) return null;
   const title = safeValue(result.title, 180) || "Video";
   const formats = [];
   for (const format of result.formats.slice(0, 16)) {
@@ -565,3 +567,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "sync" && changes.mediaDetection) queueMediaScriptSync();
 });
 chrome.tabs?.onRemoved?.addListener(tabId => youtubeSessions.delete(tabId));
+
+chrome.tabs?.onUpdated?.addListener((tabId, change) => {
+  if (change.url) youtubeSessions.delete(tabId);
+});

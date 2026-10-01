@@ -34,6 +34,11 @@ for (const file of process.argv.slice(2)) {
   const chosen = capture.select(session, 401);
   assert.equal(chosen.url, "https://rr1.googlevideo.com/videoplayback?sabr=1");
   assert.equal(chosen.request, btoa(String.fromCharCode(...payload)));
+  const padded = capture.parseRequest(makeRequest([
+    ...payload, ...bytes(25, Array(20000).fill(0))]));
+  assert.ok(padded, "ignore browser request padding rather than dropping the video");
+  assert.equal(capture.select(padded, 401).request, chosen.request,
+    "only bounded playback fields cross native messaging");
   // A player request may advertise only the currently playing quality.
   // The Android player metadata validates other offered itags in the daemon.
   assert.ok(capture.select(session, 137));

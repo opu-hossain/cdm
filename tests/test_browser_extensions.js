@@ -9,6 +9,7 @@ async function verify(file, globalName, expectedBrowser) {
   let headerListener;
   let mediaListener;
   let youtubeRequestListener;
+  let tabUpdatedListener;
   let runtimeListener;
   let mediaDetection;
   let mediaSequence = 0;
@@ -73,6 +74,7 @@ async function verify(file, globalName, expectedBrowser) {
       setBadgeBackgroundColor() {},
       setTitle() {}
     },
+    tabs: {onUpdated: {addListener(listener) { tabUpdatedListener = listener; }}},
     scripting: {
       getRegisteredContentScripts() { return Promise.resolve(registeredMediaScripts); },
       registerContentScripts(scripts) { registeredMediaScripts.push(...scripts); return Promise.resolve(); },
@@ -388,11 +390,14 @@ async function verify(file, globalName, expectedBrowser) {
     "https://media.example.invalid/videoplayback?token=fixture2");
   assert.equal(messages.at(-1).filename, "Fixture video 360p.mp4");
   assert.equal(messages.at(-1).referrer, youtubePage);
+  assert.equal((await callTabRuntime({type: "cdm_youtube_formats_tab"}, 7, 0,
+    "https://www.youtube.com/watch?v=previous123")).length, 1,
+    "use the current MAIN-world video after same-document navigation");
   assert.equal(messages.at(-1).cookie, undefined);
   youtubeAdaptive = true;
   assert.equal(typeof youtubeRequestListener, "function");
   const sabrBody = new Uint8Array([0x2a, 3, 1, 2, 3,
-    0x8a, 1, 3, 8, 0x91, 3, 0x82, 1, 3, 8, 0x8c, 1,
+    0x82, 1, 3, 8, 0x8c, 1, 0x8a, 1, 3, 8, 0x91, 3,
     0x9a, 1, 34, 0x12, 32, ...Array(32).fill(7)]);
   youtubeRequestListener({method: "POST", tabId: 7,
     initiator: "https://www.youtube.com",
@@ -412,6 +417,10 @@ async function verify(file, globalName, expectedBrowser) {
     btoa(String.fromCharCode(...sabrBody)));
   assert.equal(messages.at(-1).url, youtubePage);
   assert.equal(messages.at(-1).filename, "Fixture video 2160p.mp4");
+  tabUpdatedListener(7, {url: "https://www.youtube.com/watch?v=another1234"});
+  assert.equal((await callTabRuntime({type: "cdm_youtube_formats_tab"},
+    7, 0, youtubePage)).length, 1,
+    "navigation must not reuse another video's playback authorization");
   youtubeAdaptive = false;
   youtubeMediaUrl = "https://127.0.0.1/private?token=fixture";
   assert.equal((await callTabRuntime({type: "cdm_youtube_formats_tab"}, 7, 0,
@@ -789,10 +798,17 @@ async function verifyYouTubeProbe(file) {
   rejectAndroid = true;
   assert.equal((await sandbox.CdmYouTubeProbe.pageProbe()).formats[0].url,
     "https://media.example.invalid/videoplayback?token=fixture");
+  response.streamingData.adaptiveFormats = [
+    {itag: 251, mimeType: "audio/webm", contentLength: "100"},
+    {itag: 137, height: 1080, qualityLabel: "1080p", mimeType: "video/mp4",
+      contentLength: "2000"}];
+  const webAdaptive = await sandbox.CdmYouTubeProbe.pageProbe();
+  assert.equal(webAdaptive.formats[0].quality, "1080p",
+    "use page adaptive metadata when Android probing fails and config is only in playback requests");
   response.videoDetails.videoId = "staleVideo";
   assert.equal((await sandbox.CdmYouTubeProbe.pageProbe()).formats.length, 0,
     "SPA navigation must not offer formats for the previous video");
-  assert.equal(calls.length, 2, "stale pages must not probe another video");
+  assert.equal(calls.length, 3, "stale pages must not probe another video");
 }
 
 async function verifyYouTubeOverlay(file, globalName) {

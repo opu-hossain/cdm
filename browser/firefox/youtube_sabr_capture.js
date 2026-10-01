@@ -16,7 +16,8 @@ globalThis.CdmYouTubeSabrCapture = (() => {
         pos = decoded.end;
       } else if (wire === 2) {
         const length = number(bytes, pos);
-        if (!length || length.value > bytes.length - length.end) return null;
+        if (!length || length.value === null ||
+            length.value > bytes.length - length.end) return null;
         pos = length.end;
         value = bytes.subarray(pos, pos + length.value);
         pos += length.value;
@@ -50,6 +51,19 @@ globalThis.CdmYouTubeSabrCapture = (() => {
     return btoa(raw);
   }
 
+  function appendBytes(out, field, value) {
+    function varint(value) {
+      do {
+        const byte = value % 128;
+        value = Math.floor(value / 128);
+        out.push(byte | (value ? 128 : 0));
+      } while (value);
+    }
+    varint(field * 8 + 2);
+    varint(value.length);
+    for (const byte of value) out.push(byte);
+  }
+
   function parseRequest(details) {
     let url;
     try { url = new URL(details.url); } catch (_) { return null; }
@@ -64,7 +78,7 @@ globalThis.CdmYouTubeSabrCapture = (() => {
       if (Object.prototype.toString.call(chunk.bytes) !== "[object ArrayBuffer]")
         return null;
       length += chunk.bytes.byteLength;
-      if (length > 16000) return null;
+      if (length > 128 * 1024) return null;
     }
     if (!length || details.url.length > 2048) return null;
     const body = new Uint8Array(length);
@@ -83,24 +97,36 @@ globalThis.CdmYouTubeSabrCapture = (() => {
     const token = contextFields?.find(part => part.field === 2 && part.wire === 2)?.value;
     if (!token || token.length < 32 || token.length > 1024) return null;
     const formats = new Map();
-    const audioFormats = new Set();
+    let audio = null;
     for (const part of parts) {
-      if ((part.field !== 16 && part.field !== 17) || part.wire !== 2 ||
+      if (![2, 16, 17].includes(part.field) || part.wire !== 2 ||
           part.value.length > 560) continue;
       const id = fields(part.value)?.find(field => field.field === 1 &&
         field.wire === 0)?.value;
       if (!Number.isInteger(id) || id < 1 || id > 100000) continue;
-      if (part.field === 16) audioFormats.add(id);
-      else if (formats.size < 128) formats.set(id, encode(part.value));
+      if ((part.field === 2 || part.field === 16) &&
+          [140, 251, 250, 249].includes(id)) {
+        // Prefer the audio already initialized by the player (its chosen language).
+        if (!audio || (part.field === 2 && audio.field !== 2))
+          audio = {field: part.field, value: part.value};
+      } else if (part.field === 17 && formats.size < 128)
+        formats.set(id, part.value);
     }
-    if (![140, 251, 250].some(itag => audioFormats.has(itag))) return null;
-    return {url: details.url, request: encode(body), formats};
+    if (!audio) return null;
+    return {url: details.url, config, context, audio: audio.value, formats};
   }
 
   function select(session, itag) {
     if (!session || !Number.isInteger(itag) ||
         itag < 1 || itag > 100000) return null;
-    return {url: session.url, request: session.request};
+    const request = [];
+    appendBytes(request, 5, session.config);
+    appendBytes(request, 16, session.audio);
+    const video = session.formats.get(itag);
+    if (video) appendBytes(request, 17, video);
+    appendBytes(request, 19, session.context);
+    if (request.length > 16000) return null;
+    return {url: session.url, request: encode(request)};
   }
 
   return {parseRequest, select};
