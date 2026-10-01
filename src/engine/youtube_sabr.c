@@ -35,14 +35,25 @@ static bool ump_number(const unsigned char *data, size_t length,
   return true;
 }
 
+int sabr_read_part_prefix(const unsigned char *data, size_t length,
+                          size_t *offset, uint32_t *type, uint32_t *size) {
+  if (!data || !offset || !type || !size || *offset > length) return -1;
+  size_t position = *offset;
+  uint32_t part_type, part_size;
+  if (!ump_number(data, length, &position, &part_type) ||
+      !ump_number(data, length, &position, &part_size)) return 0;
+  if (part_type > 4096 || part_size > SABR_MAX_PART) return -1;
+  *type = part_type; *size = part_size; *offset = position;
+  return 1;
+}
+
 int sabr_read_part(const unsigned char *data, size_t length, size_t *offset,
                    SabrPart *out) {
-  if (!data || !offset || !out || *offset > length) return -1;
+  if (!offset || !out) return -1;
   size_t position = *offset;
   uint32_t type, size;
-  if (!ump_number(data, length, &position, &type) ||
-      !ump_number(data, length, &position, &size)) return 0;
-  if (type > 4096 || size > SABR_MAX_PART) return -1;
+  int result = sabr_read_part_prefix(data, length, &position, &type, &size);
+  if (result != 1) return result;
   if (size > length - position) return 0;
   *out = (SabrPart){.type = type, .data = data + position, .length = size};
   *offset = position + size;

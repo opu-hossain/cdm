@@ -1067,11 +1067,16 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   ipc_client_disconnect(legacy_client);
   queue_manager_update_status(download_id, DOWNLOAD_QUEUED);
 
+  dm_mutex_lock(queue_mutex);
+  active->media_kind = DOWNLOAD_MEDIA_VIDEO;
+  dm_mutex_unlock(queue_mutex);
   int popup_client = ipc_client_connect_compatible(1500, NULL);
   cr_assert_geq(popup_client, 0);
   IpcBrowserProgress popup_initial = {0};
   cr_assert_eq(ipc_browser_subscribe_progress(popup_client, download_id,
                                               &popup_initial), 0);
+  cr_assert_eq(popup_initial.bytes_received, 3000);
+  cr_assert_float_eq(popup_initial.progress, 0.3f, 0.0001f);
   cr_assert_eq(ipc_send_subscribe_v2(popup_client), 0);
   cr_assert_eq(ipc_write_exact(popup_client, &barrier, sizeof(barrier)), 0);
   cr_assert_eq(ipc_read_exact(popup_client, &ignored_count,
@@ -1083,7 +1088,8 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   cr_assert_eq(popup_v2_header.type, MSG_STATUS_EVENT_V2);
   cr_assert_eq(popup_v2_header.length, sizeof(IpcProgressV2));
   cr_assert_eq(ipc_read_exact(popup_client, &rich, sizeof(rich)), 0);
-  cr_assert_eq(rich.speed_bps, 1300);
+  cr_assert_eq(rich.speed_bps, 0);
+  cr_assert_eq(rich.eta_seconds, UINT64_MAX);
   MsgHeader popup_browser_header = {0};
   cr_assert_eq(ipc_read_exact(popup_client, &popup_browser_header,
                               sizeof(popup_browser_header)), 0);

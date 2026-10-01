@@ -61,6 +61,9 @@ typedef struct {
  * offset is unchanged on partial or invalid data. Payload remains caller-owned. */
 int sabr_read_part(const unsigned char *data, size_t length, size_t *offset,
                    SabrPart *out);
+/* Decode just the bounded frame prefix, before the payload has arrived. */
+int sabr_read_part_prefix(const unsigned char *data, size_t length,
+                          size_t *offset, uint32_t *type, uint32_t *size);
 bool sabr_decode_media_header(const unsigned char *data, size_t length,
                               SabrMediaHeader *out);
 bool sabr_decode_format_metadata(const unsigned char *data, size_t length,

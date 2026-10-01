@@ -36,6 +36,32 @@ bool youtube_response_append(YoutubeResponseFile *response, const void *data,
     return false;
   if (fwrite(data, 1, length, response->file) != length) return false;
   response->length += length;
+  const unsigned char *bytes = data;
+  for (size_t offset = 0; offset < length && !response->invalid_prefix;) {
+    if (!response->remaining) {
+      if (response->prefix_length == sizeof(response->prefix)) {
+        response->invalid_prefix = true;
+        break;
+      }
+      response->prefix[response->prefix_length++] = bytes[offset++];
+      size_t consumed = 0;
+      int rc = sabr_read_part_prefix(response->prefix, response->prefix_length,
+          &consumed, &response->part_type, &response->remaining);
+      if (rc < 0) response->invalid_prefix = true;
+      if (rc != 1) continue;
+      response->prefix_length = 0;
+      response->skip_media_id = response->part_type == 21;
+    } else {
+      size_t count = length - offset;
+      if (count > response->remaining) count = response->remaining;
+      if (response->part_type == 21) {
+        response->media_bytes += count - (response->skip_media_id ? 1 : 0);
+        response->skip_media_id = false;
+      }
+      response->remaining -= (uint32_t)count;
+      offset += count;
+    }
+  }
   return true;
 }
 

@@ -210,7 +210,7 @@ static size_t response_write(char *data, size_t unit, size_t count,
     buffer->length = buffer->spool.length;
     if (buffer->download)
       atomic_store(&buffer->download->bytes_downloaded,
-                   buffer->base_bytes + buffer->length);
+                   buffer->base_bytes + buffer->spool.media_bytes);
     return amount;
   }
   if (amount > buffer->limit - buffer->length) return 0;

@@ -407,7 +407,7 @@ static IpcBrowserProgress browser_progress_snapshot(uint32_t id,
            status_to_string(snapshot.status));
   event.total_bytes = snapshot.total_size;
   memcpy(event.dest_path, snapshot.dest_path, sizeof(event.dest_path));
-  if (snapshot.status == DOWNLOAD_ACTIVE || (snapshot.media_kind == DOWNLOAD_MEDIA_HLS || snapshot.media_kind == DOWNLOAD_MEDIA_DASH))
+  if (snapshot.status == DOWNLOAD_ACTIVE || snapshot.media_kind != DOWNLOAD_MEDIA_NONE)
     event.bytes_received = snapshot.bytes_downloaded;
   else if (snapshot.status == DOWNLOAD_DONE)
     event.bytes_received = snapshot.total_size ? snapshot.total_size
@@ -612,9 +612,10 @@ static float snapshot_progress(const DownloadRuntimeSnapshot *snapshot) {
   if (snapshot->total_size == 0)
     return 0.0f;
 
-  uint64_t done =
-      snapshot->status == DOWNLOAD_ACTIVE ? snapshot->bytes_downloaded : 0;
-  if (snapshot->status != DOWNLOAD_ACTIVE) {
+  bool live_bytes = snapshot->status == DOWNLOAD_ACTIVE ||
+                    snapshot->media_kind != DOWNLOAD_MEDIA_NONE;
+  uint64_t done = live_bytes ? snapshot->bytes_downloaded : 0;
+  if (!live_bytes) {
     for (int i = 0; i < snapshot->chunk_count; i++)
       done += snapshot->chunks[i].bytes_done;
   }
@@ -2498,11 +2499,13 @@ void ipc_broadcast_status(uint32_t download_id, const char *status,
   IpcProgressV2 rich_event;
   memset(&rich_event, 0, sizeof(rich_event));
   DownloadRuntimeSnapshot transfer_snapshot = {0};
-  if (queue_manager_get_runtime_snapshot(download_id, &transfer_snapshot)) {
+  rich_event.eta_seconds = UINT64_MAX;
+  if (queue_manager_get_runtime_snapshot(download_id, &transfer_snapshot) &&
+      transfer_snapshot.status == DOWNLOAD_ACTIVE) {
     rich_event.speed_bps = transfer_snapshot.transfer_metrics.speed_bps;
     rich_event.eta_seconds = transfer_snapshot.transfer_metrics.eta_seconds;
-  } else {
-    rich_event.eta_seconds = UINT64_MAX;
+  } else if (transfer_snapshot.status == DOWNLOAD_DONE) {
+    rich_event.eta_seconds = 0;
   }
   rich_event.download_id = download_id;
   rich_event.bytes_received = browser_event.bytes_received;

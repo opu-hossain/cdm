@@ -323,12 +323,15 @@ Test(youtube_sabr, consumes_media_frames_larger_than_old_response_limit) {
   append_part(prefix, &prefix_length, 20, header, sizeof(header));
   cr_assert(youtube_response_append(&response, prefix, prefix_length));
   const unsigned char media[] = {21,0xf0,1,0,0x40,1,3}; // size=20MiB+1
-  cr_assert(youtube_response_append(&response, media, sizeof(media)));
+  for (size_t i = 0; i < sizeof(media); i++)
+    cr_assert(youtube_response_append(&response, media + i, 1));
   unsigned char data[65536]; memset(data, 'v', sizeof(data));
   for (int i = 0; i < 320; i++)
     cr_assert(youtube_response_append(&response, data, sizeof(data)));
   const unsigned char end[] = {22,1,3};
   cr_assert(youtube_response_append(&response, end, sizeof(end)));
+  cr_assert_eq(response.media_bytes, 20u * 1024 * 1024,
+    "live progress must exclude UMP headers even across curl chunk boundaries");
   cr_assert(youtube_response_map(&response));
   FILE *vf = tmpfile(), *af = tmpfile();
   cr_assert(vf && af);

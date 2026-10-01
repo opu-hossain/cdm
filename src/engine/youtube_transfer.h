@@ -12,6 +12,11 @@ typedef struct {
   FILE *file;
   const unsigned char *data;
   size_t length;
+  uint64_t media_bytes;
+  unsigned char prefix[10];
+  size_t prefix_length;
+  uint32_t part_type, remaining;
+  bool skip_media_id, invalid_prefix;
 } YoutubeResponseFile;
 bool youtube_response_open(YoutubeResponseFile *response, const char *destination);
 bool youtube_response_append(YoutubeResponseFile *response, const void *data,
