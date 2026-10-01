@@ -171,13 +171,48 @@ bool youtube_parse_player(const char *json, const char *video_id,
 typedef struct {
   char *bytes;
   size_t length, limit;
+  YoutubeResponseFile spool;
+  Download *download;
+  uint64_t base_bytes;
 } ResponseBuffer;
+
+static void response_release(ResponseBuffer *response) {
+  if (response->spool.file) youtube_response_close(&response->spool);
+  else free(response->bytes);
+  response->bytes = NULL;
+  response->length = 0;
+}
+
+static int response_progress(void *userdata, curl_off_t total,
+    curl_off_t now, curl_off_t upload_total, curl_off_t upload_now) {
+  (void)total; (void)now; (void)upload_total; (void)upload_now;
+  Download *d = userdata;
+  if (d) {
+    dm_mutex_t *mutex = queue_manager_get_mutex();
+    dm_mutex_lock(mutex);
+    if (d->total_size) {
+      double fraction = (double)atomic_load(&d->bytes_downloaded) / d->total_size;
+      d->progress = fraction > 0.99 ? 0.99f : (float)fraction;
+    }
+    dm_mutex_unlock(mutex);
+  }
+  return d && (atomic_load(&d->cancel_requested) ||
+               atomic_load(&d->pause_requested));
+}
 
 static size_t response_write(char *data, size_t unit, size_t count,
                              void *userdata) {
   ResponseBuffer *buffer = userdata;
   if (unit && count > SIZE_MAX / unit) return 0;
   size_t amount = unit * count;
+  if (buffer->spool.file) {
+    if (!youtube_response_append(&buffer->spool, data, amount)) return 0;
+    buffer->length = buffer->spool.length;
+    if (buffer->download)
+      atomic_store(&buffer->download->bytes_downloaded,
+                   buffer->base_bytes + buffer->length);
+    return amount;
+  }
   if (amount > buffer->limit - buffer->length) return 0;
   char *next = realloc(buffer->bytes, buffer->length + amount + 1);
   if (!next) return 0;
@@ -191,7 +226,8 @@ static size_t response_write(char *data, size_t unit, size_t count,
 static bool https_get_or_post(const char *url, const void *body,
                               size_t body_length, const char *content_type,
                               const char *user_agent, const char *referrer,
-                              size_t limit, ResponseBuffer *out) {
+                              size_t limit, Download *download,
+                              ResponseBuffer *out) {
   CURL *curl = curl_easy_init();
   if (!curl) return false;
   struct curl_slist *headers = NULL;
@@ -209,7 +245,13 @@ static bool https_get_or_post(const char *url, const void *body,
       headers = next;
     }
   }
-  ResponseBuffer received = {.limit = limit};
+  ResponseBuffer received = {.limit = limit, .download = download,
+      .base_bytes = download ? atomic_load(&download->bytes_downloaded) : 0};
+  if (download && !youtube_response_open(&received.spool, download->dest_path)) {
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    return false;
+  }
   curl_easy_setopt(curl, CURLOPT_URL, url);
 #if LIBCURL_VERSION_NUM >= 0x075500
   curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
@@ -219,7 +261,12 @@ static bool https_get_or_post(const char *url, const void *body,
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
   curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, download ? 0L : 30L);
+  curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+  curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
+  curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, response_progress);
+  curl_easy_setopt(curl, CURLOPT_XFERINFODATA, download);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_write);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &received);
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -237,10 +284,14 @@ static bool https_get_or_post(const char *url, const void *body,
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
   curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
+  if (received.spool.file && code == CURLE_OK && http_status == 200 &&
+      youtube_response_map(&received.spool))
+    received.bytes = (char *)received.spool.data;
   if (code != CURLE_OK || http_status != 200 || !received.bytes) {
     LOG_WARN("YouTube request failed: curl=%d HTTP=%ld bytes=%zu",
              (int)code, http_status, received.length);
-    free(received.bytes);
+    if (download) atomic_store(&download->bytes_downloaded, received.base_bytes);
+    response_release(&received);
     return false;
   }
   *out = received;
@@ -335,7 +386,7 @@ static bool fetch_selection(const char *video_id, uint32_t itag,
   if (n < 0 || (size_t)n >= sizeof(watch)) return false;
   ResponseBuffer html = {0};
   if (!https_get_or_post(watch, NULL, 0, NULL, NULL, NULL,
-                         4 * 1024 * 1024, &html))
+                         4 * 1024 * 1024, NULL, &html))
     return false;
   bool found = innertube_key(html.bytes, key, sizeof(key));
   free(html.bytes);
@@ -352,7 +403,7 @@ static bool fetch_selection(const char *video_id, uint32_t itag,
   ResponseBuffer player = {0};
   if (!https_get_or_post(api, request, (size_t)n,
                          "Content-Type: application/json", NULL, NULL,
-                         4 * 1024 * 1024,
+                         4 * 1024 * 1024, NULL,
                          &player)) return false;
   bool valid = youtube_parse_player(player.bytes, video_id, itag, out) &&
                googlevideo_url(out->stream_url);
@@ -476,19 +527,22 @@ static int transfer_selected(Download *d, YoutubeSelection *selection,
   unsigned stalled = 0;
   bool authorized = false;
   for (unsigned sequence = 0; sequence < 4096 && !stopped(d); sequence++) {
-    if (video->end_segment && audio->end_segment &&
+    if (video->has_end && audio->has_end &&
+        video->has_segment && audio->has_segment &&
         video->last_segment >= video->end_segment &&
         audio->last_segment >= audio->end_segment) return 0;
     SabrBufferedRange ranges[2];
     size_t range_count = 0;
-    if (video->last_segment)
+    if (video->has_segment)
       ranges[range_count++] = (SabrBufferedRange){
           .format = video_id, .end_ms = video->end_ms,
-          .end_segment = video->last_segment};
-    if (audio->last_segment)
+          .end_segment = video->last_segment,
+          .start_segment = video->first_segment};
+    if (audio->has_segment)
       ranges[range_count++] = (SabrBufferedRange){
           .format = audio_id, .end_ms = audio->end_ms,
-          .end_segment = audio->last_segment};
+          .end_segment = audio->last_segment,
+          .start_segment = audio->first_segment};
     uint64_t playback_ms = video->end_ms < audio->end_ms
                                ? video->end_ms : audio->end_ms;
     size_t request_length = 0;
@@ -506,17 +560,17 @@ static int transfer_selected(Download *d, YoutubeSelection *selection,
         "Content-Type: application/x-protobuf",
         d->request ? d->request->user_agent : NULL,
         d->request ? d->request->referrer : NULL,
-        16 * 1024 * 1024,
+        0, d,
         &response);
-    uint32_t before_video = video->last_segment;
-    uint32_t before_audio = audio->last_segment;
+    uint64_t before_video = video->bytes;
+    uint64_t before_audio = audio->bytes;
     int protection = fetched ? sabr_protection_status(
         (const unsigned char *)response.bytes, response.length) : -1;
     if (fetched && (protection == 2 || protection == 3 ||
                     (protection == 0 && !authorized))) {
       queue_manager_set_site_error(d->id,
           "YouTube rejected browser playback authorization");
-      free(response.bytes);
+      response_release(&response);
       return -9;
     }
     if (protection == 1) authorized = true;
@@ -524,19 +578,30 @@ static int transfer_selected(Download *d, YoutubeSelection *selection,
         (fetched && sabr_update_playback_context(
             &selection->browser_capture,
             (const unsigned char *)response.bytes, response.length));
-    bool accepted = fetched && context_valid && youtube_process_ump(
+    const char *parse_error = "Unsupported YouTube playback context";
+    bool accepted = fetched && context_valid && youtube_process_ump_ex(
         (const unsigned char *)response.bytes, response.length,
-        selection->video_id, video, audio);
+        selection->video_id, video, audio, &parse_error);
     if (fetched && !accepted)
-      LOG_WARN("YouTube UMP response rejected for download %u (%zu bytes)",
-               d->id, response.length);
-    free(response.bytes);
-    if (!accepted || (video->last_segment == before_video &&
-                      audio->last_segment == before_audio)) {
+      LOG_WARN("YouTube UMP response rejected for download %u (%zu bytes): %s",
+               d->id, response.length, parse_error);
+    response_release(&response);
+    atomic_store(&d->bytes_downloaded, video->bytes + audio->bytes);
+    if (fetched && !accepted) {
+      queue_manager_set_site_error(d->id, parse_error);
+      return -9;
+    }
+    if (!accepted || (video->bytes == before_video &&
+                      audio->bytes == before_audio)) {
       if (accepted)
         LOG_WARN("YouTube stream stalled for download %u at request %u",
                  d->id, sequence);
-      if (++stalled >= 3) return -1;
+      if (++stalled >= 3) {
+        if (!fetched) return -1;
+        queue_manager_set_site_error(d->id,
+            "YouTube stopped sending media; play the video and offer it again");
+        return -9;
+      }
       dm_thread_sleep_ms(500u << (stalled - 1));
       continue;
     }

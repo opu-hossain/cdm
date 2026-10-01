@@ -54,6 +54,7 @@ typedef struct {
   SabrFormatId format;
   uint64_t end_ms;
   uint32_t end_segment;
+  uint32_t start_segment;
 } SabrBufferedRange;
 
 /* Returns 1 for a complete frame, 0 for more bytes, -1 for invalid framing.

@@ -2,7 +2,8 @@
 #include "youtube_sabr.h"
 #include <string.h>
 
-#define SABR_MAX_PART (8u * 1024u * 1024u)
+// Payloads are views into a file-backed response, not heap allocations.
+#define SABR_MAX_PART (1024u * 1024u * 1024u)
 
 typedef struct {
   unsigned char *data;
@@ -160,7 +161,7 @@ bool sabr_parse_captured_request(const unsigned char *data, size_t length,
         memcpy(parsed.video_format, field.bytes, field.length);
         parsed.video_format_length = field.length;
       } else if (field.number == 16 &&
-                 (itag == 140 || itag == 251 || itag == 250) &&
+                 (itag == 140 || itag == 251 || itag == 250 || itag == 249) &&
                  (!parsed.audio_format_length ||
                   (itag == 140 && parsed.audio_itag != 140) ||
                   (itag == 251 && parsed.audio_itag == 250))) {
@@ -189,6 +190,7 @@ bool sabr_decode_format_metadata(const unsigned char *data, size_t length,
                                  SabrFormatMetadata *out) {
   if (!data || !out || length > 8192) return false;
   SabrFormatMetadata result = {0};
+  bool have_end = false;
   for (size_t position = 0; position < length;) {
     uint64_t tag, value;
     if (!pb_number(data, length, &position, &tag) || !(tag >> 3)) return false;
@@ -197,6 +199,7 @@ bool sabr_decode_format_metadata(const unsigned char *data, size_t length,
       if ((tag >> 3) == 4) {
         if (value > UINT32_MAX) return false;
         result.end_segment = (uint32_t)value;
+        have_end = true;
       }
     } else if ((tag & 7) == 2) {
       if (!pb_number(data, length, &position, &value) ||
@@ -216,7 +219,7 @@ bool sabr_decode_format_metadata(const unsigned char *data, size_t length,
       position += bytes;
     } else return false;
   }
-  if (!result.video_id[0] || !result.itag || !result.end_segment) return false;
+  if (!result.video_id[0] || !result.itag || !have_end) return false;
   *out = result;
   return true;
 }
@@ -244,7 +247,7 @@ bool sabr_decode_media_header(const unsigned char *data, size_t length,
                               SabrMediaHeader *out) {
   if (!data || !out || length > 4096) return false;
   SabrMediaHeader result = {0};
-  bool have_id = false, have_itag = false;
+  bool have_itag = false;
   for (size_t position = 0; position < length;) {
     uint64_t tag, value;
     if (!pb_number(data, length, &position, &tag) || !(tag >> 3)) return false;
@@ -253,15 +256,17 @@ bool sabr_decode_media_header(const unsigned char *data, size_t length,
       if (!pb_number(data, length, &position, &value)) return false;
       switch (field) {
       case 1: if (value > UINT32_MAX) return false;
-              result.header_id = (uint32_t)value; have_id = true; break;
-      case 3: if (value > UINT32_MAX) return false;
+              result.header_id = (uint32_t)value; break;
+      case 3: if (value > UINT32_MAX || (have_itag && value != result.itag)) return false;
               result.itag = (uint32_t)value; have_itag = true; break;
+      case 7: if (value != 0) return false; break; // compressed media unsupported
       case 8: result.is_initialization = value != 0; break;
       case 9: if (value > UINT32_MAX) return false;
               result.segment_number = (uint32_t)value; break;
       case 11: result.start_ms = value; break;
       case 12: result.duration_ms = value; break;
       case 14: result.segment_length = value; break;
+      case 17: if (value != 0) return false; break; // partial segment offset
       default: break;
       }
     } else if (wire == 2) {
@@ -272,6 +277,12 @@ bool sabr_decode_media_header(const unsigned char *data, size_t length,
             memchr(data + position, '\0', (size_t)value)) return false;
         memcpy(result.video_id, data + position, (size_t)value);
         result.video_id[value] = '\0';
+      } else if (field == 13) {
+        uint32_t itag = 0;
+        if (!pb_format_itag(data + position, (size_t)value, &itag) || !itag ||
+            (have_itag && itag != result.itag)) return false;
+        result.itag = itag;
+        have_itag = true;
       } else if (field == 15 &&
                  !pb_time_range(data + position, (size_t)value,
                                 &result.end_ms)) return false;
@@ -282,7 +293,11 @@ bool sabr_decode_media_header(const unsigned char *data, size_t length,
       position += bytes;
     } else return false;
   }
-  if (!have_id || !have_itag || !result.video_id[0]) return false;
+  if (!have_itag || !result.video_id[0]) return false;
+  if (!result.end_ms && result.duration_ms) {
+    if (result.duration_ms > UINT64_MAX - result.start_ms) return false;
+    result.end_ms = result.start_ms + result.duration_ms;
+  }
   *out = result;
   return true;
 }
@@ -415,16 +430,19 @@ bool sabr_encode_request_with_context(const SabrFormatId *video_format,
     field_bytes(&w, 1, a.data, a.length);
     for (size_t i = 0; i < range_count; i++) {
       const SabrBufferedRange *range = &ranges[i];
-      if (!range->format.itag || !range->end_segment || !range->end_ms)
+      if (!range->format.itag || range->end_segment < range->start_segment ||
+          !range->end_ms)
         return false;
       unsigned char fid[560], encoded[640];
       Writer f = {fid, 0, sizeof(fid), true};
       Writer r = {encoded, 0, sizeof(encoded), true};
       format_id(&f, &range->format);
+      // Tell the server these tracks are initialized, so it need not resend init.
+      field_bytes(&w, 2, f.data, f.length);
       field_bytes(&r, 1, f.data, f.length);
       field_number(&r, 2, 0);
       field_number(&r, 3, range->end_ms);
-      field_number(&r, 4, 1);
+      field_number(&r, 4, range->start_segment);
       field_number(&r, 5, range->end_segment);
       if (!f.good || !r.good) return false;
       field_bytes(&w, 3, r.data, r.length);

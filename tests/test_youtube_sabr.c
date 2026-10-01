@@ -4,6 +4,7 @@
 #include "../src/engine/youtube_transfer.h"
 #include <criterion/criterion.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -54,9 +55,39 @@ Test(youtube_sabr, decodes_bounded_media_header) {
   cr_assert_eq(header.segment_number, 2);
   cr_assert_eq(header.start_ms, 1000);
   cr_assert_eq(header.duration_ms, 2000);
+  cr_assert_eq(header.end_ms, 3000, "millisecond timing is a valid alternative to time_range");
   cr_assert_eq(header.segment_length, 100);
   cr_assert_str_eq(header.video_id, "fixture1234");
   cr_assert(!sabr_decode_media_header(data, 14, &header));
+  const unsigned char nested[] = {0x08, 0x05, 0x12, 0x0b,
+      'f','i','x','t','u','r','e','1','2','3','4',
+      0x6a, 3, 8, 0xa0, 1, 0x60, 0xe8, 7};
+  cr_assert(sabr_decode_media_header(nested, sizeof(nested), &header));
+  cr_assert_eq(header.itag, 160);
+  cr_assert_eq(header.end_ms, 1000);
+  cr_assert(sabr_decode_media_header(nested + 2, sizeof(nested) - 2, &header));
+  cr_assert_eq(header.header_id, 0, "omitted optional header_id defaults to zero");
+}
+
+Test(youtube_sabr, stores_large_response_without_a_heap_sized_download_buffer) {
+  YoutubeResponseFile response = {0};
+  char directory[] = "/tmp/cdm-youtube-response-XXXXXX";
+  cr_assert_not_null(mkdtemp(directory));
+  char destination[128];
+  snprintf(destination, sizeof(destination), "%s/video.mp4", directory);
+  cr_assert(youtube_response_open(&response, destination));
+  cr_assert_eq(rmdir(directory), 0, "spool must already be unlinked");
+  unsigned char chunk[65536];
+  memset(chunk, 0x5a, sizeof(chunk));
+  for (int i = 0; i < 300; i++)
+    cr_assert(youtube_response_append(&response, chunk, sizeof(chunk)));
+  cr_assert_eq(response.length, 300 * sizeof(chunk));
+  cr_assert(youtube_response_map(&response));
+  cr_assert_eq(response.data[0], 0x5a);
+  cr_assert_eq(response.data[response.length - 1], 0x5a);
+  youtube_response_close(&response);
+  cr_assert_null(response.file);
+  cr_assert_null(response.data);
 }
 
 Test(youtube_sabr, builds_selected_video_audio_request_without_overflow) {
@@ -242,6 +273,36 @@ Test(youtube_sabr, writes_ordered_tracks_and_rolls_back_bad_response) {
   cr_assert_eq(video.bytes, 3);
   cr_assert_eq(audio.bytes, 3);
   cr_assert_eq(video.end_ms, 1000);
+  // Some streams number the first media segment zero.
+  unsigned char zero_header[sizeof(vh)];
+  memcpy(zero_header, vh, sizeof(vh));
+  zero_header[19] = 0;
+  FILE *zero_file = tmpfile();
+  cr_assert_not_null(zero_file);
+  YoutubeTrackState zero_video = {.fd = fileno(zero_file), .itag = 160};
+  unsigned char zero_data[128]; size_t zero_length = 0;
+  append_part(zero_data, &zero_length, 20, zero_header, sizeof(zero_header));
+  append_part(zero_data, &zero_length, 21, video_chunk, sizeof(video_chunk));
+  append_part(zero_data, &zero_length, 22, (const unsigned char *)"\x03", 1);
+  cr_assert(youtube_process_ump(zero_data, zero_length, "fixture1234",
+                                &zero_video, &audio));
+  cr_assert_eq(zero_video.bytes, 3);
+  fclose(zero_file);
+  // segment_length_bytes is optional; MEDIA_END delimits an unsized segment.
+  unsigned char unsized_header[sizeof(vh) - 2];
+  memcpy(unsized_header, vh, 20);
+  memcpy(unsized_header + 20, vh + 22, sizeof(vh) - 22);
+  FILE *unsized_file = tmpfile();
+  cr_assert_not_null(unsized_file);
+  YoutubeTrackState unsized_video = {.fd = fileno(unsized_file), .itag = 160};
+  zero_length = 0;
+  append_part(zero_data, &zero_length, 20, unsized_header, sizeof(unsized_header));
+  append_part(zero_data, &zero_length, 21, video_chunk, sizeof(video_chunk));
+  append_part(zero_data, &zero_length, 22, (const unsigned char *)"\x03", 1);
+  cr_assert(youtube_process_ump(zero_data, zero_length, "fixture1234",
+                                &unsized_video, &audio));
+  cr_assert_eq(unsized_video.bytes, 3);
+  fclose(unsized_file);
   append_part(data, &length, 21, bad_chunk, sizeof(bad_chunk));
   cr_assert(!youtube_process_ump(data, length, "fixture1234", &video, &audio));
   cr_assert_eq(video.bytes, 3);
@@ -249,4 +310,34 @@ Test(youtube_sabr, writes_ordered_tracks_and_rolls_back_bad_response) {
   cr_assert_eq(lseek(audio.fd, 0, SEEK_END), 3);
   fclose(video_file);
   fclose(audio_file);
+}
+
+Test(youtube_sabr, consumes_media_frames_larger_than_old_response_limit) {
+  YoutubeResponseFile response = {0};
+  cr_assert(youtube_response_open(&response, NULL));
+  // Twenty MiB in one UMP MEDIA part, no declared segment size.
+  const unsigned char header[] = {0x08,3,0x12,11,
+      'f','i','x','t','u','r','e','1','2','3','4',
+      0x18,0xa0,1,0x48,1,0x60,0xe8,7};
+  unsigned char prefix[64]; size_t prefix_length = 0;
+  append_part(prefix, &prefix_length, 20, header, sizeof(header));
+  cr_assert(youtube_response_append(&response, prefix, prefix_length));
+  const unsigned char media[] = {21,0xf0,1,0,0x40,1,3}; // size=20MiB+1
+  cr_assert(youtube_response_append(&response, media, sizeof(media)));
+  unsigned char data[65536]; memset(data, 'v', sizeof(data));
+  for (int i = 0; i < 320; i++)
+    cr_assert(youtube_response_append(&response, data, sizeof(data)));
+  const unsigned char end[] = {22,1,3};
+  cr_assert(youtube_response_append(&response, end, sizeof(end)));
+  cr_assert(youtube_response_map(&response));
+  FILE *vf = tmpfile(), *af = tmpfile();
+  cr_assert(vf && af);
+  YoutubeTrackState video = {.fd=fileno(vf), .itag=160};
+  YoutubeTrackState audio = {.fd=fileno(af), .itag=140};
+  cr_assert(youtube_process_ump(response.data, response.length, "fixture1234",
+                                &video, &audio));
+  cr_assert_eq(video.bytes, 20u * 1024 * 1024);
+  cr_assert_eq(lseek(video.fd, 0, SEEK_END), video.bytes);
+  fclose(vf); fclose(af);
+  youtube_response_close(&response);
 }
