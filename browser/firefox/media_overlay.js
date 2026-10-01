@@ -1,5 +1,9 @@
 // Runs only on pages granted media-detection host access. This document owns its UI state.
 (() => {
+  if (globalThis.__cdmMediaOverlay) {
+    globalThis.__cdmMediaOverlay.refresh();
+    return;
+  }
   const api = typeof browser !== "undefined" ? browser : chrome;
   let host, button, panel, title, rows = [];
   let refreshing = false, rendered = "";
@@ -36,7 +40,10 @@
   }
 
   function ensureUi() {
-    if (host) return;
+    if (host) {
+      if (host.isConnected === false) document.documentElement.appendChild(host);
+      return;
+    }
     host = document.createElement("div");
     host.style.position = "fixed";
     host.style.zIndex = "2147483647";
@@ -166,6 +173,7 @@
     } finally { refreshing = false; }
   }
 
+  globalThis.__cdmMediaOverlay = {refresh};
   document.addEventListener("play", refresh, true);
   document.addEventListener("pause", refresh, true);
   document.addEventListener("ended", refresh, true);

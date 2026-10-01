@@ -403,6 +403,19 @@ let youtubeObserverRegistered = false;
 const MEDIA_SCRIPT_ID = "cdm-media-overlay";
 // The service worker serializes registration updates; browser scripting owns the registration.
 let mediaScriptSync = Promise.resolve();
+async function ensureMediaOverlay(tabId, tab) {
+  if (!mediaCaptureEnabled || !Number.isInteger(tabId) || tab?.incognito ||
+      !originFor(tab?.url || "")) return;
+  try {
+    const allowed = await chrome.permissions.contains({permissions: ["webRequest"],
+      origins: ["http://*/*", "https://*/*"]});
+    if (!allowed || !mediaCaptureEnabled) return;
+    await chrome.scripting.executeScript({target: {tabId, allFrames: true},
+      files: ["media_overlay.js"]});
+  } catch (_) {
+    // Restricted browser pages, closed tabs and revoked grants cannot be injected.
+  }
+}
 function queueMediaScriptSync() {
   mediaScriptSync = mediaScriptSync.then(async () => {
     const stored = await chrome.storage.sync.get("mediaDetection");
@@ -421,7 +434,13 @@ function queueMediaScriptSync() {
     } else if (!enabled && registered.length !== 0) {
       await chrome.scripting.unregisterContentScripts({ids: [MEDIA_SCRIPT_ID]});
     }
-  }).catch(() => { /* Missing permissions or scripting support leave the overlay disabled. */ });
+    if (enabled && chrome.tabs?.query) {
+      const tabs = await chrome.tabs.query({url: ["http://*/*", "https://*/*"]});
+      await Promise.allSettled(tabs.map(tab => ensureMediaOverlay(tab.id, tab)));
+    }
+  }).catch(() => {
+    console.error("cdm: could not register the media button; check Media detection and site permissions in extension Options");
+  });
 }
 function registerOptionalObservers() {
   const webRequest = chrome.webRequest;
@@ -568,6 +587,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 chrome.tabs?.onRemoved?.addListener(tabId => youtubeSessions.delete(tabId));
 
-chrome.tabs?.onUpdated?.addListener((tabId, change) => {
+chrome.tabs?.onUpdated?.addListener((tabId, change, tab) => {
   if (change.url) youtubeSessions.delete(tabId);
+  if (change.status === "complete") ensureMediaOverlay(tabId, tab);
 });

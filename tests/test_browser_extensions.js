@@ -10,6 +10,7 @@ async function verify(file, globalName, expectedBrowser) {
   let mediaListener;
   let youtubeRequestListener;
   let tabUpdatedListener;
+  const overlayInjections = [];
   let runtimeListener;
   let mediaDetection;
   let mediaSequence = 0;
@@ -74,12 +75,19 @@ async function verify(file, globalName, expectedBrowser) {
       setBadgeBackgroundColor() {},
       setTitle() {}
     },
-    tabs: {onUpdated: {addListener(listener) { tabUpdatedListener = listener; }}},
+    tabs: {onUpdated: {addListener(listener) { tabUpdatedListener = listener; }},
+      query() { return Promise.resolve([{id: 7, url: "https://example.invalid/video"}]); }},
     scripting: {
       getRegisteredContentScripts() { return Promise.resolve(registeredMediaScripts); },
       registerContentScripts(scripts) { registeredMediaScripts.push(...scripts); return Promise.resolve(); },
       unregisterContentScripts() { registeredMediaScripts.length = 0; return Promise.resolve(); },
-      executeScript({target, world, func}) {
+      executeScript({target, world, func, files}) {
+        if (files) {
+          assert.deepEqual(Array.from(files), ["media_overlay.js"]);
+          assert.equal(target.allFrames, true);
+          overlayInjections.push(target.tabId);
+          return Promise.resolve([]);
+        }
         assert.equal(world, "MAIN");
         assert.equal(target.tabId, 7);
         assert.deepEqual(Array.from(target.frameIds), [0]);
@@ -328,6 +336,12 @@ async function verify(file, globalName, expectedBrowser) {
   assert.deepEqual(Array.from(registeredMediaScripts[0].js), ["media_overlay.js"]);
   assert.equal(registeredMediaScripts[0].allFrames, true,
     "embedded video frames need their own in-page control");
+  assert(overlayInjections.includes(7), "enable/reload must inject already open tabs");
+  const beforeLoadInjection = overlayInjections.length;
+  tabUpdatedListener(7, {status: "complete"}, {url: "https://example.invalid/video"});
+  await new Promise(setImmediate);
+  assert.equal(overlayInjections.length, beforeLoadInjection + 1,
+    "completed page loads recover a missing content script");
   registeredMediaScripts[0].allFrames = false; // Persisted registration from an older extension.
   storageListener({mediaDetection: {newValue: true}}, "sync");
   await new Promise(setImmediate);
@@ -702,6 +716,10 @@ async function verifyMediaOverlay(file, globalName) {
   assert.equal(typeof tick, "function");
   assert.equal(root.children.length, 1);
   const host = root.children[0];
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(file), "media_overlay.js"), "utf8"),
+    sandbox);
+  await new Promise(setImmediate);
+  assert.equal(root.children.length, 1, "recovery injection must not duplicate the control");
   assert.equal(host.style.position, "fixed");
   assert.equal(host.style.display, "block");
   assert.equal(host.style.top, "38px");
