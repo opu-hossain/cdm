@@ -24,6 +24,34 @@ static const char *manifest_dir(const char *browser) {
     return "/.config/chromium/NativeMessagingHosts";
   if (strcmp(browser, "--firefox") == 0)
     return "/.mozilla/native-messaging-hosts";
+  /* Stable Linux paths: Edge's native-messaging docs and KeePassXC's
+   * NativeMessageInstaller.cpp (Linux constants for Brave/Vivaldi).
+   * https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/native-messaging
+   * https://github.com/keepassxreboot/keepassxc/blob/develop/src/browser/NativeMessageInstaller.cpp
+   */
+  if (strcmp(browser, "--edge") == 0)
+    return "/.config/microsoft-edge/NativeMessagingHosts";
+  if (strcmp(browser, "--brave") == 0)
+    return "/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts";
+  if (strcmp(browser, "--vivaldi") == 0)
+    return "/.config/vivaldi/NativeMessagingHosts";
+  /* Opera uses Chrome's native-host namespace, not its profile directory.
+   * Opera documents the system Chrome path; PassFF documents the user path.
+   * https://help.opera.com/en/extensions/message-passing/
+   * https://github.com/passff/passff-host#installation
+   */
+  if (strcmp(browser, "--opera") == 0)
+    return "/.config/google-chrome/NativeMessagingHosts";
+  return NULL;
+}
+
+/* New browser flags require an existing default profile root. Do not create
+ * empty browser profiles merely to register a host. */
+static const char *required_profile(const char *browser) {
+  if (strcmp(browser, "--edge") == 0) return "/.config/microsoft-edge";
+  if (strcmp(browser, "--brave") == 0) return "/.config/BraveSoftware/Brave-Browser";
+  if (strcmp(browser, "--opera") == 0) return "/.config/opera";
+  if (strcmp(browser, "--vivaldi") == 0) return "/.config/vivaldi";
   return NULL;
 }
 
@@ -81,7 +109,12 @@ static int write_manifest(const char *path, const char *host_path,
     cJSON_AddItemToObject(root, "allowed_extensions", allowed);
   } else {
     char origin[80];
-    snprintf(origin, sizeof(origin), "chrome-extension://%s/", id);
+    int length = snprintf(origin, sizeof(origin), "chrome-extension://%s/", id);
+    if (length < 0 || (size_t)length >= sizeof(origin)) {
+      cJSON_Delete(allowed);
+      cJSON_Delete(root);
+      return -1;
+    }
     cJSON_AddItemToArray(allowed, cJSON_CreateString(origin));
     cJSON_AddItemToObject(root, "allowed_origins", allowed);
   }
@@ -162,12 +195,29 @@ int browser_install_main(int argc, char **argv) {
   } else if (argc != 3) {
     goto usage;
   }
+  const char *profile = required_profile(argv[2]);
+  if (install && profile) {
+    const char *home = getenv("HOME");
+    char directory[1024];
+    int length = home && home[0] == '/'
+        ? snprintf(directory, sizeof(directory), "%s%s", home, profile) : -1;
+    struct stat info;
+    if (length < 0 || (size_t)length >= sizeof(directory) ||
+        stat(directory, &info) != 0 || !S_ISDIR(info.st_mode)) {
+      fprintf(stderr, "Browser config directory is missing for %s; "
+                      "start the stable browser once before installing.\n", argv[2]);
+      return 1;
+    }
+  }
   char manifest[1200];
   if (!get_manifest_path(argv[2], manifest, sizeof(manifest), install)) {
     fprintf(stderr, "Could not locate browser manifest directory.\n");
     return 1;
   }
   if (install) {
+    if (strcmp(argv[2], "--opera") == 0)
+      fprintf(stderr, "Opera shares Chrome's native-host registration; "
+                      "this replaces any cdm Chrome registration.\n");
     char host_path[1024];
     if (!get_host_path(host_path, sizeof(host_path))) {
       fprintf(stderr, "cdm_native_host must be executable beside cdm.\n");
@@ -197,7 +247,7 @@ int browser_install_main(int argc, char **argv) {
   return 0;
 usage:
   fprintf(stderr,
-          "Usage: cdm browser install [--chrome|--chromium|--firefox] --id ID\n"
-          "       cdm browser uninstall [--chrome|--chromium|--firefox]\n");
+          "Usage: cdm browser install [--chrome|--chromium|--firefox|--edge|--brave|--opera|--vivaldi] --id ID\n"
+          "       cdm browser uninstall [--chrome|--chromium|--firefox|--edge|--brave|--opera|--vivaldi]\n");
   return 1;
 }

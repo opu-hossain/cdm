@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cdm browser options</title>
+<main>
+  <h1>Core Download Manager</h1>
+  <h2>Download with cdm</h2>
+  <p>Right-click an HTTP or HTTPS link or page and choose its Download with cdm
+    item. Review the destination in the cdm popup and confirm to start.</p>
+  <p>Menu offers open a confirmation popup regardless of file size or type.
+    Downloading a page saves its URL response; it does not make an offline copy
+    of its images and other resources.</p>
+  <h2>Automatic interception filters</h2>
+  <p>Zero minimum and empty lists intercept all supported downloads. When a
+    minimum is set, unknown sizes stay in the browser. Deny lists win; matching
+    either populated allow list permits a file. Settings sync through your browser.</p>
+  <form id="filters">
+    <p><label>Minimum size (bytes; 0 = any)
+      <input id="minSizeBytes" type="number" min="0" max="9007199254740991" step="1" value="0" required></label></p>
+    <p><label>Allowed extensions <input id="extensionsAllow" maxlength="2048" placeholder="zip, tar.gz"></label></p>
+    <p><label>Denied extensions <input id="extensionsDeny" maxlength="2048" placeholder="exe"></label></p>
+    <p><label>Allowed MIME types <input id="mimeAllow" maxlength="2048" placeholder="application/pdf, video/*"></label></p>
+    <p><label>Denied MIME types <input id="mimeDeny" maxlength="2048" placeholder="application/x-msdownload"></label></p>
+    <p>Use comma-separated lists, up to 64 entries each. MIME types support type/* and */*.</p>
+    <p><label>Excluded hostnames <textarea id="siteExclusions" maxlength="6000" placeholder="example.invalid, *.site.invalid"></textarea></label></p>
+    <p>Use comma-separated ASCII/punycode hostnames, up to 64. A *. prefix
+      matches the base hostname and its subdomains. Exclusions affect automatic
+      interception only; explicit menu choices remain available.</p>
+    <p><label><input id="mediaDetection" type="checkbox"> Media detection</label></p>
+    <p>Off by default. Enabling requests permission to observe HTTP(S) response
+      headers on all sites. This collects up to 64 media candidates in extension
+      memory for ten minutes; it never opens download popups automatically.
+      Browser-session cookies still require the separate site-specific toggle.</p>
+    <button id="save" type="submit">Save filters and exclusions</button>
+    <p id="status" role="status" aria-live="polite"></p>
+  </form>
+  <h2>Detected media</h2>
+  <p>Refresh after playing a video. Only direct video files and HLS/DASH manifests
+    appear here. YouTube formats appear in the in-player picker.
+    Select a candidate to review in cdm.
+    Manifests are retained ahead of video segments. Detection excludes private
+    browsing and excluded sites; an explicit selection bypasses download filters.</p>
+  <button id="mediaRefresh" type="button">Refresh detected media</button>
+  <p><select id="mediaCandidates" size="8" aria-label="Detected media candidates"></select></p>
+  <button id="mediaOffer" type="button" disabled>Offer selected media to cdm</button>
+  <p id="mediaStatus" role="status" aria-live="polite"></p>
+  <p>Disabling detection clears candidates. Granted browser permissions remain
+    available for the site-specific session toggle; revoke them through your browser.</p>
+  <h2>Browser session</h2>
+  <p>Browser session sharing is off by default. Click the extension's toolbar
+    button on a site to enable it for that site and grant optional permissions.
+    Cookies may authenticate as you. Click again to turn it off. Restarting the
+    extension resets the toggle; private browsing never supplies session data.</p>
+  <p>The cdm popup indicates when cookies or request headers are included.
+    Cancel discards the offer. Captured values stay in daemon memory and are
+    cleared when the download ends. A daemon restart needs a fresh browser offer.</p>
+</main>
+<script src="filters.js"></script>
+<script src="options.js"></script>
+</html>

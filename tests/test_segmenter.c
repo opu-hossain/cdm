@@ -45,11 +45,24 @@ Test(segmenter_plan, negative_workers) {
   cr_assert_eq(n, 0);
 }
 
+Test(segmenter_plan, supports_sixteen_connections_without_overflow) {
+  Range ranges[MAX_WORKERS];
+  int n = segmenter_plan(160, 99, ranges);
+  cr_assert_eq(n, 16);
+  cr_assert_eq(ranges[0].start, 0);
+  cr_assert_eq(ranges[15].start, 150);
+  cr_assert_eq(ranges[15].end, 159);
+}
+
 Test(choose_worker_count, thresholds) {
-  cr_assert_eq(choose_worker_count(0), 1);
-  cr_assert_eq(choose_worker_count(1023), 1);        // < 1 MB
-  cr_assert_eq(choose_worker_count(1024 * 1024), 4); // exactly 1 MB → 4
-  cr_assert_eq(choose_worker_count(20 * 1024 * 1024 - 1), 4); // <20 MB → 4
-  cr_assert_eq(choose_worker_count(20 * 1024 * 1024), 8);     // >=20 MB → 8
-  cr_assert_eq(choose_worker_count(100 * 1024 * 1024), 8);
+  cr_assert_eq(choose_worker_count(0, 16), 1);
+  cr_assert_eq(choose_worker_count(1023, 16), 1);
+  cr_assert_eq(choose_worker_count(1024 * 1024, 8), 4);
+  cr_assert_eq(choose_worker_count(20 * 1024 * 1024 - 1, 8), 4);
+  cr_assert_eq(choose_worker_count(20 * 1024 * 1024, 8), 8);
+  cr_assert_eq(choose_worker_count(100 * 1024 * 1024, 16), 16);
+  cr_assert_eq(choose_worker_count(100 * 1024 * 1024, 3), 3);
+  cr_assert_eq(choose_worker_count(1024 * 1024, 2), 2);
+  cr_assert_eq(choose_worker_count(100 * 1024 * 1024, 99), 16);
+  cr_assert_eq(choose_worker_count(100 * 1024 * 1024, 0), 1);
 }

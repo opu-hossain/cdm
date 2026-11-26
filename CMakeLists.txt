@@ -62,6 +62,15 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBNOTIFY REQUIRED IMPORTED_TARGET libnotify)
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
 pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0)
+endif()
+pkg_check_modules(LIBXML2 REQUIRED IMPORTED_TARGET libxml-2.0>=2.9)
+option(DOWNLOADMGR_ENABLE_TRAY "Build the Linux tray backend when available" ON)
+if(DOWNLOADMGR_ENABLE_TRAY AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    pkg_check_modules(TRAY_GIO QUIET IMPORTED_TARGET gio-2.0)
+    pkg_check_modules(TRAY_MENU QUIET IMPORTED_TARGET dbusmenu-glib-0.4)
+endif()
 find_package(OpenGL REQUIRED)
 
 if(BUILD_TESTING)
@@ -139,17 +148,25 @@ set(PLATFORM_SOURCES
     src/platform/sha256.c
     src/platform/spawn.c
     src/platform/thread.c
+    src/platform/tray.c
 )
 
 set(UTILS_SOURCES
     src/utils/config.c
+    src/utils/i18n.c
     src/utils/log.c
     src/utils/notify.c
     src/utils/path.c
+    src/utils/url.c
 )
 
 set(ENGINE_SOURCES
+    src/engine/dash.c
     src/engine/engine_runner.c
+    src/engine/hls.c
+    src/engine/youtube_sabr.c
+    src/engine/youtube_download.c
+    src/engine/youtube_transfer.c
     src/engine/segmenter.c
     src/engine/worker_pool.c
     src/engine/finalize.c
@@ -162,6 +179,7 @@ set(CORE_SOURCES
 
 set(PERSISTENCE_SOURCES
     src/persistence/db.c
+    src/persistence/export.c
 )
 
 # Core library – shared code (no main)
@@ -176,12 +194,29 @@ downloadmgr_enable_warnings(downloadmgr_core)
 downloadmgr_enable_sanitizer(downloadmgr_core)
 
 target_include_directories(downloadmgr_core PRIVATE src)
+target_compile_definitions(downloadmgr_core PRIVATE
+    CDM_INSTALLED_I18N_DIR="${CMAKE_INSTALL_FULL_DATADIR}/cdm/i18n")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/i18n")
+configure_file(resources/i18n/es.toml
+               "${CMAKE_CURRENT_BINARY_DIR}/i18n/es.toml" COPYONLY)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+target_link_libraries(downloadmgr_core PUBLIC PkgConfig::LIBXML2)
+if(UNIX)
+    target_link_libraries(downloadmgr_core PUBLIC m)
+endif()
 target_link_libraries(downloadmgr_core PUBLIC
+    OpenSSL::Crypto
     cdm_vendor
     cdm_curl
     cdm_sqlite
     PkgConfig::LIBNOTIFY
 )
+if(DOWNLOADMGR_ENABLE_TRAY AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+   AND TRAY_GIO_FOUND AND TRAY_MENU_FOUND)
+    target_compile_definitions(downloadmgr_core PRIVATE CDM_HAVE_TRAY=1)
+    target_link_libraries(downloadmgr_core PUBLIC
+        PkgConfig::TRAY_GIO PkgConfig::TRAY_MENU)
+endif()
 
 if(WIN32)
     target_link_libraries(downloadmgr_core PUBLIC ws2_32 comdlg32 ole32 shell32)
@@ -214,6 +249,8 @@ add_executable(cdm
     src/native_host/browser_install.c
     src/gui/gui_controller.c
     src/gui/gui_nuklear.c
+    src/gui/gui_popup.c
+    src/gui/theme.c
     src/gui/gui_client.c
     src/gui/gui_model.c
     src/daemon/daemon.c
@@ -233,6 +270,9 @@ target_link_libraries(cdm PRIVATE
     PkgConfig::EPOXY
     OpenGL::GL
 )
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(cdm PRIVATE PkgConfig::GIO)
+endif()
 if(UNIX)
     target_link_libraries(cdm PRIVATE m)
 endif()
@@ -251,6 +291,12 @@ add_custom_target(browser_extension_validate ALL
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ValidateBrowserExtensions.cmake"
     DEPENDS browser/chromium/manifest.json browser/chromium/service_worker.js
             browser/firefox/manifest.json browser/firefox/background.js
+            browser/chromium/filters.js browser/firefox/filters.js
+            browser/chromium/options.js browser/firefox/options.js
+            browser/chromium/media_overlay.js browser/firefox/media_overlay.js
+            browser/chromium/youtube_probe.js browser/firefox/youtube_probe.js
+            browser/chromium/youtube_sabr_capture.js
+            browser/firefox/youtube_sabr_capture.js
     VERBATIM
 )
 
@@ -271,6 +317,12 @@ foreach(_browser IN ITEMS chromium firefox)
         DEPENDS browser/${_browser}/manifest.json
                 browser/${_browser}/${_browser_script}
                 browser/${_browser}/README.md
+                browser/${_browser}/options.html
+                browser/${_browser}/filters.js
+                browser/${_browser}/options.js
+                browser/${_browser}/media_overlay.js
+                browser/${_browser}/youtube_probe.js
+                browser/${_browser}/youtube_sabr_capture.js
                 cmake/BundleBrowserExtension.py
         VERBATIM
     )
@@ -283,6 +335,29 @@ add_dependencies(browser_extension_bundle browser_extension_validate)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
+    add_executable(test_hls tests/test_hls.c)
+    add_executable(test_dash tests/test_dash.c)
+    downloadmgr_enable_warnings(test_dash)
+    downloadmgr_enable_sanitizer(test_dash)
+    target_link_libraries(test_dash PRIVATE downloadmgr_core PkgConfig::CRITERION)
+    add_test(NAME test_dash COMMAND test_dash)
+    downloadmgr_enable_warnings(test_hls)
+    downloadmgr_enable_sanitizer(test_hls)
+    target_link_libraries(test_hls PRIVATE downloadmgr_core PkgConfig::CRITERION)
+    add_test(NAME test_hls COMMAND test_hls)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(UNIX AND NOT WIN32 AND Python3_Interpreter_FOUND)
+        add_executable(hls_download_driver tests/hls_download_driver.c)
+        downloadmgr_enable_warnings(hls_download_driver)
+        downloadmgr_enable_sanitizer(hls_download_driver)
+        target_link_libraries(hls_download_driver PRIVATE downloadmgr_core)
+        add_test(NAME test_dash_download COMMAND ${Python3_EXECUTABLE} -B
+                 ${CMAKE_SOURCE_DIR}/tests/test_dash_download.py
+                 $<TARGET_FILE:hls_download_driver>)
+        add_test(NAME test_hls_download COMMAND ${Python3_EXECUTABLE} -B
+                 ${CMAKE_SOURCE_DIR}/tests/test_hls_download.py
+                 $<TARGET_FILE:hls_download_driver>)
+    endif()
 endif()
 
 install(TARGETS cdm cdm_native_host
@@ -292,6 +367,8 @@ install(FILES ${_browser_bundles}
         DESTINATION "${CMAKE_INSTALL_DATADIR}/cdm/browser")
 install(DIRECTORY resources/native-messaging/
         DESTINATION "${CMAKE_INSTALL_DATADIR}/cdm/browser/manifests")
+install(DIRECTORY resources/i18n/
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/cdm/i18n")
 install(FILES docs/browser-integration.md
         DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/cdm")
 install(FILES docs/daemon-autostart.md
@@ -372,7 +449,7 @@ set(CPACK_PACKAGE_RELOCATABLE OFF)
 # Debian.
 # libcurl4t64 on Ubuntu 24.04+; libcurl4 on older. SHLIBDEPS picks the right
 # one automatically, so we only list the GUI libs here as a floor.
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libnotify4, libsdl2-2.0-0, libepoxy0, libgl1")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libnotify4, libsdl2-2.0-0, libepoxy0, libgl1, libglib2.0-0 | libglib2.0-0t64")
 set(CPACK_DEBIAN_PACKAGE_SECTION "net")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
@@ -385,7 +462,7 @@ set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
 # RPM.
 set(CPACK_RPM_PACKAGE_LICENSE "MIT")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Internet")
-set(CPACK_RPM_PACKAGE_REQUIRES "libnotify, SDL2, libepoxy, mesa-libGL")
+set(CPACK_RPM_PACKAGE_REQUIRES "libnotify, SDL2, libepoxy, mesa-libGL, glib2")
 set(CPACK_RPM_PACKAGE_RELEASE 1)
 set(CPACK_RPM_PACKAGE_AUTOREQ ON)
 set(CPACK_RPM_PACKAGE_SUMMARY "Core Download Manager")

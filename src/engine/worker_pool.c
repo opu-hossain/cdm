@@ -34,6 +34,8 @@ struct RebalancePool {
   int slot_count;
   uint64_t min_steal_bytes;
   RebalanceSplitFn on_split;
+  RebalanceMutationLockFn lock_mutation;
+  RebalanceMutationLockFn unlock_mutation;
   void *userdata;
   _Atomic uint64_t **progress_slots;
 };
@@ -44,6 +46,8 @@ RebalancePool *rebalance_pool_create(const Range *ranges, int n_ranges,
                                      _Atomic uint64_t **progress_slots,
                                      uint64_t min_steal_bytes,
                                      RebalanceSplitFn on_split,
+                                     RebalanceMutationLockFn lock_mutation,
+                                     RebalanceMutationLockFn unlock_mutation,
                                      void *userdata) {
   RebalancePool *pool = calloc(1, sizeof(RebalancePool));
   if (!pool) {
@@ -55,6 +59,8 @@ RebalancePool *rebalance_pool_create(const Range *ranges, int n_ranges,
   dm_mutex_init(&pool->mutex);
   pool->min_steal_bytes = min_steal_bytes;
   pool->on_split = on_split;
+  pool->lock_mutation = lock_mutation;
+  pool->unlock_mutation = unlock_mutation;
   pool->userdata = userdata;
   pool->progress_slots = progress_slots;
   pool->slot_count = (n_ranges > MAX_WORKERS) ? MAX_WORKERS : n_ranges;
@@ -93,6 +99,10 @@ static int rebalance_pool_acquire(RebalancePool *pool, Range *out_range,
   if (!pool)
     return -1;
 
+  /* Always take the mutation lock first so concurrent splits are observed
+   * by the callback in the same order as the pool's slot changes. */
+  if (pool->lock_mutation)
+    pool->lock_mutation(pool->userdata);
   dm_mutex_lock(&pool->mutex);
 
   /* 1. Pick up an orphaned slot (should be rare). */
@@ -104,8 +114,11 @@ static int rebalance_pool_acquire(RebalancePool *pool, Range *out_range,
       out_range->end = atomic_load(&pool->slots[i].live_end) - 1;
       out_range->resume_offset = 0;
       out_range->whole_file = false;
+      out_range->unknown_size = false;
       *out_progress_slot = pool->slots[i].progress_slot;
       dm_mutex_unlock(&pool->mutex);
+      if (pool->unlock_mutation)
+        pool->unlock_mutation(pool->userdata);
       return i;
     }
   }
@@ -130,6 +143,8 @@ static int rebalance_pool_acquire(RebalancePool *pool, Range *out_range,
   if (victim == -1 || victim_remaining < pool->min_steal_bytes ||
       pool->slot_count >= MAX_WORKERS) {
     dm_mutex_unlock(&pool->mutex);
+    if (pool->unlock_mutation)
+      pool->unlock_mutation(pool->userdata);
     return -1;
   }
 
@@ -148,8 +163,13 @@ static int rebalance_pool_acquire(RebalancePool *pool, Range *out_range,
   atomic_init(&pool->slots[new_idx].exhausted, false);
   pool->slots[new_idx].progress_slot = NULL;
 
+  uint64_t victim_start = pool->slots[victim].start;
+  dm_mutex_unlock(&pool->mutex);
+
   if (pool->on_split)
-    pool->on_split(pool->userdata, pool->slots[victim].start, split, le);
+    pool->on_split(pool->userdata, victim_start, split, le);
+
+  dm_mutex_lock(&pool->mutex);
   if (pool->progress_slots)
     pool->slots[new_idx].progress_slot = pool->progress_slots[new_idx];
 
@@ -157,9 +177,12 @@ static int rebalance_pool_acquire(RebalancePool *pool, Range *out_range,
   out_range->end = le - 1;
   out_range->resume_offset = 0;
   out_range->whole_file = false;
+  out_range->unknown_size = false;
   *out_progress_slot = pool->slots[new_idx].progress_slot;
 
   dm_mutex_unlock(&pool->mutex);
+  if (pool->unlock_mutation)
+    pool->unlock_mutation(pool->userdata);
   return new_idx;
 }
 
@@ -193,7 +216,28 @@ typedef struct {
   RebalancePool *pool;
   int slot_index;
   bool truncated; // stopped early due to rebalance shrink
+  bool range_invalidated;
 } WorkerContext;
+
+static size_t worker_header_callback(char *data, size_t size, size_t nmemb,
+                                     void *userdata) {
+  WorkerContext *ctx = (WorkerContext *)userdata;
+  size_t total = size * nmemb;
+  if (total >= 12 && memcmp(data, "HTTP/", 5) == 0) {
+    char line[64];
+    size_t length = total < sizeof(line) - 1 ? total : sizeof(line) - 1;
+    memcpy(line, data, length);
+    line[length] = '\0';
+    long status = 0;
+    if (sscanf(line, "HTTP/%*s %ld", &status) == 1 && status == 200 &&
+        ctx->request_ctx && ctx->request_ctx->if_range &&
+        !ctx->range.whole_file) {
+      ctx->range_invalidated = true;
+      return 0; // Stop before the full response can overwrite partial data.
+    }
+  }
+  return total;
+}
 
 /**
  * libcurl write callback.
@@ -250,13 +294,31 @@ static size_t worker_write_callback(void *data, size_t size, size_t nmemb,
  * Execute a single HTTP request for the current segment.
  */
 static void run_one_segment(WorkerContext *ctx) {
+  const char *log_url = "[REDACTED]";
   ctx->succeeded = false;
   ctx->truncated = false;
   atomic_store(&ctx->bytes_done, 0);
 
   CURL *curl = curl_easy_init();
   if (!curl) {
-    LOG_ERROR("curl_easy_init failed for %s", ctx->url);
+    LOG_ERROR("curl_easy_init failed for %s", log_url);
+    return;
+  }
+
+  DownloadManagerConfig config;
+  config_get(&config);
+  CURLcode proxy_result = curl_apply_proxy(curl, &config);
+  if (proxy_result != CURLE_OK) {
+    LOG_WARN("Could not configure proxy for worker: %s",
+             curl_easy_strerror(proxy_result));
+    curl_easy_cleanup(curl);
+    return;
+  }
+  CURLcode auth_result = curl_apply_basic_auth(curl, ctx->request_ctx);
+  if (auth_result != CURLE_OK) {
+    LOG_WARN("Could not configure authentication for worker: %s",
+             curl_easy_strerror(auth_result));
+    curl_easy_cleanup(curl);
     return;
   }
 
@@ -268,11 +330,16 @@ static void run_one_segment(WorkerContext *ctx) {
              (unsigned long long)ctx->range.end);
     curl_easy_setopt(curl, CURLOPT_RANGE, range_header);
   }
-  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION,
+                   ctx->request_ctx && ctx->request_ctx->sensitive ? 0L : 1L);
   curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, worker_write_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, ctx);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "cdm/0.1");
+  curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, worker_header_callback);
+  curl_easy_setopt(curl, CURLOPT_HEADERDATA, ctx);
+  curl_easy_setopt(curl, CURLOPT_USERAGENT,
+                   ctx->request_ctx && ctx->request_ctx->user_agent
+                       ? ctx->request_ctx->user_agent : config.user_agent);
 
   struct curl_slist *headers = NULL;
   if (ctx->request_ctx) {
@@ -281,14 +348,29 @@ static void run_one_segment(WorkerContext *ctx) {
     if (ctx->request_ctx->referrer && ctx->request_ctx->referrer[0])
       curl_easy_setopt(curl, CURLOPT_REFERER, ctx->request_ctx->referrer);
     headers = curl_client_build_headers(ctx->request_ctx->extra_headers);
-    if (headers)
-      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    if (!ctx->range.whole_file && ctx->request_ctx->if_range &&
+        ctx->request_ctx->if_range[0]) {
+      char header[sizeof(((FileInfo *)0)->etag) + sizeof("If-Range: ")];
+      snprintf(header, sizeof(header), "If-Range: %s",
+               ctx->request_ctx->if_range);
+      struct curl_slist *next = curl_slist_append(headers, header);
+      if (!next) {
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        return;
+      }
+      headers = next;
+    }
   }
+  if (headers)
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
   curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-  curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
-  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+  curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
+                   (long)config.transfer_timeout_sec);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
+                   (long)config.connect_timeout_sec);
 
   if (ctx->speed_limit_bps > 0) {
     curl_easy_setopt(curl, CURLOPT_MAX_RECV_SPEED_LARGE,
@@ -324,14 +406,15 @@ static void run_one_segment(WorkerContext *ctx) {
                 (ctx->range.whole_file ||
                  (ctx->total_workers == 1 && intended_write_offset == 0));
   bool http_ok = (http_status == 206 || ok_200);
-  bool exact_bytes = atomic_load(&ctx->bytes_done) == expected_bytes;
+  bool exact_bytes = ctx->range.unknown_size ||
+                     atomic_load(&ctx->bytes_done) == expected_bytes;
 
   ctx->succeeded = http_ok && exact_bytes &&
                    (res == CURLE_OK || ctx->truncated);
 
   if (!ctx->succeeded) {
     LOG_WARN("segment request failed url='%s' http=%ld curl=%s",
-             ctx->url, http_status, curl_easy_strerror(res));
+             log_url, http_status, curl_easy_strerror(res));
   }
 
   if (headers)
@@ -448,6 +531,8 @@ worker_pool_run(const char *url, const Range *ranges, int n_workers,
     if (!contexts[i].succeeded) {
       result.all_succeeded = false;
     }
+    if (contexts[i].range_invalidated)
+      result.range_invalidated = true;
     if (i < MAX_WORKERS) {
       result.chunk_succeeded[i] = contexts[i].succeeded;
     }

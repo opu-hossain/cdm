@@ -10,9 +10,10 @@
 
 #define GUI_CMD_TIMEOUT_MS 5000
 #define GUI_EVENT_QUEUE_CAP 512
-#define GUI_LIST_ALL_FETCH_CAP 256
 
 static int g_cmd_fd = -1;
+static bool g_cmd_page_supported = false;
+static uint16_t g_cmd_version = 1;
 static int g_listener_fd = -1;
 static dm_thread_t g_listener_thread;
 static bool g_listener_started = false;
@@ -105,8 +106,27 @@ static int read_string_local(int fd, char *out, size_t max_len) {
   return 0;
 }
 
+static bool drain_payload(int fd, uint32_t length) {
+  char discard[256];
+  while (length > 0) {
+    size_t chunk = length < sizeof(discard) ? length : sizeof(discard);
+    if (ipc_read_exact(fd, discard, chunk) != 0)
+      return false;
+    length -= (uint32_t)chunk;
+  }
+  return true;
+}
+
+static void subscribe_listener(int fd, uint16_t version) {
+  if (version >= 2)
+    ipc_send_subscribe_v2(fd);
+  else
+    ipc_send_subscribe(fd);
+}
+
 static int listener_thread_fn(void *arg) {
   (void)arg;
+  bool skip_v1_fallback = false;
   while (atomic_load(&g_running)) {
     MsgHeader hdr;
     if (ipc_read_exact(g_listener_fd, &hdr, sizeof(hdr)) != 0) {
@@ -118,9 +138,11 @@ static int listener_thread_fn(void *arg) {
       dm_thread_sleep_ms(1000);
       if (g_listener_fd >= 0)
         ipc_client_disconnect(g_listener_fd);
-      g_listener_fd = ipc_client_connect();
+      uint16_t version = 1;
+      g_listener_fd = ipc_client_connect_compatible(-1, &version);
       if (g_listener_fd >= 0) {
-        ipc_send_subscribe(g_listener_fd);
+        subscribe_listener(g_listener_fd, version);
+        skip_v1_fallback = false;
         if (!atomic_exchange(&g_was_connected, true)) {
           push_event((GuiClientEvent){.type = GUI_EVT_CONNECTION_RESTORED});
         }
@@ -128,8 +150,39 @@ static int listener_thread_fn(void *arg) {
       continue;
     }
 
-    if (hdr.type != MSG_STATUS_EVENT)
+    if (hdr.length > IPC_MAX_FRAME_SIZE) {
+      ipc_client_disconnect(g_listener_fd);
+      g_listener_fd = -1;
       continue;
+    }
+    if (hdr.type == MSG_STATUS_EVENT_V2 &&
+        hdr.length == sizeof(IpcProgressV2)) {
+      IpcProgressV2 rich;
+      if (ipc_read_exact(g_listener_fd, &rich, sizeof(rich)) != 0) {
+        ipc_client_disconnect(g_listener_fd);
+        g_listener_fd = -1;
+        continue;
+      }
+      rich.status[sizeof(rich.status) - 1] = '\0';
+      rich.error[sizeof(rich.error) - 1] = '\0';
+      GuiClientEvent evt = {.type = GUI_EVT_STATUS_UPDATE,
+                            .download_id = rich.download_id,
+                            .progress = rich.progress,
+                            .has_v2 = true,
+                            .v2 = rich};
+      normalize_status(rich.status, evt.status, sizeof(evt.status));
+      push_event(evt);
+      skip_v1_fallback = true;
+      continue;
+    }
+    if (hdr.type != MSG_STATUS_EVENT || skip_v1_fallback) {
+      if (!drain_payload(g_listener_fd, hdr.length)) {
+        ipc_client_disconnect(g_listener_fd);
+        g_listener_fd = -1;
+      }
+      skip_v1_fallback = false;
+      continue;
+    }
 
     uint32_t id;
     float progress;
@@ -170,17 +223,22 @@ static int listener_thread_fn(void *arg) {
 }
 
 bool gui_client_connect(void) {
-  g_cmd_fd = ipc_client_connect_timeout(GUI_CMD_TIMEOUT_MS);
+  uint16_t command_version = 1;
+  g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                             &command_version);
   if (g_cmd_fd < 0)
     return false;
+  g_cmd_version = command_version;
+  g_cmd_page_supported = command_version >= 2;
 
-  g_listener_fd = ipc_client_connect();
+  uint16_t version = 1;
+  g_listener_fd = ipc_client_connect_compatible(-1, &version);
   if (g_listener_fd < 0) {
     ipc_client_disconnect(g_cmd_fd);
     g_cmd_fd = -1;
     return false;
   }
-  ipc_send_subscribe(g_listener_fd);
+  subscribe_listener(g_listener_fd, version);
 
   atomic_store(&g_running, true);
   atomic_store(&g_was_connected, true);
@@ -230,7 +288,8 @@ typedef int (*FireAndForgetFn)(int sock, uint32_t id);
 static bool send_with_retry(FireAndForgetFn fn, uint32_t id) {
   for (int attempt = 0; attempt < 2; attempt++) {
     if (g_cmd_fd < 0) {
-      g_cmd_fd = ipc_client_connect_timeout(GUI_CMD_TIMEOUT_MS);
+      g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                               &g_cmd_version);
       if (g_cmd_fd < 0)
         continue;
       note_restored();
@@ -250,11 +309,40 @@ static bool send_with_retry(FireAndForgetFn fn, uint32_t id) {
 bool gui_client_pause(uint32_t id) {
   return send_with_retry(ipc_send_pause, id);
 }
+bool gui_client_refresh_url(uint32_t id) {
+  if (g_cmd_fd < 0)
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, &g_cmd_version);
+  if (g_cmd_fd < 0 || g_cmd_version < 9)
+    return false;
+  return send_with_retry(ipc_send_refresh_url, id);
+}
 bool gui_client_resume(uint32_t id) {
   return send_with_retry(ipc_send_resume, id);
 }
 bool gui_client_cancel(uint32_t id) {
   return send_with_retry(ipc_send_cancel, id);
+}
+
+bool gui_client_remove_download(uint32_t id, bool delete_file) {
+  if (g_cmd_fd < 0) {
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                              &g_cmd_version);
+    if (g_cmd_fd < 0) {
+      note_lost();
+      return false;
+    }
+    note_restored();
+  }
+  if (g_cmd_version < 4)
+    return false;
+  IpcResult result = IPC_RESULT_ERROR;
+  if (ipc_send_remove_download(g_cmd_fd, id, delete_file, &result) != 0) {
+    ipc_client_disconnect(g_cmd_fd);
+    g_cmd_fd = -1;
+    note_lost();
+    return false;
+  }
+  return result == IPC_RESULT_OK;
 }
 
 static int send_reload_config(int sock, uint32_t id) {
@@ -266,10 +354,91 @@ bool gui_client_reload_config(void) {
   return send_with_retry(send_reload_config, 0);
 }
 
-bool gui_client_add_download(const char *url, const char *dest,
-                             const IpcDownloadOptions *opts, uint32_t *out_id) {
+static bool queue_connection(void) {
   if (g_cmd_fd < 0) {
-    g_cmd_fd = ipc_client_connect_timeout(GUI_CMD_TIMEOUT_MS);
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                              &g_cmd_version);
+    if (g_cmd_fd < 0) {
+      note_lost();
+      return false;
+    }
+    note_restored();
+  }
+  return g_cmd_version >= 5;
+}
+
+int gui_client_queue_list(Queue *out, int max) {
+  if (!queue_connection())
+    return -1;
+  int count = ipc_send_queue_list(g_cmd_fd, out, max);
+  if (count < 0) {
+    ipc_client_disconnect(g_cmd_fd);
+    g_cmd_fd = -1;
+    note_lost();
+  }
+  return count;
+}
+
+bool gui_client_queue_create(const Queue *queue) {
+  if (!queue_connection())
+    return false;
+  uint32_t id = 0;
+  return ipc_send_queue_create(g_cmd_fd, queue, &id) == 0;
+}
+
+bool gui_client_queue_update(const Queue *queue) {
+  return queue_connection() &&
+         ipc_send_queue_update(g_cmd_fd, queue) == IPC_RESULT_OK;
+}
+
+bool gui_client_queue_delete(uint32_t id) {
+  return queue_connection() &&
+         ipc_send_queue_delete(g_cmd_fd, id) == IPC_RESULT_OK;
+}
+
+bool gui_client_queue_reorder(uint32_t id, int priority) {
+  return queue_connection() &&
+         ipc_send_queue_reorder(g_cmd_fd, id, priority) == IPC_RESULT_OK;
+}
+
+int gui_client_category_list(IpcCategoryV1 *out, int max) {
+  if (!queue_connection() || g_cmd_version < 7)
+    return -1;
+  int count = ipc_send_category_list_v1(g_cmd_fd, out, max);
+  if (count < 0) {
+    ipc_client_disconnect(g_cmd_fd);
+    g_cmd_fd = -1;
+    note_lost();
+  }
+  return count;
+}
+
+bool gui_client_category_create(const IpcCategoryV1 *category) {
+  uint32_t id = 0;
+  return queue_connection() && g_cmd_version >= 7 &&
+         ipc_send_category_create_v1(g_cmd_fd, category, &id) == IPC_RESULT_OK;
+}
+
+bool gui_client_category_update(const IpcCategoryV1 *category) {
+  return queue_connection() && g_cmd_version >= 7 &&
+         ipc_send_category_update_v1(g_cmd_fd, category) == IPC_RESULT_OK;
+}
+
+bool gui_client_category_delete(uint32_t id) {
+  return queue_connection() && g_cmd_version >= 7 &&
+         ipc_send_category_delete_v1(g_cmd_fd, id) == IPC_RESULT_OK;
+}
+
+bool gui_client_add_download_result(const char *url, const char *dest,
+                                    const IpcDownloadOptions *opts,
+                                    bool auto_filename, uint32_t *out_id,
+                                    bool *duplicate) {
+  if (!out_id || !duplicate)
+    return false;
+  *duplicate = false;
+  if (g_cmd_fd < 0) {
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                              &g_cmd_version);
     if (g_cmd_fd < 0) {
       note_lost();
       return false;
@@ -277,17 +446,49 @@ bool gui_client_add_download(const char *url, const char *dest,
     note_restored();
   }
 
-  uint32_t id = ipc_send_add_download(g_cmd_fd, url, dest, opts);
+  if (opts && opts->queue_id && g_cmd_version < 5)
+    return false;
+
+  IpcAddResponse response = {0};
+  if (g_cmd_version >= 6) {
+    if (ipc_send_add_download_v3(g_cmd_fd, url, dest, opts, auto_filename,
+                                 &response) != 0)
+      response.result = IPC_RESULT_ERROR;
+  } else if (g_cmd_version >= 3) {
+    if (ipc_send_add_download_v2(g_cmd_fd, url, dest, opts, auto_filename,
+                                 &response) != 0)
+      response.result = IPC_RESULT_ERROR;
+  } else {
+    response.id = auto_filename
+                      ? ipc_send_add_download_auto(g_cmd_fd, url, dest, opts)
+                      : ipc_send_add_download(g_cmd_fd, url, dest, opts);
+  }
   // Do not retry an add after an IPC failure: the request may have reached the
   // daemon even if its response was lost, and retrying could create a
   // duplicate.
-  *out_id = id;
-  if (id == 0) {
+  *out_id = response.id;
+  *duplicate = response.result == IPC_RESULT_REJECTED && response.id != 0;
+  if (response.id == 0) {
     ipc_client_disconnect(g_cmd_fd);
     g_cmd_fd = -1;
     note_lost();
   }
-  return id != 0;
+  return response.id != 0;
+}
+
+bool gui_client_add_download(const char *url, const char *dest,
+                             const IpcDownloadOptions *opts, uint32_t *out_id) {
+  bool duplicate = false;
+  return gui_client_add_download_result(url, dest, opts, false, out_id,
+                                        &duplicate);
+}
+
+bool gui_client_add_download_auto(const char *url, const char *dest,
+                                  const IpcDownloadOptions *opts,
+                                  uint32_t *out_id) {
+  bool duplicate = false;
+  return gui_client_add_download_result(url, dest, opts, true, out_id,
+                                        &duplicate);
 }
 
 bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count) {
@@ -295,7 +496,8 @@ bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count) {
   *out_count = 0;
 
   if (g_cmd_fd < 0) {
-    g_cmd_fd = ipc_client_connect_timeout(GUI_CMD_TIMEOUT_MS);
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                             &g_cmd_version);
     if (g_cmd_fd < 0) {
       note_lost();
       return false;
@@ -364,9 +566,70 @@ bool gui_client_list_all(GuiDownloadRecord **out_records, int *out_count) {
   return true;
 }
 
+bool gui_client_list_page(uint32_t offset, uint32_t limit,
+                          GuiDownloadRecord **out_records, int *out_count,
+                          uint32_t *out_total) {
+  if (!out_records || !out_count || !out_total || limit == 0)
+    return false;
+  *out_records = NULL;
+  *out_count = 0;
+  *out_total = 0;
+  if (limit > 256)
+    limit = 256;
+  if (g_cmd_fd < 0) {
+    uint16_t version = 1;
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS, &version);
+    if (g_cmd_fd < 0) {
+      note_lost();
+      return false;
+    }
+    g_cmd_version = version;
+    g_cmd_page_supported = version >= 2;
+    note_restored();
+  }
+
+  GuiDownloadRecord *rows = calloc(limit, sizeof(*rows));
+  if (!rows)
+    return false;
+  if (g_cmd_page_supported) {
+    int count = g_cmd_version >= 7
+                    ? ipc_send_list_page_with_category_v1(
+                          g_cmd_fd, offset, limit, rows, (int)limit, out_total)
+                    : ipc_send_list_page(g_cmd_fd, offset, limit, rows,
+                                         (int)limit, out_total);
+    if (count >= 0) {
+      *out_records = rows;
+      *out_count = count;
+      return true;
+    }
+    ipc_client_disconnect(g_cmd_fd);
+    g_cmd_fd = -1;
+    g_cmd_page_supported = false;
+  }
+
+  /* Legacy daemon, including older v2 builds without type 35. */
+  free(rows);
+  GuiDownloadRecord *legacy = NULL;
+  int legacy_count = 0;
+  if (!gui_client_list_all(&legacy, &legacy_count))
+    return false;
+  *out_total = (uint32_t)legacy_count;
+  if (offset >= (uint32_t)legacy_count) {
+    free(legacy);
+    return true;
+  }
+  int available = legacy_count - (int)offset;
+  int count = available < (int)limit ? available : (int)limit;
+  memmove(legacy, legacy + offset, (size_t)count * sizeof(*legacy));
+  *out_records = legacy;
+  *out_count = count;
+  return true;
+}
+
 bool gui_client_get_details(uint32_t id, GuiDownloadDetails *out) {
   if (g_cmd_fd < 0) {
-    g_cmd_fd = ipc_client_connect_timeout(GUI_CMD_TIMEOUT_MS);
+    g_cmd_fd = ipc_client_connect_compatible(GUI_CMD_TIMEOUT_MS,
+                                             &g_cmd_version);
     if (g_cmd_fd < 0) {
       note_lost();
       return false;

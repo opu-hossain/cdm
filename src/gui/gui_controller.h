@@ -6,6 +6,15 @@
 #include <stdint.h>
 
 #define GUI_CONTROLLER_MAX_ROWS 256
+#define GUI_HISTORY_PAGE_ROWS 64
+#define GUI_CONTROLLER_MAX_QUEUES 64
+#define GUI_CONTROLLER_MAX_CATEGORIES IPC_CATEGORY_MAX
+
+typedef struct {
+  uint32_t offset;
+  uint32_t count;
+  uint32_t total;
+} GuiHistoryWindow;
 
 typedef enum {
   GUI_CONTROLLER_EVENT_OPERATION,
@@ -14,6 +23,8 @@ typedef enum {
   GUI_CONTROLLER_EVENT_DETAILS,
   GUI_CONTROLLER_EVENT_CONNECTION,
   GUI_CONTROLLER_EVENT_ERROR,
+  GUI_CONTROLLER_EVENT_QUEUES,
+  GUI_CONTROLLER_EVENT_CATEGORIES,
 } GuiControllerEventType;
 
 typedef enum {
@@ -21,6 +32,8 @@ typedef enum {
   GUI_CONTROLLER_OPERATION_PAUSE,
   GUI_CONTROLLER_OPERATION_RESUME,
   GUI_CONTROLLER_OPERATION_CANCEL,
+  GUI_CONTROLLER_OPERATION_REMOVE,
+  GUI_CONTROLLER_OPERATION_REFRESH_URL,
 } GuiControllerOperation;
 
 typedef struct {
@@ -29,17 +42,22 @@ typedef struct {
   char url[IPC_MAX_URL_LEN];
   char dest_path[IPC_MAX_PATH_LEN];
   bool succeeded;
+  bool duplicate;
 } GuiControllerOperationEvent;
 
 typedef struct {
   uint32_t download_id;
   char status[16];
   float progress;
+  bool has_v2;
+  IpcProgressV2 v2;
 } GuiControllerStatusEvent;
 
 typedef struct {
   GuiDownloadRecord records[GUI_CONTROLLER_MAX_ROWS];
   int count;
+  uint32_t offset;
+  uint32_t total;
 } GuiControllerSnapshotEvent;
 
 typedef struct {
@@ -57,6 +75,16 @@ typedef struct {
 } GuiControllerErrorEvent;
 
 typedef struct {
+  Queue queues[GUI_CONTROLLER_MAX_QUEUES];
+  int count;
+} GuiControllerQueuesEvent;
+
+typedef struct {
+  IpcCategoryV1 categories[GUI_CONTROLLER_MAX_CATEGORIES];
+  int count;
+} GuiControllerCategoriesEvent;
+
+typedef struct {
   GuiControllerEventType type;
   union {
     GuiControllerOperationEvent operation;
@@ -65,6 +93,8 @@ typedef struct {
     GuiControllerDetailsEvent details;
     GuiControllerConnectionEvent connection;
     GuiControllerErrorEvent error;
+    GuiControllerQueuesEvent queues;
+    GuiControllerCategoriesEvent categories;
   } data;
 } GuiControllerEvent;
 
@@ -77,9 +107,25 @@ bool gui_controller_poll(GuiControllerEvent *event);
 
 bool gui_controller_enqueue_add(const char *url, const char *dest_path,
                                 const IpcDownloadOptions *options);
+bool gui_controller_enqueue_add_auto(const char *url, const char *dest_path,
+                                     const IpcDownloadOptions *options);
 bool gui_controller_enqueue_pause(uint32_t id);
 bool gui_controller_enqueue_resume(uint32_t id);
+bool gui_controller_enqueue_refresh_url(uint32_t id);
 bool gui_controller_enqueue_cancel(uint32_t id);
+bool gui_controller_enqueue_remove(uint32_t id, bool delete_file);
 bool gui_controller_enqueue_details(uint32_t id);
+bool gui_controller_request_more(void);
+bool gui_controller_request_queues(void);
+bool gui_controller_enqueue_queue_create(const Queue *queue);
+bool gui_controller_enqueue_queue_update(const Queue *queue);
+bool gui_controller_enqueue_queue_delete(uint32_t id);
+bool gui_controller_enqueue_queue_order(const uint32_t *ids, int count);
+bool gui_controller_request_categories(void);
+bool gui_controller_enqueue_category_create(const IpcCategoryV1 *category);
+bool gui_controller_enqueue_category_update(const IpcCategoryV1 *category);
+bool gui_controller_enqueue_category_delete(uint32_t id);
+/* Advances a bounded history window; used by the controller worker. */
+bool gui_controller_history_next(GuiHistoryWindow *window);
 
 #endif

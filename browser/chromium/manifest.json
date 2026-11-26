@@ -2,8 +2,11 @@
   "manifest_version": 3,
   "name": "Core Download Manager",
   "description": "Offer browser downloads to cdm.",
-  "version": "0.2.0",
-  "permissions": ["downloads", "nativeMessaging"],
+  "version": "0.3.1",
+  "permissions": ["downloads", "nativeMessaging", "activeTab", "contextMenus", "storage", "scripting"],
+  "options_ui": {"page": "options.html", "open_in_tab": true},
+  "optional_permissions": ["cookies", "webRequest"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
   "background": {"service_worker": "service_worker.js"},
   "action": {"default_title": "Core Download Manager"}
 }

@@ -6,25 +6,232 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
+
+bool path_extension_in_list(const char *filename, const char *extensions) {
+  if (!filename || !extensions || !filename[0])
+    return false;
+  const char *dot = strrchr(filename, '.');
+  if (!dot || !dot[1])
+    return false;
+  const char *extension = dot + 1;
+  size_t length = strlen(extension);
+  const char *cursor = extensions;
+  while (*cursor) {
+    const char *end = strchr(cursor, ',');
+    size_t token_length = end ? (size_t)(end - cursor) : strlen(cursor);
+    if (token_length == length && strncasecmp(cursor, extension, length) == 0)
+      return true;
+    if (!end)
+      break;
+    cursor = end + 1;
+  }
+  return false;
+}
+
+static int hex_digit(char c) {
+  if (c >= '0' && c <= '9')
+    return c - '0';
+  if (c >= 'a' && c <= 'f')
+    return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F')
+    return c - 'A' + 10;
+  return -1;
+}
+
+static bool safe_disposition_name(const char *name) {
+  if (!name[0] || strstr(name, ".."))
+    return false;
+  for (const unsigned char *p = (const unsigned char *)name; *p; p++)
+    if (*p < 32 || *p == 127 || *p == '/' || *p == '\\')
+      return false;
+  return true;
+}
+
+static bool valid_utf8(const unsigned char *p) {
+  while (*p) {
+    if (*p < 0x80) {
+      p++;
+    } else if (*p >= 0xC2 && *p <= 0xDF &&
+               p[1] >= 0x80 && p[1] <= 0xBF) {
+      p += 2;
+    } else if (*p >= 0xE0 && *p <= 0xEF && p[1] && p[2] &&
+               p[1] >= (*p == 0xE0 ? 0xA0 : 0x80) &&
+               p[1] <= (*p == 0xED ? 0x9F : 0xBF) &&
+               p[2] >= 0x80 && p[2] <= 0xBF) {
+      p += 3;
+    } else if (*p >= 0xF0 && *p <= 0xF4 && p[1] && p[2] && p[3] &&
+               p[1] >= (*p == 0xF0 ? 0x90 : 0x80) &&
+               p[1] <= (*p == 0xF4 ? 0x8F : 0xBF) &&
+               p[2] >= 0x80 && p[2] <= 0xBF &&
+               p[3] >= 0x80 && p[3] <= 0xBF) {
+      p += 4;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool decode_extended_name(const char *value, char *out, size_t cap) {
+  if (strncasecmp(value, "UTF-8'", 6) != 0)
+    return false;
+  const char *encoded = strchr(value + 6, '\'');
+  if (!encoded)
+    return false;
+  encoded++;
+  size_t n = 0;
+  for (const char *p = encoded; *p; p++) {
+    unsigned char ch = (unsigned char)*p;
+    if (ch == '%') {
+      int hi = hex_digit(p[1]);
+      int lo = p[1] ? hex_digit(p[2]) : -1;
+      if (hi < 0 || lo < 0)
+        return false;
+      ch = (unsigned char)(hi * 16 + lo);
+      p += 2;
+    } else if (ch >= 128) {
+      return false;
+    }
+    if (ch == 0 || n + 1 >= cap)
+      return false;
+    out[n++] = (char)ch;
+  }
+  out[n] = '\0';
+  return safe_disposition_name(out) &&
+         valid_utf8((const unsigned char *)out);
+}
+
+bool path_filename_from_disposition(const char *header, char *out,
+                                    size_t out_size) {
+  if (!out || out_size == 0)
+    return false;
+  out[0] = '\0';
+  if (!header)
+    return false;
+  const char *p = header;
+  if (strncasecmp(p, "Content-Disposition:", 20) == 0)
+    p += 20;
+  p = strchr(p, ';');
+  if (!p)
+    return false;
+
+  char plain[512] = {0};
+  char extended[512] = {0};
+  while (*p) {
+    p++;
+    while (*p == ' ' || *p == '\t')
+      p++;
+    const char *key = p;
+    while (*p && *p != '=' && *p != ';' && *p != '\r' && *p != '\n')
+      p++;
+    if (*p != '=') {
+      if (*p != ';')
+        break;
+      continue;
+    }
+    const char *key_end = p;
+    while (key_end > key && (key_end[-1] == ' ' || key_end[-1] == '\t'))
+      key_end--;
+    p++;
+    while (*p == ' ' || *p == '\t')
+      p++;
+
+    char value[512];
+    size_t n = 0;
+    bool valid = true;
+    if (*p == '"') {
+      p++;
+      while (*p && *p != '"' && *p != '\r' && *p != '\n') {
+        char ch = *p++;
+        if (ch == '\\' && *p == '"') {
+          ch = '"';
+          p++;
+        }
+        if (n + 1 < sizeof(value))
+          value[n++] = ch;
+        else
+          valid = false;
+      }
+      if (*p == '"')
+        p++;
+      else
+        valid = false;
+      while (*p && *p != ';' && *p != '\r' && *p != '\n')
+        p++;
+    } else {
+      while (*p && *p != ';' && *p != '\r' && *p != '\n') {
+        if (n + 1 < sizeof(value))
+          value[n++] = *p;
+        else
+          valid = false;
+        p++;
+      }
+      while (n && (value[n - 1] == ' ' || value[n - 1] == '\t'))
+        n--;
+    }
+    value[n] = '\0';
+    size_t key_len = (size_t)(key_end - key);
+    if (valid && key_len == 8 && strncasecmp(key, "filename", 8) == 0 &&
+        safe_disposition_name(value))
+      strcpy(plain, value);
+    else if (valid && key_len == 9 &&
+             strncasecmp(key, "filename*", 9) == 0) {
+      char decoded[512] = {0};
+      if (decode_extended_name(value, decoded, sizeof(decoded)))
+        strcpy(extended, decoded);
+    }
+    if (*p != ';')
+      break;
+  }
+  const char *chosen = extended[0] ? extended : plain;
+  size_t length = strlen(chosen);
+  if (!length || length >= out_size)
+    return false;
+  memcpy(out, chosen, length + 1);
+  return true;
+}
 
 void path_filename_from_url(const char *url, char *out, size_t out_size) {
   if (!out || out_size == 0)
     return;
-
-  const char *slash = strrchr(url, '/');
-  const char *name = slash ? slash + 1 : url;
   char temp[512];
-  strncpy(temp, name, sizeof(temp) - 1);
-  temp[sizeof(temp) - 1] = '\0';
+  size_t url_path_len = strcspn(url, "?#");
+  if (url_path_len >= sizeof(temp))
+    url_path_len = sizeof(temp) - 1;
+  memcpy(temp, url, url_path_len);
+  temp[url_path_len] = '\0';
 
-  char *query = strchr(temp, '?');
-  if (query)
-    *query = '\0';
-  if (temp[0] == '\0')
-    strncpy(temp, "download.bin", sizeof(temp) - 1);
+  const char *slash = strrchr(temp, '/');
+  const char *name = slash ? slash + 1 : temp;
+  if (!name[0])
+    name = "download.bin";
 
-  strncpy(out, temp, out_size - 1);
+  char decoded[512];
+  size_t n = 0;
+  for (size_t i = 0; name[i] && n + 1 < sizeof(decoded); i++) {
+    unsigned char ch = (unsigned char)name[i];
+    if (ch == '%' && name[i + 1] && name[i + 2]) {
+      int hi = hex_digit(name[i + 1]);
+      int lo = hex_digit(name[i + 2]);
+      if (hi >= 0 && lo >= 0) {
+        unsigned char escaped = (unsigned char)(hi * 16 + lo);
+        if (escaped >= 32 && escaped != 127 && escaped != '/' &&
+            escaped != '\\') {
+          ch = escaped;
+          i += 2;
+        }
+      }
+    }
+    decoded[n++] = (char)ch;
+  }
+  decoded[n] = '\0';
+
+  const char *chosen = safe_disposition_name(decoded) ? decoded : name;
+  if (!safe_disposition_name(chosen))
+    chosen = "download.bin";
+  strncpy(out, chosen, out_size - 1);
   out[out_size - 1] = '\0';
 }
 

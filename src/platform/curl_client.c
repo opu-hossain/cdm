@@ -6,50 +6,201 @@
 #include "../utils/log.h"
 
 #include <curl/curl.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 /* Internal helpers */
 
 /**
  * libcurl header callback – called once per response header line.
  *
- * We use it only to detect the Accept-Ranges: bytes header.  The userdata
- * pointer points to the FileInfo struct being filled.
+ * Capture range support and the complete size from a one-byte range reply.
  */
-static size_t head_header_callback(void *data, size_t size, size_t nmemb,
-                                   void *userdata) {
-  FileInfo *info = (FileInfo *)userdata;
+typedef struct {
+  FileInfo *info;
+  uint64_t range_total;
+  bool has_range_total;
+  bool body_aborted;
+} ProbeState;
+
+static void copy_header_value(char *out, size_t capacity, const char *data,
+                              size_t total, size_t prefix_len) {
+  const char *value = data + prefix_len;
+  size_t n = total - prefix_len;
+  while (n && (*value == ' ' || *value == '\t')) {
+    value++;
+    n--;
+  }
+  while (n && (value[n - 1] == '\r' || value[n - 1] == '\n' ||
+               value[n - 1] == ' ' || value[n - 1] == '\t'))
+    n--;
+  if (n >= capacity) {
+    out[0] = '\0';
+    return;
+  }
+  memcpy(out, value, n);
+  out[n] = '\0';
+}
+
+static size_t probe_header_callback(void *data, size_t size, size_t nmemb,
+                                    void *userdata) {
+  ProbeState *state = userdata;
   size_t total = size * nmemb;
 
+  /* Redirects and intermediate HTTP responses may have different headers. */
+  if (total >= 5 && strncasecmp(data, "HTTP/", 5) == 0) {
+    memset(state->info, 0, sizeof(*state->info));
+    state->has_range_total = false;
+  }
   if (total >= 19 &&
       strncasecmp((char *)data, "Accept-Ranges: bytes", 19) == 0) {
-    info->supports_ranges = true;
+    state->info->supports_ranges = true;
+  }
+  if (total > 20 && strncasecmp(data, "Content-Disposition:", 20) == 0) {
+    copy_header_value(state->info->content_disposition,
+                      sizeof(state->info->content_disposition), data, total,
+                      20);
+  }
+  if (total > 5 && strncasecmp(data, "ETag:", 5) == 0)
+    copy_header_value(state->info->etag, sizeof(state->info->etag), data,
+                      total, 5);
+  if (total > 14 && strncasecmp(data, "Last-Modified:", 14) == 0)
+    copy_header_value(state->info->last_modified,
+                      sizeof(state->info->last_modified), data, total, 14);
+  if (total > 14 && strncasecmp(data, "Content-Range:", 14) == 0) {
+    char value[96];
+    size_t n = total - 14;
+    if (n >= sizeof(value))
+      return total;
+    memcpy(value, (char *)data + 14, n);
+    value[n] = '\0';
+    char *cursor = value;
+    while (*cursor == ' ' || *cursor == '\t')
+      cursor++;
+    if (strncasecmp(cursor, "bytes ", 6) != 0)
+      return total;
+    cursor += 6;
+    errno = 0;
+    char *end = NULL;
+    unsigned long long first = strtoull(cursor, &end, 10);
+    if (errno || end == cursor || *end != '-')
+      return total;
+    cursor = end + 1;
+    unsigned long long last = strtoull(cursor, &end, 10);
+    if (errno || end == cursor || *end != '/')
+      return total;
+    cursor = end + 1;
+    unsigned long long size_bytes = strtoull(cursor, &end, 10);
+    if (errno || end == cursor || first != 0 || last != 0 ||
+        size_bytes == 0 || (*end != '\r' && *end != '\n' && *end != '\0'))
+      return total;
+    state->range_total = (uint64_t)size_bytes;
+    state->has_range_total = true;
   }
   return total; // must return the number of bytes consumed
 }
 
+static size_t probe_body_callback(char *data, size_t size, size_t nmemb,
+                                  void *userdata) {
+  (void)data;
+  ProbeState *state = userdata;
+  state->body_aborted = true;
+  (void)size;
+  (void)nmemb;
+  return 0; /* Headers are enough; never download an ignored full response. */
+}
+
 /* Public API */
+
+CURLcode curl_apply_proxy(CURL *curl, const DownloadManagerConfig *config) {
+  if (!curl || !config)
+    return CURLE_BAD_FUNCTION_ARGUMENT;
+  if (config->proxy_mode == PROXY_NONE)
+    return CURLE_OK;
+
+  /* The selected mode controls the protocol, independent of the URL scheme. */
+  const char *address = strstr(config->proxy_url, "://");
+  if (!address || !address[3])
+    return CURLE_BAD_FUNCTION_ARGUMENT;
+  address += 3;
+  CURLcode code = curl_easy_setopt(curl, CURLOPT_PROXY, address);
+  if (code == CURLE_OK)
+    code = curl_easy_setopt(curl, CURLOPT_PROXYTYPE,
+                            config->proxy_mode == PROXY_HTTP
+                                ? (long)CURLPROXY_HTTP
+                                : (long)CURLPROXY_SOCKS5_HOSTNAME);
+  if (code == CURLE_OK)
+    code = curl_easy_setopt(curl, CURLOPT_NOPROXY, "");
+  if (code == CURLE_OK && config->proxy_username[0])
+    code = curl_easy_setopt(curl, CURLOPT_PROXYUSERNAME,
+                            config->proxy_username);
+  if (code == CURLE_OK && config->proxy_password[0])
+    code = curl_easy_setopt(curl, CURLOPT_PROXYPASSWORD,
+                            config->proxy_password);
+  return code;
+}
+
+CURLcode curl_apply_basic_auth(CURL *curl, const RequestContext *ctx) {
+  if (!curl)
+    return CURLE_BAD_FUNCTION_ARGUMENT;
+  CURLcode code = curl_easy_setopt(curl, CURLOPT_UNRESTRICTED_AUTH, 0L);
+  if (code != CURLE_OK || !ctx ||
+      ((!ctx->auth_user || !ctx->auth_user[0]) &&
+       (!ctx->auth_password || !ctx->auth_password[0])))
+    return code;
+  code = curl_easy_setopt(curl, CURLOPT_HTTPAUTH, (long)CURLAUTH_BASIC);
+  if (code == CURLE_OK)
+    code = curl_easy_setopt(curl, CURLOPT_USERNAME,
+                            ctx->auth_user ? ctx->auth_user : "");
+  if (code == CURLE_OK)
+    code = curl_easy_setopt(curl, CURLOPT_PASSWORD,
+                            ctx->auth_password ? ctx->auth_password : "");
+  return code;
+}
 
 int curl_client_head(const char *url, const RequestContext *ctx,
                      FileInfo *out) {
   memset(out, 0, sizeof(*out));
+  const char *log_url = "[REDACTED]";
+  ProbeState state = {.info = out};
 
   CURL *curl = curl_easy_init();
   if (!curl) {
-    LOG_ERROR("curl_easy_init failed for %s", url);
+    LOG_ERROR("curl_easy_init failed for %s", log_url);
+    return -1;
+  }
+
+  DownloadManagerConfig config;
+  config_get(&config);
+  CURLcode proxy_result = curl_apply_proxy(curl, &config);
+  if (proxy_result != CURLE_OK) {
+    LOG_WARN("Could not configure proxy for probe: %s",
+             curl_easy_strerror(proxy_result));
+    curl_easy_cleanup(curl);
+    return -1;
+  }
+  CURLcode auth_result = curl_apply_basic_auth(curl, ctx);
+  if (auth_result != CURLE_OK) {
+    LOG_WARN("Could not configure authentication for probe: %s",
+             curl_easy_strerror(auth_result));
+    curl_easy_cleanup(curl);
     return -1;
   }
 
   curl_easy_setopt(curl, CURLOPT_URL, url);
   curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  /* Captured context belongs to the offered final URL, not redirect targets. */
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, ctx && ctx->sensitive ? 0L : 1L);
   curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
-  curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, head_header_callback);
-  curl_easy_setopt(curl, CURLOPT_HEADERDATA, out);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "cdm/0.1");
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, probe_header_callback);
+  curl_easy_setopt(curl, CURLOPT_HEADERDATA, &state);
+  curl_easy_setopt(curl, CURLOPT_USERAGENT,
+                   ctx && ctx->user_agent ? ctx->user_agent : config.user_agent);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)config.transfer_timeout_sec);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
+                   (long)config.connect_timeout_sec);
   curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
 
   struct curl_slist *headers = NULL;
@@ -68,23 +219,64 @@ int curl_client_head(const char *url, const RequestContext *ctx,
   long http_status = 0;
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
 
-  if (res == CURLE_OK && http_status >= 200 && http_status < 300) {
+  bool success = res == CURLE_OK && http_status >= 200 && http_status < 300;
+  if (success) {
     curl_off_t content_length = -1;
     curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
                       &content_length);
     out->total_size = (content_length > 0) ? (uint64_t)content_length : 0;
   } else if (res != CURLE_OK) {
-    LOG_WARN("HEAD request failed for %s: %s", url,
+    LOG_WARN("HEAD request failed for %s: %s", log_url,
              curl_easy_strerror(res));
   } else {
-    LOG_WARN("HEAD request returned HTTP %ld for %s", http_status, url);
+    LOG_WARN("HEAD request returned HTTP %ld for %s", http_status, log_url);
   }
 
+  if (!success) {
+    memset(out, 0, sizeof(*out));
+    state.has_range_total = false;
+    state.body_aborted = false;
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(curl, CURLOPT_RANGE, "0-0");
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, probe_body_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &state);
+    res = curl_easy_perform(curl);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
+    success = (res == CURLE_OK ||
+               (res == CURLE_WRITE_ERROR && state.body_aborted)) &&
+              (http_status == 206 || http_status == 200);
+    if (success && http_status == 206) {
+      success = state.has_range_total;
+      if (success) {
+        out->total_size = state.range_total;
+        out->supports_ranges = true;
+      }
+    } else if (success) {
+      curl_off_t content_length = -1;
+      curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
+                        &content_length);
+      out->total_size = (content_length > 0) ? (uint64_t)content_length : 0;
+      out->supports_ranges = false;
+    }
+    if (!success)
+      LOG_WARN("GET range probe failed for %s: HTTP %ld, %s", log_url,
+               http_status, curl_easy_strerror(res));
+  }
+
+  if (success) {
+    char *effective = NULL;
+    if (curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &effective) != CURLE_OK ||
+        !effective || strlen(effective) >= sizeof(out->effective_url))
+      success = false;
+    else
+      memcpy(out->effective_url, effective, strlen(effective) + 1);
+  }
   if (headers)
     curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
-  return (res == CURLE_OK && http_status >= 200 && http_status < 300) ? 0
-                                                                        : -1;
+  if (!success)
+    memset(out, 0, sizeof(*out));
+  return success ? 0 : -1;
 }
 
 struct curl_slist *curl_client_build_headers(const char *extra_headers) {

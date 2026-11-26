@@ -1,17 +1,26 @@
 #include "../src/platform/ipc_socket.h"
 #include "../src/core/queue_manager.h"
 #include "../src/persistence/db.h"
+#include "../src/platform/thread.h"
 #include "../src/utils/log.h"
+#include "../src/utils/config.h"
 #include <criterion/criterion.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <threads.h>
 #include <unistd.h>
 
+static char ipc_runtime_dir[64];
+
 static void setup_ipc(void) {
+  snprintf(ipc_runtime_dir, sizeof(ipc_runtime_dir),
+           "/tmp/cdm-ipc-test-XXXXXX");
+  cr_assert_not_null(mkdtemp(ipc_runtime_dir));
+  cr_assert_eq(setenv("XDG_RUNTIME_DIR", ipc_runtime_dir, 1), 0);
   if (ipc_server_is_running()) {
     ipc_server_stop();
   }
@@ -21,9 +30,647 @@ static void setup_ipc(void) {
 static void teardown_ipc(void) {
   ipc_server_stop();
   log_close();
+  unsetenv("XDG_RUNTIME_DIR");
+  rmdir(ipc_runtime_dir);
 }
 
 TestSuite(ipc, .init = setup_ipc, .fini = teardown_ipc);
+
+static atomic_bool browser_server_running;
+static int browser_server_thread(void *unused);
+
+Test(ipc, browser_media_metadata_preserves_raw_offer) {
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  const char *kinds[] = {"hls", "dash", "video"};
+  for (uint32_t i = 0; i < 3; i++) {
+    char json[256];
+    int length = snprintf(json, sizeof(json),
+        "{\"request_id\":\"media-%u\",\"url\":\"https://example.invalid/media\","
+        "\"kind\":\"%s\"}", i, kinds[i]);
+    cr_assert_gt(length, 0);
+    cr_assert_lt((size_t)length, sizeof(json));
+    MsgHeader header = {.length = (uint32_t)length, .type = MSG_BROWSER_OFFER_V2};
+    cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+    cr_assert_eq(ipc_write_exact(client, json, (size_t)length), 0);
+    IpcBrowserOffer offer = {0}, fetched = {0};
+    cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+    cr_assert_neq(offer.offer_id, 0);
+    uint32_t kind = 99;
+    cr_assert_eq(ipc_browser_kind_info_v1(client, offer.offer_id, &kind), 0);
+    cr_assert_eq(kind, i + 1);
+    cr_assert_eq(ipc_browser_get_offer(client, offer.offer_id, &fetched), 0);
+    cr_assert_eq(memcmp(&offer, &fetched, sizeof(offer)), 0);
+    if (i == 1) {
+      IpcAddResponse response = {0};
+      cr_assert_eq(ipc_browser_confirm_v2(client, offer.offer_id,
+                                          "/tmp/media-not-created", &response), -1);
+      cr_assert_eq(response.id, 0);
+      cr_assert_eq(ipc_browser_get_offer(client, offer.offer_id, &fetched), 0);
+      cr_assert_eq(fetched.state, IPC_BROWSER_WAITING);
+    }
+    cr_assert_eq(ipc_browser_dismiss(client, offer.offer_id), 0);
+  }
+  const char *invalid[] = {
+    "{\"request_id\":\"bad\",\"url\":\"https://example.invalid/m\",\"kind\":3}",
+    "{\"request_id\":\"bad\",\"url\":\"https://example.invalid/m\",\"kind\":\"unknown\"}",
+    "{\"request_id\":\"media-0\",\"url\":\"https://example.invalid/media\",\"kind\":\"video\"}"
+  };
+  for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+    MsgHeader header = {.length = (uint32_t)strlen(invalid[i]), .type = MSG_BROWSER_OFFER_V2};
+    cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+    cr_assert_eq(ipc_write_exact(client, invalid[i], header.length), 0);
+    IpcBrowserOffer offer = {0};
+    cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+    cr_assert_eq(offer.offer_id, 0);
+  }
+  IpcBrowserOffer legacy = {0}, registered = {0};
+  strcpy(legacy.request_id, "ordinary");
+  strcpy(legacy.url, "https://example.invalid/file");
+  cr_assert_eq(ipc_browser_offer(client, &legacy, &registered), 0);
+  uint32_t kind = 99;
+  cr_assert_eq(ipc_browser_kind_info_v1(client, registered.offer_id, &kind), 0);
+  cr_assert_eq(kind, IPC_BROWSER_MEDIA_NONE);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+}
+
+Test(ipc, hls_confirmation_persists_kind_without_browser_credentials) {
+  char directory[] = "/tmp/cdm-hls-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(directory));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", directory, 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  const char json[] = "{\"request_id\":\"hls-confirm\",\"url\":\"https://example.invalid/list.m3u8\","
+                      "\"kind\":\"hls\",\"cookie\":\"synthetic=1\"}";
+  MsgHeader header = {.length = sizeof(json)-1, .type = MSG_BROWSER_OFFER_V2};
+  cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+  cr_assert_eq(ipc_write_exact(client, json, header.length), 0);
+  IpcBrowserOffer offer = {0};
+  cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+  char path[128];
+  int n = snprintf(path, sizeof(path), "%s/output.ts", directory);
+  cr_assert_gt(n, 0); cr_assert_lt((size_t)n, sizeof(path));
+  IpcAddResponse response = {0};
+  cr_assert_eq(ipc_browser_confirm_v2(client, offer.offer_id, path, &response), 0);
+  Download *d = queue_manager_find_by_id(response.id);
+  cr_assert_not_null(d);
+  cr_assert_eq(d->media_kind, DOWNLOAD_MEDIA_HLS);
+  cr_assert(d->requires_browser_context);
+  queue_manager_remove(d->id);
+  cr_assert_eq(db_restore_queue(), 0);
+  d = queue_manager_find_by_id(response.id);
+  cr_assert_not_null(d);
+  cr_assert_eq(d->media_kind, DOWNLOAD_MEDIA_HLS);
+  cr_assert_eq(d->status, DOWNLOAD_PAUSED);
+  cr_assert_null(d->request);
+  IpcDownloadDetails details = {0};
+  cr_assert_eq(db_get_download_details(d->id, &details), 0);
+  cr_assert_eq(details.cookie[0], '\0');
+  IpcBrowserOffer ordinary = {0}, registered = {0};
+  strcpy(ordinary.request_id, "hls-as-ordinary");
+  strcpy(ordinary.url, "https://example.invalid/list.m3u8");
+  cr_assert_eq(ipc_browser_offer(client, &ordinary, &registered), 0);
+  cr_assert_eq(ipc_browser_confirm_v2(client, registered.offer_id, path, &response), -1);
+  cr_assert_eq(response.id, 0);
+  queue_manager_remove(d->id);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false); thrd_join(server, NULL);
+  db_close(); unlink(path); rmdir(directory); unsetenv("DOWNLOADMGR_ROOT");
+}
+
+Test(ipc, youtube_selection_requires_versioned_offer_and_persists_quality) {
+  char directory[] = "/tmp/cdm-youtube-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(directory));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", directory, 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  uint32_t saved[2] = {0};
+  for (size_t i = 0; i < 2; i++) {
+    char json[256], path[256];
+    int n = snprintf(json, sizeof(json),
+        "{\"request_id\":\"yt-%zu\",\"url\":\"https://www.youtube.com/watch?v=fixture1234\","
+        "\"kind\":\"video\",\"youtube_itag\":%s}", i,
+        i == 0 ? "401" : "160");
+    cr_assert_gt(n, 0); cr_assert_lt((size_t)n, sizeof(json));
+    MsgHeader header = {.length = (uint32_t)n,
+                        .type = i == 0 ? MSG_BROWSER_OFFER_V2 :
+                                         MSG_BROWSER_OFFER_YOUTUBE_V1};
+    cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+    cr_assert_eq(ipc_write_exact(client, json, (size_t)n), 0);
+    IpcBrowserOffer offer = {0};
+    cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+    if (i == 0) {
+      cr_assert_eq(offer.offer_id, 0,
+          "older JSON offer cannot silently download a watch page");
+      header.type = MSG_BROWSER_OFFER_YOUTUBE_V1;
+      cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+      cr_assert_eq(ipc_write_exact(client, json, (size_t)n), 0);
+      cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+    }
+    cr_assert_neq(offer.offer_id, 0);
+    n = snprintf(path, sizeof(path), "%s/output-%zu.mp4", directory, i);
+    cr_assert_gt(n, 0); cr_assert_lt((size_t)n, sizeof(path));
+    IpcAddResponse response = {0};
+    cr_assert_eq(ipc_browser_confirm_v2(client, offer.offer_id, path,
+                                        &response), 0);
+    cr_assert_neq(response.id, 0);
+    saved[i] = response.id;
+    Download *d = queue_manager_find_by_id(response.id);
+    cr_assert_not_null(d);
+    cr_assert_eq(d->media_kind, DOWNLOAD_MEDIA_VIDEO);
+    cr_assert_str_eq(d->site_format_id, i == 0 ? "401" : "160");
+    cr_assert_not(d->site_grab);
+  }
+  cr_assert_neq(saved[0], saved[1],
+                "one video can have separate quality downloads");
+  queue_manager_remove(saved[0]);
+  queue_manager_remove(saved[1]);
+  cr_assert_eq(db_restore_queue(), 0);
+  Download *restored = queue_manager_find_by_id(saved[0]);
+  cr_assert_not_null(restored);
+  cr_assert_str_eq(restored->site_format_id, "401");
+  queue_manager_remove(saved[0]);
+  queue_manager_remove(saved[1]);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  db_close();
+  char path[256];
+  for (size_t i = 0; i < 2; i++) {
+    int n = snprintf(path, sizeof(path), "%s/output-%zu.mp4", directory, i);
+    cr_assert_gt(n, 0); cr_assert_lt((size_t)n, sizeof(path));
+    unlink(path);
+  }
+  rmdir(directory);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
+Test(ipc, youtube_browser_session_stays_in_memory_and_requires_refresh) {
+  char directory[] = "/tmp/cdm-youtube-session-XXXXXX";
+  cr_assert_not_null(mkdtemp(directory));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", directory, 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  const char *json = "{\"request_id\":\"yt-session\","
+      "\"url\":\"https://www.youtube.com/watch?v=fixture1234\","
+      "\"kind\":\"video\",\"youtube_itag\":401,"
+      "\"youtube_height\":2160,"
+      "\"youtube_sabr_url\":\"https://rr1.googlevideo.com/videoplayback?sabr=1\","
+      "\"youtube_request\":\"AQIDBA==\"}";
+  MsgHeader header = {.length = (uint32_t)strlen(json),
+                      .type = MSG_BROWSER_OFFER_YOUTUBE_V2};
+  cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+  cr_assert_eq(ipc_write_exact(client, json, header.length), 0);
+  IpcBrowserOffer offer = {0};
+  cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+  cr_assert_neq(offer.offer_id, 0);
+  char path[256];
+  cr_assert_gt(snprintf(path, sizeof(path), "%s/output.mp4", directory), 0);
+  IpcAddResponse response = {0};
+  cr_assert_eq(ipc_browser_confirm_v2(client, offer.offer_id, path,
+                                      &response), 0);
+  Download *download = queue_manager_find_by_id(response.id);
+  cr_assert_not_null(download);
+  cr_assert(download->requires_browser_context);
+  cr_assert_not_null(download->request);
+  cr_assert_str_eq(download->request->youtube_request_b64, "AQIDBA==");
+  queue_manager_remove(response.id);
+  cr_assert_eq(db_restore_queue(), 0);
+  download = queue_manager_find_by_id(response.id);
+  cr_assert_not_null(download);
+  cr_assert(download->requires_browser_context);
+  cr_assert_null(download->request);
+  queue_manager_remove(response.id);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  db_close(); unlink(path); rmdir(directory); unsetenv("DOWNLOADMGR_ROOT");
+}
+
+Test(ipc, ordinary_add_routes_manifest_urls_without_logging_signed_query) {
+  char directory[] = "/tmp/cdm-manifest-add-XXXXXX";
+  cr_assert_not_null(mkdtemp(directory));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", directory, 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  char log_path[256];
+  int length = snprintf(log_path, sizeof(log_path), "%s/daemon.log", directory);
+  cr_assert_gt(length, 0); cr_assert_lt((size_t)length, sizeof(log_path));
+  cr_assert(log_init(log_path, LOG_INFO));
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  const char *urls[] = {
+      "https://example.invalid/movie.m3u8?sec=synthetic-secret",
+      "https://example.invalid/movie.MPD?sec=synthetic-secret",
+      "https://example.invalid/movie.m3u8.bin?sec=synthetic-secret"};
+  const DownloadMediaKind kinds[] = {
+      DOWNLOAD_MEDIA_HLS, DOWNLOAD_MEDIA_DASH, DOWNLOAD_MEDIA_NONE};
+  uint32_t ids[3] = {0};
+  for (size_t i = 0; i < 3; i++) {
+    char path[256];
+    length = snprintf(path, sizeof(path), "%s/output-%zu", directory, i);
+    cr_assert_gt(length, 0); cr_assert_lt((size_t)length, sizeof(path));
+    IpcAddResponse response = {0};
+    cr_assert_eq(ipc_send_add_download_v3(client, urls[i], path, NULL,
+                                           false, &response), 0);
+    cr_assert_eq(response.result, IPC_RESULT_OK);
+    ids[i] = response.id;
+    Download *download = queue_manager_find_by_id(ids[i]);
+    cr_assert_not_null(download);
+    cr_assert_eq(download->media_kind, kinds[i]);
+    unlink(path);
+    queue_manager_remove(ids[i]);
+  }
+  FILE *log_file = fopen(log_path, "rb");
+  cr_assert_not_null(log_file);
+  char content[8192];
+  size_t read = fread(content, 1, sizeof(content) - 1, log_file);
+  content[read] = '\0';
+  cr_assert_eq(fclose(log_file), 0);
+  cr_assert_null(strstr(content, "synthetic-secret"));
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop(); db_close(); log_close();
+  unlink(log_path);
+  unsetenv("DOWNLOADMGR_ROOT");
+  rmdir(directory);
+}
+
+Test(ipc, browser_context_is_ephemeral_and_can_refresh_after_restore) {
+  char root[] = "/tmp/cdm-browser-context-XXXXXX";
+  cr_assert_not_null(mkdtemp(root));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", root, 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  const char *invalid[] = {
+      "{\"request_id\":\"bad\",\"url\":\"https://example.invalid/file\",\"cookie\":3}",
+      "{\"request_id\":\"bad\",\"url\":\"https://example.invalid/file\",\"cookie\":\"x\\r\\ny\"}",
+      "{\"request_id\":\"bad\",\"url\":\"https://example.invalid/file\",\"referer\":\"x\\u0000y\"}",
+      "{\"request_id\":\"bad\",\"url\":\"https://example.invalid/file\",\"user_agent\":\"\xc0\x80\"}",
+  };
+  for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+    MsgHeader bad = {.type = 56, .length = (uint32_t)strlen(invalid[i])};
+    cr_assert_eq(ipc_write_exact(client, &bad, sizeof(bad)), 0);
+    cr_assert_eq(ipc_write_exact(client, invalid[i], bad.length), 0);
+    IpcBrowserOffer rejected = {0};
+    cr_assert_eq(ipc_read_exact(client, &rejected, sizeof(rejected)), 0);
+    cr_assert_eq(rejected.offer_id, 0);
+  }
+  const char json[] = "{\"request_id\":\"context-fixture\","
+      "\"url\":\"https://example.invalid/protected\",\"filename\":\"protected\","
+      "\"cookie\":\"sid=context-fixture\",\"user_agent\":\"context-UA\","
+      "\"referer\":\"https://example.invalid/context-ref\"}";
+  MsgHeader header = {.type = 56, .length = sizeof(json) - 1};
+  cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+  cr_assert_eq(ipc_write_exact(client, json, sizeof(json) - 1), 0);
+  IpcBrowserOffer offer = {0};
+  cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+  cr_assert_neq(offer.offer_id, 0);
+  cr_assert_str_empty(offer.referrer);
+  header.type = 57;
+  header.length = sizeof(offer.offer_id);
+  cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+  cr_assert_eq(ipc_write_exact(client, &offer.offer_id, sizeof(offer.offer_id)), 0);
+  uint32_t flags = 0;
+  cr_assert_eq(ipc_read_exact(client, &flags, sizeof(flags)), 0);
+  cr_assert_eq(flags, 7);
+  char path[1024];
+  int written = snprintf(path, sizeof(path), "%s/protected", root);
+  cr_assert_geq(written, 0);
+  cr_assert_lt((size_t)written, sizeof(path));
+  uint32_t id = 0;
+  cr_assert_eq(ipc_browser_confirm(client, offer.offer_id, path, &id), 0);
+  cr_assert_eq(ipc_browser_context_info_v1(client, offer.offer_id, &flags), 0);
+  cr_assert_eq(flags, 0);
+  Download *download = queue_manager_find_by_id(id);
+  cr_assert_not_null(download);
+  cr_assert(download->requires_browser_context);
+  cr_assert_not_null(download->request);
+  cr_assert(download->request->browser_context);
+  cr_assert_str_eq(download->request->cookie, "sid=context-fixture");
+  cr_assert_str_eq(download->request->user_agent, "context-UA");
+  cr_assert_str_eq(download->request->referrer,
+                   "https://example.invalid/context-ref");
+  IpcDownloadDetails details = {0};
+  cr_assert_eq(db_get_download_details(id, &details), 0);
+  cr_assert_str_empty(details.cookie);
+  cr_assert_str_empty(details.referrer);
+  cr_assert_str_empty(details.extra_headers);
+  queue_manager_update_status(id, DOWNLOAD_DONE);
+  cr_assert_null(download->request);
+  cr_assert_eq(db_update_status(id, "PAUSED"), 0);
+  queue_manager_remove(id);
+  cr_assert_eq(db_restore_queue(), 0);
+  download = queue_manager_find_by_id(id);
+  cr_assert(download->requires_browser_context);
+  cr_assert_null(download->request);
+  cr_assert_not(queue_manager_resume(id));
+  const char refreshed[] = "{\"request_id\":\"context-refresh\","
+      "\"url\":\"https://example.invalid/protected\","
+      "\"cookie\":\"sid=context-refreshed\"}";
+  header.type = 56;
+  header.length = sizeof(refreshed) - 1;
+  cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+  cr_assert_eq(ipc_write_exact(client, refreshed, sizeof(refreshed) - 1), 0);
+  cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+  uint32_t refreshed_id = 0;
+  cr_assert_eq(ipc_browser_confirm(client, offer.offer_id, path, &refreshed_id), 0);
+  cr_assert_eq(refreshed_id, id);
+  cr_assert_str_eq(download->request->cookie, "sid=context-refreshed");
+  cr_assert_eq(download->status, DOWNLOAD_QUEUED);
+  queue_manager_update_status(id, DOWNLOAD_ERROR);
+  cr_assert_null(download->request);
+  const char dismissed_json[] = "{\"request_id\":\"context-dismiss\","
+      "\"url\":\"https://example.invalid/dismiss\",\"cookie\":\"sid=dismiss-fixture\"}";
+  header.type = 56;
+  header.length = sizeof(dismissed_json) - 1;
+  cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+  cr_assert_eq(ipc_write_exact(client, dismissed_json, sizeof(dismissed_json) - 1), 0);
+  cr_assert_eq(ipc_read_exact(client, &offer, sizeof(offer)), 0);
+  cr_assert_eq(ipc_browser_context_info_v1(client, offer.offer_id, &flags), 0);
+  cr_assert_eq(flags, 1);
+  cr_assert_eq(ipc_browser_dismiss(client, offer.offer_id), 0);
+  cr_assert_eq(ipc_browser_context_info_v1(client, offer.offer_id, &flags), 0);
+  cr_assert_eq(flags, 0);
+  RequestOptions cancel_context = {.browser_context = true};
+  strcpy(cancel_context.cookie, "sid=cancel-fixture");
+  uint32_t cancel_id = queue_manager_add("https://example.invalid/cancel", path,
+                                          &cancel_context);
+  cr_assert_neq(cancel_id, 0);
+  queue_manager_cancel(cancel_id);
+  cr_assert_null(queue_manager_find_by_id(cancel_id)->request);
+  queue_manager_remove(cancel_id);
+  uint32_t shutdown_id = queue_manager_add("https://example.invalid/shutdown", path,
+                                            &cancel_context);
+  cr_assert_neq(shutdown_id, 0);
+  queue_manager_clear_browser_contexts();
+  cr_assert_null(queue_manager_find_by_id(shutdown_id)->request);
+  queue_manager_remove(shutdown_id);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  queue_manager_remove(id);
+  db_close();
+  unsetenv("DOWNLOADMGR_ROOT");
+  rmdir(root);
+}
+
+Test(ipc, category_crud_and_paged_assignment_v1) {
+  cr_assert_eq(db_init(":memory:"), 0);
+  Category video = {0};
+  strcpy(video.name, "Video");
+  strcpy(video.extensions, "mp4");
+  uint32_t video_id = 0;
+  cr_assert_eq(db_category_create(&video, &video_id), 0);
+  cr_assert_eq(db_insert_download(711, "http://127.0.0.1/clip.mp4",
+                                  "/tmp/cdm-category-clip.mp4", NULL), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  IpcCategoryV1 categories[4] = {0};
+  cr_assert_eq(ipc_send_category_list_v1(client, categories, 4), 2);
+  cr_assert_eq(categories[1].id, video_id);
+  IpcDownloadRecord row = {0};
+  uint32_t total = 0;
+  cr_assert_eq(ipc_send_list_page_with_category_v1(
+      client, 0, 1, &row, 1, &total), 1);
+  cr_assert_eq(row.category_id, video_id);
+  IpcCategoryV1 documents = {0};
+  strcpy(documents.name, "Documents");
+  strcpy(documents.extensions, "pdf");
+  uint32_t documents_id = 0;
+  cr_assert_eq(ipc_send_category_create_v1(client, &documents,
+                                            &documents_id), IPC_RESULT_OK);
+  cr_assert_neq(documents_id, 0);
+  documents.id = documents_id;
+  strcpy(documents.name, "Books");
+  cr_assert_eq(ipc_send_category_update_v1(client, &documents), IPC_RESULT_OK);
+  cr_assert_eq(ipc_send_category_delete_v1(client, documents_id), IPC_RESULT_OK);
+  cr_assert_eq(ipc_send_category_delete_v1(client, video_id), IPC_RESULT_OK);
+  cr_assert_eq(ipc_send_list_page_with_category_v1(
+      client, 0, 1, &row, 1, &total), 1);
+  cr_assert_eq(row.category_id, 1);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  db_close();
+}
+
+Test(ipc, category_routing_reserves_final_path_but_respects_explicit_folder) {
+  char root[] = "/tmp/cdm-category-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(root));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", root, 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  Category category = {.name = "Video"};
+  strcpy(category.extensions, "mp4");
+  char video_dir[1024];
+  int written = snprintf(video_dir, sizeof(video_dir), "%s/video", root);
+  cr_assert_geq(written, 0);
+  cr_assert_lt((size_t)written, sizeof(video_dir));
+  strcpy(category.default_dir, video_dir);
+  uint32_t category_id = 0;
+  cr_assert_eq(db_category_create(&category, &category_id), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  char requested[1024], routed[1024], explicit_path[1024];
+  written = snprintf(requested, sizeof(requested), "%s/movie.mp4", root);
+  cr_assert_geq(written, 0);
+  cr_assert_lt((size_t)written, sizeof(requested));
+  written = snprintf(routed, sizeof(routed), "%s/movie.mp4", video_dir);
+  cr_assert_geq(written, 0);
+  cr_assert_lt((size_t)written, sizeof(routed));
+  written = snprintf(explicit_path, sizeof(explicit_path),
+                     "%s/explicit.mp4", root);
+  cr_assert_geq(written, 0);
+  cr_assert_lt((size_t)written, sizeof(explicit_path));
+  IpcDownloadOptions automatic = {.auto_directory = true};
+  IpcAddResponse response = {0};
+  cr_assert_eq(ipc_send_add_download_v3(client,
+      "http://127.0.0.1/movie.mp4", requested, &automatic, true,
+      &response), 0);
+  cr_assert_eq(response.result, IPC_RESULT_OK);
+  uint32_t auto_id = response.id;
+  cr_assert_str_eq(queue_manager_find_by_id(auto_id)->dest_path, routed);
+  cr_assert_eq(access(routed, F_OK), 0);
+  cr_assert_eq(access(requested, F_OK), -1);
+  DbDownloadRow persisted[4] = {0};
+  int stored = db_list_all_downloads(persisted, 4);
+  cr_assert_geq(stored, 1);
+  bool found_routed = false;
+  for (int i = 0; i < stored; i++)
+    if (persisted[i].id == auto_id)
+      found_routed = strcmp(persisted[i].dest_path, routed) == 0 &&
+                     persisted[i].category_id == category_id;
+  cr_assert(found_routed);
+  IpcDownloadOptions explicit = {0};
+  cr_assert_eq(ipc_send_add_download_v3(client,
+      "http://127.0.0.1/explicit.mp4", explicit_path, &explicit, true,
+      &response), 0);
+  cr_assert_eq(response.result, IPC_RESULT_OK);
+  uint32_t explicit_id = response.id;
+  cr_assert_str_eq(queue_manager_find_by_id(explicit_id)->dest_path,
+                   explicit_path);
+  cr_assert_eq(access(explicit_path, F_OK), 0);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  queue_manager_remove(auto_id);
+  queue_manager_remove(explicit_id);
+  db_close();
+  rmdir(video_dir);
+  rmdir(root);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
+Test(ipc, queue_commands_round_trip_and_assign_download) {
+  char dir[] = "/tmp/cdm-queue-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  setenv("DOWNLOADMGR_ROOT", dir, 1);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  int subscriber = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(subscriber, 0);
+  ipc_send_subscribe(subscriber);
+  uint16_t version = 0;
+  cr_assert_eq(ipc_client_hello(subscriber, &version), 0);
+  cr_assert_geq(version, 5);
+
+  Queue first = {.priority = 10, .max_concurrent = 2};
+  snprintf(first.name, sizeof(first.name), "Background");
+  Queue second = {.priority = 20, .max_concurrent = 1};
+  snprintf(second.name, sizeof(second.name), "Urgent");
+  uint32_t first_id = 0, second_id = 0;
+  cr_assert_eq(ipc_send_queue_create(client, &first, &first_id), 0);
+  MsgHeader event = {0};
+  cr_assert_eq(ipc_read_exact(subscriber, &event, sizeof(event)), 0);
+  cr_assert_eq(event.type, MSG_STATUS_EVENT);
+  uint32_t event_id = UINT32_MAX;
+  float progress = -1.0f;
+  uint32_t status_len = 0;
+  char status[32] = {0};
+  cr_assert_eq(ipc_read_exact(subscriber, &event_id, sizeof(event_id)), 0);
+  cr_assert_eq(ipc_read_exact(subscriber, &progress, sizeof(progress)), 0);
+  cr_assert_eq(ipc_read_exact(subscriber, &status_len, sizeof(status_len)), 0);
+  cr_assert_lt(status_len, sizeof(status));
+  cr_assert_eq(ipc_read_exact(subscriber, status, status_len), 0);
+  cr_assert_eq(event_id, 0);
+  cr_assert_str_eq(status, "QUEUES_CHANGED");
+  int second_result = ipc_send_queue_create(client, &second, &second_id);
+  cr_assert_eq(second_result, 0, "second queue result=%d id=%u first=%u",
+               second_result, second_id, first_id);
+  cr_assert_neq(first_id, second_id);
+  Queue invalid = {.priority = -1};
+  snprintf(invalid.name, sizeof(invalid.name), "Invalid");
+  uint32_t invalid_id = 0;
+  cr_assert_eq(ipc_send_queue_create(client, &invalid, &invalid_id), -1);
+  cr_assert_eq(invalid_id, 0);
+  invalid.priority = 1001;
+  cr_assert_eq(ipc_send_queue_create(client, &invalid, &invalid_id), -1);
+
+  Queue rows[4] = {0};
+  int count = ipc_send_queue_list(client, rows, 4);
+  cr_assert_eq(count, 3);
+  cr_assert_eq(rows[0].id, second_id);
+  cr_assert_eq(rows[1].id, first_id);
+  cr_assert_eq(rows[2].id, 1);
+
+  first.id = first_id;
+  first.max_concurrent = 3;
+  cr_assert_eq(ipc_send_queue_update(client, &first), IPC_RESULT_OK);
+  first.priority = -1;
+  cr_assert_eq(ipc_send_queue_update(client, &first), IPC_RESULT_REJECTED);
+  first.priority = 10;
+  cr_assert_eq(ipc_send_queue_reorder(client, first_id, 30), IPC_RESULT_OK);
+  cr_assert_eq(ipc_send_queue_reorder(client, first_id, 1001),
+               IPC_RESULT_REJECTED);
+  count = ipc_send_queue_list(client, rows, 4);
+  cr_assert_eq(count, 3);
+  cr_assert_eq(rows[0].id, first_id);
+  cr_assert_eq(rows[0].max_concurrent, 3);
+
+  char dest[128];
+  snprintf(dest, sizeof(dest), "%s/item.bin", dir);
+  IpcDownloadOptions options = {.queue_id = first_id};
+  IpcAddResponse added = {0};
+  cr_assert_eq(ipc_send_add_download_v2(client, "http://127.0.0.1/item",
+                                        dest, &options, false, &added), 0);
+  cr_assert_eq(added.result, IPC_RESULT_OK);
+  uint32_t download_id = added.id;
+  Download *download = queue_manager_find_by_id(added.id);
+  cr_assert_not_null(download);
+  cr_assert_eq(download->queue_id, first_id);
+
+  IpcDownloadOptions invalid_options = {.queue_id = UINT32_MAX};
+  char invalid_dest[128];
+  snprintf(invalid_dest, sizeof(invalid_dest), "%s/invalid.bin", dir);
+  cr_assert_eq(ipc_send_add_download_v2(client, "http://127.0.0.1/invalid",
+                                        invalid_dest, &invalid_options, false,
+                                        &added), 0);
+  cr_assert_eq(added.result, IPC_RESULT_REJECTED);
+  cr_assert_eq(access(invalid_dest, F_OK), -1);
+
+  cr_assert_eq(ipc_send_queue_delete(client, 1), IPC_RESULT_REJECTED);
+  cr_assert_eq(ipc_send_queue_delete(client, first_id), IPC_RESULT_OK);
+  cr_assert_eq(download->queue_id, 1);
+  count = ipc_send_queue_list(client, rows, 4);
+  cr_assert_eq(count, 2);
+  cr_assert_eq(ipc_send_queue_delete(client, first_id), IPC_RESULT_NOT_FOUND);
+
+  ipc_client_disconnect(client);
+  ipc_client_disconnect(subscriber);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  queue_manager_remove(download_id);
+  db_close();
+  unlink(dest);
+  rmdir(dir);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
 
 Test(ipc, server_start_stop) {
   int rc = ipc_server_start();
@@ -66,13 +713,213 @@ Test(ipc, client_connect_send_receive, .disabled = true) {
   ipc_server_stop();
 }
 
-static atomic_bool browser_server_running;
-
 static int browser_server_thread(void *unused) {
   (void)unused;
   while (atomic_load(&browser_server_running))
     ipc_server_poll();
   return 0;
+}
+
+Test(ipc, list_page_covers_history_beyond_legacy_limit) {
+  char dir[] = "/tmp/cdm-page-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  setenv("DOWNLOADMGR_ROOT", dir, 1);
+  cr_assert_eq(db_init(":memory:"), 0);
+  for (uint32_t id = 1; id <= 600; id++) {
+    char path[128];
+    snprintf(path, sizeof(path), "%s/item-%u", dir, id);
+    cr_assert_eq(db_insert_download(id, "http://127.0.0.1/item", path, NULL),
+                 0);
+  }
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+
+  IpcDownloadRecord *rows = calloc(500, sizeof(*rows));
+  cr_assert_not_null(rows);
+  uint32_t total = 0;
+  int returned = ipc_send_list_page(client, 0, 500, rows, 500, &total);
+  cr_assert_eq(total, 600);
+  cr_assert_eq(returned, 500);
+  for (int i = 0; i < returned; i++)
+    cr_assert_eq(rows[i].id, (uint32_t)(600 - i));
+
+  returned = ipc_send_list_page(client, 500, 500, rows, 500, &total);
+  cr_assert_eq(total, 600);
+  cr_assert_eq(returned, 100);
+  for (int i = 0; i < returned; i++)
+    cr_assert_eq(rows[i].id, (uint32_t)(100 - i));
+
+  returned = ipc_send_list_page(client, 600, 500, rows, 500, &total);
+  cr_assert_eq(total, 600);
+  cr_assert_eq(returned, 0);
+  returned = ipc_send_list_page(client, 0, 1000, rows, 500, &total);
+  cr_assert_eq(total, 600);
+  cr_assert_eq(returned, 500);
+  cr_assert_eq(ipc_send_list_all(client, rows, 500), 200);
+
+  free(rows);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  db_close();
+  rmdir(dir);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
+Test(ipc, add_credentials_details_never_return_password) {
+  char dir[] = "/tmp/cdm-auth-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  setenv("DOWNLOADMGR_ROOT", dir, 1);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  char dest[128];
+  snprintf(dest, sizeof(dest), "%s/protected.bin", dir);
+  IpcDownloadOptions options = {.auth_user = "example-user",
+                                .auth_password = "example-secret"};
+  uint32_t id = ipc_send_add_download(client, "http://127.0.0.1/protected",
+                                      dest, &options);
+  cr_assert_neq(id, 0);
+  IpcDownloadDetails details = {0};
+  cr_assert_eq(ipc_send_get_details_v2(client, id, &details), 0);
+  cr_assert_str_eq(details.auth_user, "example-user");
+  cr_assert(details.has_password);
+  cr_assert_eq(ipc_send_get_details(client, id, &details), 0);
+  cr_assert_str_empty(details.auth_user);
+  cr_assert_not(details.has_password);
+  cr_assert_null(memmem(&details, sizeof(details), "example-secret",
+                       strlen("example-secret")));
+  RequestOptions stored = {0};
+  Download *download = queue_manager_find_by_id(id);
+  cr_assert_not_null(download);
+  cr_assert_not_null(download->request);
+  stored = *download->request;
+  cr_assert_str_eq(stored.auth_password, "example-secret");
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  queue_manager_remove(id);
+  db_close();
+  unlink(dest);
+  rmdir(dir);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
+Test(ipc, duplicate_v2_add_returns_existing_id_without_second_row) {
+  char dir[] = "/tmp/cdm-duplicate-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  setenv("DOWNLOADMGR_ROOT", dir, 1);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  char first[128], second[128];
+  snprintf(first, sizeof(first), "%s/first.bin", dir);
+  snprintf(second, sizeof(second), "%s/second.bin", dir);
+  IpcAddResponse result = {0};
+  cr_assert_eq(ipc_send_add_download_v2(client,
+      "HTTP://127.0.0.1:80/File?Q=One#part", first, NULL, true, &result), 0);
+  cr_assert_eq(result.result, IPC_RESULT_OK);
+  cr_assert_neq(result.id, 0);
+  uint32_t existing = result.id;
+  cr_assert_eq(ipc_send_add_download_v2(client,
+      "http://127.0.0.1/File?Q=One", second, NULL, true, &result), 0);
+  cr_assert_eq(result.result, IPC_RESULT_REJECTED);
+  cr_assert_eq(result.id, existing);
+  cr_assert_eq(db_count_downloads_total(), 1);
+  cr_assert_eq(access(second, F_OK), -1);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  queue_manager_remove(existing);
+  db_close();
+  unlink(first);
+  rmdir(dir);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
+Test(ipc, remove_download_preserves_or_deletes_file_and_rejects_active) {
+  char dir[] = "/tmp/cdm-remove-ipc-XXXXXX";
+  cr_assert_not_null(mkdtemp(dir));
+  setenv("DOWNLOADMGR_ROOT", dir, 1);
+  cr_assert_eq(db_init(":memory:"), 0);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(1500, NULL);
+  cr_assert_geq(client, 0);
+  char keep[256], remove_path[256];
+  snprintf(keep, sizeof(keep), "%s/keep.bin", dir);
+  snprintf(remove_path, sizeof(remove_path), "%s/remove.bin", dir);
+  uint32_t first = ipc_send_add_download(client, "http://127.0.0.1/keep",
+                                          keep, NULL);
+  cr_assert_neq(first, 0);
+  ipc_send_subscribe(client);
+  IpcResult result = IPC_RESULT_ERROR;
+  cr_assert_eq(ipc_send_remove_download(client, first, false, &result), 0);
+  cr_assert_eq(result, IPC_RESULT_OK);
+  MsgHeader removed_event = {0};
+  cr_assert_eq(ipc_read_exact(client, &removed_event,
+                              sizeof(removed_event)), 0);
+  cr_assert_eq(removed_event.type, MSG_STATUS_EVENT);
+  cr_assert_leq(removed_event.length, 128);
+  char event_payload[128] = {0};
+  cr_assert_eq(ipc_read_exact(client, event_payload, removed_event.length), 0);
+  uint32_t event_id = 0;
+  memcpy(&event_id, event_payload, sizeof(event_id));
+  cr_assert_eq(event_id, first);
+  cr_assert_geq(removed_event.length, 7);
+  cr_assert_eq(memcmp(event_payload + removed_event.length - 7,
+                      "REMOVED", 7), 0);
+  cr_assert_eq(access(keep, F_OK), 0);
+  cr_assert_null(queue_manager_find_by_id(first));
+  cr_assert_eq(db_count_downloads_total(), 0);
+
+  uint32_t second = ipc_send_add_download(client, "http://127.0.0.1/remove",
+                                           remove_path, NULL);
+  cr_assert_neq(second, 0);
+  cr_assert_eq(db_update_status(second, "ACTIVE"), 0);
+  queue_manager_update_status(second, DOWNLOAD_ACTIVE);
+  cr_assert_eq(ipc_send_remove_download(client, second, true, &result), 0);
+  cr_assert_eq(result, IPC_RESULT_REJECTED);
+  cr_assert_eq(access(remove_path, F_OK), 0);
+  cr_assert_eq(db_count_downloads_total(), 1);
+  queue_manager_update_status(second, DOWNLOAD_PAUSED);
+  cr_assert_eq(db_update_status(second, "PAUSED"), 0);
+  cr_assert_eq(ipc_send_remove_download(client, second, true, &result), 0);
+  cr_assert_eq(result, IPC_RESULT_OK);
+  cr_assert_eq(ipc_read_exact(client, &removed_event,
+                              sizeof(removed_event)), 0);
+  cr_assert_eq(removed_event.type, MSG_STATUS_EVENT);
+  cr_assert_leq(removed_event.length, 128);
+  cr_assert_eq(ipc_read_exact(client, event_payload, removed_event.length), 0);
+  cr_assert_eq(access(remove_path, F_OK), -1);
+  cr_assert_null(queue_manager_find_by_id(second));
+  cr_assert_eq(ipc_send_remove_download(client, second, true, &result), 0);
+  cr_assert_eq(result, IPC_RESULT_NOT_FOUND);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_server_stop();
+  db_close();
+  unlink(keep);
+  rmdir(dir);
+  unsetenv("DOWNLOADMGR_ROOT");
 }
 
 Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
@@ -87,6 +934,27 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
   int client = ipc_client_connect_timeout(1500);
   cr_assert_geq(client, 0);
+
+  uint16_t version = 0;
+  cr_assert_eq(ipc_client_hello(client, &version), 0);
+  cr_assert_eq(version, IPC_PROTOCOL_VERSION);
+  MsgHeader legacy = {.length = 0, .type = MSG_LIST};
+  cr_assert_eq(sizeof(legacy), 8);
+  cr_assert_eq(ipc_write_exact(client, &legacy, sizeof(legacy)), 0);
+  uint32_t count = UINT32_MAX;
+  cr_assert_eq(ipc_read_exact(client, &count, sizeof(count)), 0);
+  cr_assert_eq(count, 0);
+  uint16_t negotiated = 0;
+  int compatible = ipc_client_connect_compatible(-1, &negotiated);
+  cr_assert_geq(compatible, 0);
+  cr_assert_eq(negotiated, IPC_PROTOCOL_VERSION);
+  struct timeval receive_timeout;
+  socklen_t timeout_size = sizeof(receive_timeout);
+  cr_assert_eq(getsockopt(compatible, SOL_SOCKET, SO_RCVTIMEO,
+                          &receive_timeout, &timeout_size), 0);
+  cr_assert_eq(receive_timeout.tv_sec, 0);
+  cr_assert_eq(receive_timeout.tv_usec, 0);
+  ipc_client_disconnect(compatible);
 
   IpcBrowserOffer request = {0}, first = {0}, repeated = {0};
   strcpy(request.request_id, "ipc-test-offer-1");
@@ -109,6 +977,24 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   cr_assert_eq(ipc_browser_confirm(client, first.offer_id, dest,
                                    &second_id), 0);
   cr_assert_eq(second_id, download_id);
+  IpcBrowserOffer duplicate_request = {0}, duplicate_offer = {0};
+  strcpy(duplicate_request.request_id, "ipc-test-offer-duplicate");
+  strcpy(duplicate_request.url, "https://EXAMPLE.org:443/archive.tar.zst#x");
+  strcpy(duplicate_request.filename, "duplicate.tar.zst");
+  cr_assert_eq(ipc_browser_offer(client, &duplicate_request,
+                                 &duplicate_offer), 0);
+  char duplicate_dest[1024];
+  snprintf(duplicate_dest, sizeof(duplicate_dest), "%s/duplicate.tar.zst",
+           dir);
+  IpcAddResponse duplicate_result = {0};
+  cr_assert_eq(ipc_browser_confirm_v2(client, duplicate_offer.offer_id,
+                                      duplicate_dest, &duplicate_result), 0);
+  cr_assert_eq(duplicate_result.result, IPC_RESULT_REJECTED);
+  cr_assert_eq(duplicate_result.id, download_id);
+  cr_assert_eq(ipc_browser_confirm_v2(client, duplicate_offer.offer_id,
+                                      duplicate_dest, &duplicate_result), 0);
+  cr_assert_eq(duplicate_result.result, IPC_RESULT_REJECTED);
+  cr_assert_eq(db_count_downloads_total(), 1);
   cr_assert_eq(queue_manager_count_by_status(DOWNLOAD_QUEUED), 1);
   cr_assert_neq(ipc_browser_dismiss(client, first.offer_id), 0);
 
@@ -127,6 +1013,111 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   cr_assert_eq(ipc_read_exact(client, &event, sizeof(event)), 0);
   cr_assert_eq(event.download_id, download_id);
 
+  int v2_client = ipc_client_connect_compatible(1500, NULL);
+  cr_assert_geq(v2_client, 0);
+  cr_assert_eq(ipc_send_subscribe_v2(v2_client), 0);
+  MsgHeader barrier = {.length = 0, .type = MSG_LIST};
+  uint32_t ignored_count = 0;
+  cr_assert_eq(ipc_write_exact(v2_client, &barrier, sizeof(barrier)), 0);
+  cr_assert_eq(ipc_read_exact(v2_client, &ignored_count,
+                              sizeof(ignored_count)), 0);
+  int legacy_client = ipc_client_connect_timeout(1500);
+  cr_assert_geq(legacy_client, 0);
+  ipc_send_subscribe(legacy_client);
+  cr_assert_eq(ipc_write_exact(legacy_client, &barrier, sizeof(barrier)), 0);
+  cr_assert_eq(ipc_read_exact(legacy_client, &ignored_count,
+                              sizeof(ignored_count)), 0);
+  queue_manager_update_status(download_id, DOWNLOAD_ACTIVE);
+  Download *active = queue_manager_find_by_id(download_id);
+  cr_assert_not_null(active);
+  dm_mutex_t *queue_mutex = (dm_mutex_t *)queue_manager_get_mutex();
+  dm_mutex_lock(queue_mutex);
+  active->total_size = 10000;
+  atomic_store(&active->bytes_downloaded, 3000);
+  dm_mutex_unlock(queue_mutex);
+  DownloadTransferMetrics sample = {.speed_bps = 1300, .eta_seconds = 6};
+  queue_manager_set_transfer_metrics(download_id, sample);
+  ipc_broadcast_status(download_id, "Downloading", 0.3f);
+  MsgHeader v2_header = {0}, fallback_header = {0};
+  IpcProgressV2 rich = {0};
+  cr_assert_eq(ipc_read_exact(v2_client, &v2_header, sizeof(v2_header)), 0);
+  cr_assert_eq(v2_header.type, MSG_STATUS_EVENT_V2);
+  cr_assert_eq(v2_header.length, sizeof(rich));
+  cr_assert_eq(ipc_read_exact(v2_client, &rich, sizeof(rich)), 0);
+  cr_assert_eq(rich.download_id, download_id);
+  cr_assert_eq(rich.bytes_received, 3000);
+  cr_assert_eq(rich.total_bytes, 10000);
+  cr_assert_eq(rich.speed_bps, 1300);
+  cr_assert_eq(rich.eta_seconds, 6);
+  cr_assert_float_eq(rich.progress, 0.3f, 0.001f);
+  cr_assert_str_eq(rich.status, "Downloading");
+  cr_assert_eq(ipc_read_exact(v2_client, &fallback_header,
+                              sizeof(fallback_header)), 0);
+  cr_assert_eq(fallback_header.type, MSG_STATUS_EVENT);
+  char fallback[64];
+  cr_assert_leq(fallback_header.length, sizeof(fallback));
+  cr_assert_eq(ipc_read_exact(v2_client, fallback, fallback_header.length), 0);
+  ipc_client_disconnect(v2_client);
+  MsgHeader legacy_event = {0};
+  cr_assert_eq(ipc_read_exact(legacy_client, &legacy_event,
+                              sizeof(legacy_event)), 0);
+  cr_assert_eq(legacy_event.type, MSG_STATUS_EVENT);
+  cr_assert_leq(legacy_event.length, sizeof(fallback));
+  cr_assert_eq(ipc_read_exact(legacy_client, fallback, legacy_event.length), 0);
+  ipc_client_disconnect(legacy_client);
+  queue_manager_update_status(download_id, DOWNLOAD_QUEUED);
+
+  dm_mutex_lock(queue_mutex);
+  active->media_kind = DOWNLOAD_MEDIA_VIDEO;
+  dm_mutex_unlock(queue_mutex);
+  queue_manager_update_status(download_id, DOWNLOAD_ACTIVE);
+  queue_manager_set_transfer_metrics(download_id, sample);
+  atomic_store(&active->finishing, true);
+  int finishing_client = ipc_client_connect_compatible(1500, NULL);
+  cr_assert_geq(finishing_client, 0);
+  IpcBrowserProgress finishing = {0};
+  cr_assert_eq(ipc_browser_subscribe_progress(finishing_client, download_id,
+                                              &finishing), 0);
+  cr_assert_str_eq(finishing.status, "FINISHING");
+  cr_assert_eq(finishing.bytes_received, 3000);
+  ipc_client_disconnect(finishing_client);
+  atomic_store(&active->finishing, false);
+  queue_manager_update_status(download_id, DOWNLOAD_QUEUED);
+
+  int popup_client = ipc_client_connect_compatible(1500, NULL);
+  cr_assert_geq(popup_client, 0);
+  IpcBrowserProgress popup_initial = {0};
+  cr_assert_eq(ipc_browser_subscribe_progress(popup_client, download_id,
+                                              &popup_initial), 0);
+  cr_assert_eq(popup_initial.bytes_received, 3000);
+  cr_assert_float_eq(popup_initial.progress, 0.3f, 0.0001f);
+  cr_assert_eq(ipc_send_subscribe_v2(popup_client), 0);
+  cr_assert_eq(ipc_write_exact(popup_client, &barrier, sizeof(barrier)), 0);
+  cr_assert_eq(ipc_read_exact(popup_client, &ignored_count,
+                              sizeof(ignored_count)), 0);
+  ipc_broadcast_status(download_id, "Paused", 0.3f);
+  MsgHeader popup_v2_header = {0};
+  cr_assert_eq(ipc_read_exact(popup_client, &popup_v2_header,
+                              sizeof(popup_v2_header)), 0);
+  cr_assert_eq(popup_v2_header.type, MSG_STATUS_EVENT_V2);
+  cr_assert_eq(popup_v2_header.length, sizeof(IpcProgressV2));
+  cr_assert_eq(ipc_read_exact(popup_client, &rich, sizeof(rich)), 0);
+  cr_assert_eq(rich.speed_bps, 0);
+  cr_assert_eq(rich.eta_seconds, UINT64_MAX);
+  MsgHeader popup_browser_header = {0};
+  cr_assert_eq(ipc_read_exact(popup_client, &popup_browser_header,
+                              sizeof(popup_browser_header)), 0);
+  cr_assert_eq(popup_browser_header.type, MSG_BROWSER_PROGRESS_EVENT);
+  cr_assert_eq(ipc_read_exact(popup_client, &event, sizeof(event)), 0);
+  ipc_client_disconnect(popup_client);
+  for (int pending = 0; pending < 2; pending++) {
+    MsgHeader pending_header = {0};
+    cr_assert_eq(ipc_read_exact(client, &pending_header,
+                                sizeof(pending_header)), 0);
+    cr_assert_eq(pending_header.type, MSG_BROWSER_PROGRESS_EVENT);
+    cr_assert_eq(ipc_read_exact(client, &event, sizeof(event)), 0);
+  }
+
   strcpy(request.request_id, "ipc-test-offer-2");
   IpcBrowserOffer dismissed = {0};
   cr_assert_eq(ipc_browser_offer(client, &request, &dismissed), 0);
@@ -140,6 +1131,17 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   strcpy(invalid.url, "file:///etc/passwd");
   cr_assert_neq(ipc_browser_offer(client, &invalid, &ignored), 0);
   cr_assert_eq(queue_manager_count_by_status(DOWNLOAD_QUEUED), 1);
+
+  queue_manager_set_site_error(download_id, "synthetic transfer failure");
+  queue_manager_update_status(download_id, DOWNLOAD_ERROR);
+  int failure_client = ipc_client_connect_compatible(1500, NULL);
+  cr_assert_geq(failure_client, 0);
+  IpcBrowserProgress failure = {0};
+  cr_assert_eq(ipc_browser_subscribe_progress(failure_client, download_id,
+                                              &failure), 0);
+  cr_assert_str_eq(failure.status, "ERROR");
+  cr_assert_str_eq(failure.error, "synthetic transfer failure");
+  ipc_client_disconnect(failure_client);
 
   int oversized = ipc_client_connect_timeout(1500);
   cr_assert_geq(oversized, 0);
@@ -158,4 +1160,99 @@ Test(ipc, browser_offer_confirm_is_idempotent_and_dismiss_blocks_queueing) {
   db_close();
   rmdir(dir);
   unsetenv("DOWNLOADMGR_ROOT");
+}
+
+Test(ipc, refresh_url_refuses_active_and_missing_context_without_desync) {
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", "/tmp", 1), 0);
+  uint32_t id = queue_manager_add("https://example.invalid/refresh",
+                                  "/tmp/cdm-refresh-ipc-fixture", NULL);
+  cr_assert_neq(id, 0);
+  queue_manager_update_status(id, DOWNLOAD_ACTIVE);
+  cr_assert_eq(ipc_server_start(), 0);
+  atomic_store(&browser_server_running, true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server, browser_server_thread, NULL), thrd_success);
+  int client = ipc_client_connect_compatible(-1, NULL);
+  cr_assert_geq(client, 0);
+  uint32_t ids[] = {id, UINT32_MAX, id};
+  uint8_t expected[] = {IPC_RESULT_REJECTED, IPC_RESULT_NOT_FOUND,
+                         IPC_RESULT_REJECTED};
+  for (int i = 0; i < 3; i++) {
+    if (i == 2) {
+      queue_manager_update_status(id, DOWNLOAD_PAUSED);
+      Download *d = queue_manager_find_by_id(id);
+      d->requires_browser_context = true;
+    }
+    MsgHeader header = {.type = MSG_REFRESH_URL, .length = sizeof(id)};
+    cr_assert_eq(ipc_write_exact(client, &header, sizeof(header)), 0);
+    cr_assert_eq(ipc_write_exact(client, &ids[i], sizeof(id)), 0);
+    uint8_t result = IPC_RESULT_ERROR;
+    cr_assert_eq(ipc_read_exact(client, &result, sizeof(result)), 0);
+    cr_assert_eq(result, expected[i]);
+  }
+  atomic_store(&browser_server_running, false);
+  thrd_join(server, NULL);
+  ipc_client_disconnect(client);
+  queue_manager_remove(id);
+  unsetenv("DOWNLOADMGR_ROOT");
+}
+
+Test(ipc, dash_confirmation_persists_media_kind) {
+ char directory[]="/tmp/cdm-dash-ipc-XXXXXX";cr_assert_not_null(mkdtemp(directory));
+ cr_assert_eq(setenv("DOWNLOADMGR_ROOT",directory,1),0);cr_assert_eq(db_init(":memory:"),0);cr_assert_eq(ipc_server_start(),0);
+ atomic_store(&browser_server_running,true);thrd_t server;cr_assert_eq(thrd_create(&server,browser_server_thread,NULL),thrd_success);
+ int client=ipc_client_connect_compatible(-1,NULL);cr_assert_geq(client,0);
+ const char json[]="{\"request_id\":\"dash-confirm\",\"url\":\"https://example.invalid/main.mpd\",\"kind\":\"dash\"}";
+ MsgHeader header={.length=sizeof(json)-1,.type=MSG_BROWSER_OFFER_V2};cr_assert_eq(ipc_write_exact(client,&header,sizeof(header)),0);cr_assert_eq(ipc_write_exact(client,json,header.length),0);
+ IpcBrowserOffer offer={0};cr_assert_eq(ipc_read_exact(client,&offer,sizeof(offer)),0);
+ char path[256];int n=snprintf(path,sizeof(path),"%s/output.mp4",directory);cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(path));
+ IpcAddResponse response={0};cr_assert_eq(ipc_browser_confirm_v2(client,offer.offer_id,path,&response),0);
+ Download *d=queue_manager_find_by_id(response.id);cr_assert_not_null(d);cr_assert_eq(d->media_kind,DOWNLOAD_MEDIA_DASH);
+ queue_manager_remove(response.id);cr_assert_eq(db_restore_queue(),0);d=queue_manager_find_by_id(response.id);cr_assert_not_null(d);cr_assert_eq(d->media_kind,DOWNLOAD_MEDIA_DASH);queue_manager_remove(response.id);
+ ipc_client_disconnect(client);atomic_store(&browser_server_running,false);thrd_join(server,NULL);ipc_server_stop();db_close();unlink(path);unsetenv("DOWNLOADMGR_ROOT");rmdir(directory);
+}
+
+Test(ipc, retired_site_messages_are_rejected) {
+  char root[]="/tmp/cdm-retired-site-XXXXXX";
+  cr_assert_not_null(mkdtemp(root));
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT",root,1),0);
+  cr_assert_eq(db_init(":memory:"),0);
+  cr_assert_eq(ipc_server_start(),0);
+  atomic_store(&browser_server_running,true);
+  thrd_t server;
+  cr_assert_eq(thrd_create(&server,browser_server_thread,NULL),thrd_success);
+  int client=ipc_client_connect_compatible(-1,NULL);
+  cr_assert_geq(client,0);
+  const char json[]="{\"request_id\":\"legacy-site\",\"url\":\"https://example.invalid/watch\"}";
+  MsgHeader header={.length=sizeof(json)-1,.type=MSG_BROWSER_OFFER_V2};
+  cr_assert_eq(ipc_write_exact(client,&header,sizeof(header)),0);
+  cr_assert_eq(ipc_write_exact(client,json,header.length),0);
+  IpcBrowserOffer offer={0};
+  cr_assert_eq(ipc_read_exact(client,&offer,sizeof(offer)),0);
+  bool eligible=true;
+  cr_assert_eq(ipc_browser_site_capability_v1(client,offer.offer_id,&eligible),0);
+  cr_assert_not(eligible);
+  char destination[256];
+  int n=snprintf(destination,sizeof(destination),"%s/output.mp4",root);
+  cr_assert_gt(n,0);cr_assert_lt((size_t)n,sizeof(destination));
+  IpcAddResponse response={0};
+  cr_assert_eq(ipc_browser_confirm_site_v1(client,offer.offer_id,destination,&response),-1);
+  cr_assert_eq(response.result,IPC_RESULT_ERROR);
+  cr_assert_null(queue_manager_find_by_id(response.id));
+  IpcBrowserSiteFormatV1 info={0};
+  cr_assert_eq(ipc_browser_site_format_info_v1(client,offer.offer_id,&info),0);
+  cr_assert_eq(info.id[0],0);
+  cr_assert_eq(info.has_audio,0);
+  MsgHeader legacy={.length=sizeof(json)-1,.type=MSG_BROWSER_OFFER_FORMAT_V1};
+  cr_assert_eq(ipc_write_exact(client,&legacy,sizeof(legacy)),0);
+  cr_assert_eq(ipc_write_exact(client,json,legacy.length),0);
+  IpcBrowserOffer rejected={0};
+  cr_assert_eq(ipc_read_exact(client,&rejected,sizeof(rejected)),0);
+  cr_assert_eq(rejected.offer_id,0);
+  ipc_client_disconnect(client);
+  atomic_store(&browser_server_running,false);
+  thrd_join(server,NULL);
+  ipc_server_stop();db_close();
+  unsetenv("DOWNLOADMGR_ROOT");
+  rmdir(root);
 }

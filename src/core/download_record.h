@@ -16,7 +16,32 @@ typedef struct {
   char dest_path[1024];
   char status[16];
   float progress;
+  uint64_t total_size; // internal row field; only type 36 serializes it
+  uint32_t category_id; // internal DB row; only the versioned page serializes it
+  uint32_t media_kind; // internal; only export page v1 serializes it
+  uint32_t site_grab; // internal; only export page v1 serializes it
+  uint32_t requires_browser_context; // internal; only export page v1 serializes it
 } DownloadListRecord;
+
+/* Daemon-owned transfer sample; queue mutex protects every read/write. */
+typedef struct {
+  uint64_t sampled_bytes;
+  uint64_t sampled_at_ms; // CLOCK_MONOTONIC milliseconds; 0 = no sample
+  uint64_t speed_bps; // exponential moving average, alpha = 0.3
+  uint64_t eta_seconds; // UINT64_MAX = unknown
+} DownloadTransferMetrics;
+
+typedef struct {
+  uint32_t id;
+  char name[128];
+  int priority;
+  int max_concurrent; // 0 = no per-queue limit
+  char schedule_start[6]; // HH:MM or empty
+  char schedule_stop[6];
+  char post_action[16];
+  char post_action_arg[512];
+  int64_t created_at; // Unix seconds
+} Queue;
 
 #ifdef __cplusplus
 }

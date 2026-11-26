@@ -1,6 +1,148 @@
+importScripts("filters.js", "youtube_probe.js", "youtube_sabr_capture.js");
 const HOST_NAME = "org.cdm.browser";
 let hostPort = null;
 const pending = new Map();
+// The service worker owns these in-memory values; suspension resets opt-in.
+const enabledOrigins = new Set();
+const observedHeaders = new Map();
+const youtubeSessions = new Map();
+let mediaCaptureEnabled = false;
+const YOUTUBE_SESSION_MS = 120000;
+const HEADER_WINDOW_MS = 10000;
+
+function originFor(url) {
+  try {
+    const parsed = new URL(url);
+    return ["http:", "https:"].includes(parsed.protocol) ? parsed.origin : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function observeYouTubePlayback(details) {
+  if (!mediaCaptureEnabled || details.incognito || details.tabId < 0) return;
+  try {
+    const initiator = new URL(details.initiator || details.originUrl ||
+                              details.documentUrl || "");
+    if (!["www.youtube.com", "m.youtube.com",
+          "www.youtube-nocookie.com"].includes(initiator.hostname) ||
+        initiator.protocol !== "https:") return;
+    const session = CdmYouTubeSabrCapture.parseRequest(details);
+    if (!session) return;
+    if (youtubeSessions.size >= 64 && !youtubeSessions.has(details.tabId))
+      youtubeSessions.delete(youtubeSessions.keys().next().value);
+    youtubeSessions.set(details.tabId, {session, at: Date.now()});
+  } catch (_) { /* Ignore other requests and malformed playback data. */ }
+}
+
+function youtubeSession(tabId) {
+  const entry = youtubeSessions.get(tabId);
+  if (!entry) return null;
+  if (Date.now() - entry.at > YOUTUBE_SESSION_MS) {
+    youtubeSessions.delete(tabId);
+    return null;
+  }
+  return entry.session;
+}
+
+function safeValue(value, limit) {
+  return typeof value === "string" && !/[\r\n\0]/.test(value) &&
+    new TextEncoder().encode(value).length <= limit ? value : "";
+}
+
+function forgetOldHeaders() {
+  const now = Date.now();
+  for (const [url, samples] of observedHeaders) {
+    const recent = samples.filter(sample => now - sample.at <= HEADER_WINDOW_MS);
+    if (recent.length) observedHeaders.set(url, recent);
+    else observedHeaders.delete(url);
+  }
+}
+
+chrome.action.setTitle({title:
+  "Click to use browser session on this site; cookies may authenticate as you"});
+chrome.action.onClicked.addListener(async tab => {
+  const origin = originFor(tab.url || "");
+  if (!origin) return;
+  const pattern = `${origin}/*`;
+  if (enabledOrigins.has(origin)) {
+    enabledOrigins.delete(origin);
+    for (const candidate of mediaCandidates.values())
+      if (originFor(candidate.url) === origin) candidate.context = {};
+    for (const url of observedHeaders)
+      if (originFor(url) === origin) observedHeaders.delete(url);
+    await chrome.permissions.remove({origins: [pattern]}).catch(() => false);
+    chrome.action.setBadgeText({text: enabledOrigins.size ? "ON" : ""});
+    chrome.action.setTitle({title:
+      enabledOrigins.size ? "Browser session on for selected sites; click to toggle"
+        : "Click to use browser session on this site; cookies may authenticate as you"});
+    return;
+  }
+  // Request inside the action-click gesture, only for the selected site.
+  const granted = await chrome.permissions.request({
+    permissions: ["cookies", "webRequest"], origins: [pattern]
+  }).catch(() => false);
+  if (!granted) return;
+  enabledOrigins.add(origin);
+  chrome.action.setBadgeText({text: "ON"});
+  chrome.action.setTitle({title: "Browser session on for this site; click to turn off"});
+});
+
+function observeSendHeaders(details) {
+  if (details.incognito) return;
+  if (!enabledOrigins.has(originFor(details.url || ""))) return;
+  forgetOldHeaders();
+  const fields = {};
+  for (const header of details.requestHeaders || []) {
+    const name = header.name.toLowerCase();
+    if (name === "user-agent") fields.user_agent = safeValue(header.value, 256);
+    if (name === "referer") fields.referer = safeValue(header.value, 2048);
+  }
+  if (!fields.user_agent && !fields.referer) return;
+  const samples = observedHeaders.get(details.url) || [];
+  samples.push({at: Date.now(), fields});
+  observedHeaders.set(details.url, samples.slice(-2));
+  if (observedHeaders.size > 128)
+    observedHeaders.delete(observedHeaders.keys().next().value);
+}
+
+async function offerContext(item, url) {
+  if (item.incognito) return {}; // No cookie-store correlation for incognito.
+  const origin = originFor(url);
+  if (!origin || !enabledOrigins.has(origin)) return {};
+  const allowed = await chrome.permissions.contains({
+    permissions: ["cookies", "webRequest"], origins: [`${origin}/*`]
+  }).catch(() => false);
+  if (!allowed || !enabledOrigins.has(origin)) return {};
+  forgetOldHeaders();
+  const samples = observedHeaders.get(url) || [];
+  observedHeaders.delete(url);
+  const fields = samples.length === 1 ? samples[0].fields : {};
+  const result = {};
+  const userAgent = safeValue(fields.user_agent, 256);
+  const referer = safeValue(fields.referer || item.referrer, 2048);
+  if (userAgent) result.user_agent = userAgent;
+  if (referer) result.referer = referer;
+  try {
+    const cookies = await chrome.cookies.getAll({url});
+    if (!enabledOrigins.has(origin)) return {};
+    const parts = [];
+    let bytes = 0;
+    for (const entry of cookies) {
+      if (!/^[A-Za-z0-9_.$-]+$/.test(entry.name) ||
+          typeof entry.value !== "string" || /[;\r\n\0]/.test(entry.value))
+        continue;
+      const part = `${entry.name}=${entry.value}`;
+      bytes += new TextEncoder().encode(part).length + (parts.length ? 2 : 0);
+      if (bytes > 4096) { parts.length = 0; break; }
+      parts.push(part);
+    }
+    if (parts.length) result.cookie = parts.join("; ");
+  } catch (_) {
+    // Revocation or browser cookie restrictions leave the offer URL-only.
+  }
+  return result;
+}
 
 function showError(message) {
   chrome.action.setBadgeBackgroundColor({color: "#a34448"});
@@ -10,8 +152,10 @@ function showError(message) {
 }
 
 function clearError() {
-  chrome.action.setBadgeText({text: ""});
-  chrome.action.setTitle({title: "Core Download Manager"});
+  chrome.action.setBadgeText({text: enabledOrigins.size ? "ON" : ""});
+  chrome.action.setTitle({title: enabledOrigins.size
+    ? "Browser session on; click on a site to toggle it"
+    : "Click to use browser session on this site; cookies may authenticate as you"});
 }
 
 function connectHost() {
@@ -21,10 +165,14 @@ function connectHost() {
     if (message.type === "error") {
       showError(message.error || "native host error");
       pending.delete(message.request_id);
+    } else if (message.type === "offer_skipped") {
+      pending.delete(message.request_id);
+      chrome.action.setBadgeText({text: "SKIP"});
+      chrome.action.setTitle({title: "cdm: left in browser (site is excluded)"});
     } else if (message.type === "offer_registered") {
       clearError();
     } else if (message.type === "offer_state") {
-      if (["complete", "dismissed", "error"].includes(message.state)) {
+      if (["complete", "dismissed", "canceled", "error"].includes(message.state)) {
         pending.delete(message.request_id);
       }
       if (message.state === "error") showError(message.error || "download failed");
@@ -45,31 +193,403 @@ function supported(item) {
   return /^https?:\/\//i.test(url) && item.state === "in_progress";
 }
 
-chrome.downloads.onCreated.addListener(item => {
-  if (!supported(item)) return;
+async function automaticAllowed(item) {
+  try {
+    const stored = await chrome.storage.sync.get(["interceptionFilters", "siteExclusions"]);
+    const sites = CdmFilters.normalizeSites(stored.siteExclusions);
+    const reason = CdmFilters.excluded(item.finalUrl || item.url, sites) ? "site is excluded"
+      : CdmFilters.reason(item, CdmFilters.normalize(stored.interceptionFilters));
+    if (!reason) return true;
+    chrome.action.setTitle({title: `cdm: left in browser (${reason})`});
+  } catch (_) {
+    chrome.action.setTitle({title: "cdm: left in browser because filters could not be loaded"});
+  }
+  chrome.action.setBadgeBackgroundColor({color: "#687785"});
+  chrome.action.setBadgeText({text: "SKIP"});
+  return false;
+}
+
+async function offerDownload(item, url, automatic = false, media = null) {
   const requestId = crypto.randomUUID();
   const filename = (item.filename || "").split(/[\\/]/).pop() || "";
-  const port = connectHost();
   pending.set(requestId, item.id);
   try {
+    const stored = await chrome.storage.sync.get("siteExclusions");
+    const sites = CdmFilters.normalizeSites(stored.siteExclusions);
+    if (automatic && CdmFilters.excluded(url, sites)) {
+      pending.delete(requestId);
+      chrome.action.setBadgeText({text: "SKIP"});
+      chrome.action.setTitle({title: "cdm: left in browser (site is excluded)"});
+      return false;
+    }
+    let context = media ? media.context : await offerContext(item, url);
+    if (media && (!enabledOrigins.has(originFor(url)) ||
+        !await chrome.permissions.contains({permissions: ["cookies", "webRequest"],
+            origins: [`${originFor(url)}/*`]}))) {
+      media.context = {};
+      context = {};
+    }
+    if (media?.youtubeSession) {
+      const userAgent = typeof navigator === "undefined" ? "" :
+        safeValue(navigator.userAgent, 256);
+      context = {...context, referer: media.pageReferrer || "",
+        ...(userAgent ? {user_agent: userAgent} : {})};
+    }
+    const port = connectHost();
+    // Configure each new native-host connection before its first offer;
+    // refreshing per offer also picks up sync edits without cached policy.
+    port.postMessage({type: "set_site_exclusions", sites});
     port.postMessage({
-      type: "download_offer",
+      type: media ? "media_offer" : "download_offer",
+      ...(media ? {kind: media.kind} : {}),
+      ...(media?.youtubeItag ? {youtube_itag: media.youtubeItag} : {}),
+      ...(media?.youtubeSession ? {
+        youtube_sabr_url: media.youtubeSession.url,
+        youtube_request: media.youtubeSession.request,
+        youtube_height: media.youtubeHeight
+      } : {}),
+      automatic,
       request_id: requestId,
-      url: item.finalUrl || item.url,
-      referrer: item.referrer || "",
+      url,
+      referrer: media?.pageReferrer || context.referer || "",
       filename,
       mime: item.mime || "",
       total_bytes: item.totalBytes > 0 ? item.totalBytes : 0,
-      browser: "chromium"
+      browser: "chromium",
+      ...context
     });
   } catch (error) {
     pending.delete(requestId);
     showError(error.message || "could not contact native host");
-    return;
+    return false;
   }
+  return true;
+}
+
+chrome.downloads.onCreated.addListener(async item => {
+  if (!supported(item) || !await automaticAllowed(item)) return;
+  if (!await offerDownload(item, item.finalUrl || item.url, true)) return;
   // MV3 observes this event after the browser starts the download.
   // Cancellation is best effort and can leave a partial browser file.
   chrome.downloads.cancel(item.id).catch(error => {
     showError(`could not cancel browser download: ${error.message}`);
   });
+});
+
+chrome.runtime.onInstalled.addListener(async () => {
+  // Callback form also works before Chrome 123's Promise support.
+  await new Promise(resolve => chrome.contextMenus.removeAll(() => {
+    if (chrome.runtime.lastError) showError("could not reset context menu");
+    resolve();
+  }));
+  const report = () => {
+    if (chrome.runtime.lastError) showError("could not create context menu");
+  };
+  chrome.contextMenus.create({id: "cdm-download-link", title: "Download link with cdm",
+    contexts: ["link"], targetUrlPatterns: ["http://*/*", "https://*/*"]}, report);
+  chrome.contextMenus.create({id: "cdm-download-page", title: "Download page with cdm",
+    contexts: ["page"], documentUrlPatterns: ["http://*/*", "https://*/*"]}, report);
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  const url = info.menuItemId === "cdm-download-link" ? info.linkUrl
+    : info.menuItemId === "cdm-download-page" ? info.pageUrl || tab?.url : "";
+  if (!originFor(url)) return;
+  await offerDownload({referrer: info.pageUrl || "", incognito: !!tab?.incognito}, url);
+});
+
+// Background/service worker is the sole owner; URLs/context never enter storage.
+// Ten-minute TTL and 64 total entries bound memory; manifests survive video churn.
+const mediaCandidates = new Map();
+function pruneMedia() {
+  for (const [key, value] of mediaCandidates)
+    if (Date.now() - value.at > 600000) mediaCandidates.delete(key);
+}
+
+async function probeYouTube(sender) {
+  if (!CdmYouTubeProbe.isYouTubePage(sender.url) ||
+      !await chrome.permissions.contains({permissions: ["webRequest"],
+        origins: ["http://*/*", "https://*/*"]})) return null;
+  const injected = await chrome.scripting.executeScript({
+    target: {tabId: sender.tab.id, frameIds: [sender.frameId]},
+    world: "MAIN", func: CdmYouTubeProbe.pageProbe
+  });
+  const result = injected?.[0]?.result;
+  // MessageSender.url can retain the original document URL after SPA navigation.
+  // pageProbe validates the current MAIN-world location against the player ID.
+  const expectedId = result?.videoId;
+  if (typeof expectedId !== "string" ||
+      !/^[A-Za-z0-9_-]{1,32}$/.test(expectedId) ||
+      !Array.isArray(result.formats)) return null;
+  const title = safeValue(result.title, 180) || "Video";
+  const formats = [];
+  for (const format of result.formats.slice(0, 16)) {
+    if (!Number.isInteger(format.itag) || format.itag < 0 ||
+        !safeValue(format.quality, 32) || format.mime !== "video/mp4" ||
+        !Number.isSafeInteger(format.totalBytes) || format.totalBytes < 0)
+      continue;
+    if (format.adaptive === true) {
+      formats.push({...format,
+        url: `https://www.youtube.com/watch?v=${expectedId}`});
+      continue;
+    }
+    if (!safeValue(format.url, 2047)) continue;
+    let endpoint;
+    try { endpoint = new URL(format.url); } catch (_) { continue; }
+    const host = endpoint.hostname;
+    if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password ||
+        (endpoint.port && endpoint.port !== "443") ||
+        host === "localhost" || host.endsWith(".localhost") ||
+        host.endsWith(".local") || host.endsWith(".internal") ||
+        /^[0-9.]+$/.test(host) || host.includes(":")) continue;
+    formats.push(format);
+  }
+  return {videoId: expectedId, title, formats};
+}
+
+function youtubeFilename(title, quality) {
+  const stem = title.replace(/[\\/\x00-\x1f\x7f]/g, "_").trim().slice(0, 120) || "Video";
+  return `${stem} ${quality}.mp4`;
+}
+async function observeMediaHeaders(details) {
+  if (details.incognito || details.tabId < 0 || details.method !== "GET" ||
+      details.statusCode < 200 || details.statusCode >= 300 ||
+      !originFor(details.url) || new TextEncoder().encode(details.url).length > 2047)
+    return;
+  const mime = safeValue((details.responseHeaders || []).find(h =>
+      h.name.toLowerCase() === "content-type")?.value || "", 127);
+  const kind = CdmFilters.mediaKind(details.url, mime);
+  if (!kind) return;
+  try {
+    const stored = await chrome.storage.sync.get(["mediaDetection", "siteExclusions"]);
+    if (stored.mediaDetection !== true) { mediaCandidates.clear(); return; }
+    if (CdmFilters.excluded(details.url, CdmFilters.normalizeSites(stored.siteExclusions)))
+      return;
+    if (!await chrome.permissions.contains({permissions: ["webRequest"],
+        origins: ["http://*/*", "https://*/*"]})) return;
+    pruneMedia();
+    const frameId = Number.isInteger(details.frameId) && details.frameId >= 0
+      ? details.frameId : 0;
+    const hasManifest = [...mediaCandidates.values()].some(value =>
+      value.tabId === details.tabId && value.frameId === frameId &&
+      (value.kind === "hls" || value.kind === "dash"));
+    if (CdmFilters.playbackFragment(details.url, kind, details.statusCode,
+                                    details.responseHeaders, hasManifest)) return;
+    const key = `${details.tabId}\n${frameId}\n${details.url}`;
+    if (mediaCandidates.has(key)) return;
+    const context = await offerContext({incognito: false}, details.url);
+    // Recheck enablement after asynchronous context capture/revocation.
+    const latest = await chrome.storage.sync.get("mediaDetection");
+    if (latest.mediaDetection !== true) { mediaCandidates.clear(); return; }
+    if (mediaCandidates.has(key)) return;
+    if (mediaCandidates.size >= 64) {
+      const video = [...mediaCandidates].find(([, entry]) => entry.kind === "video");
+      if (!video && kind === "video") return;
+      mediaCandidates.delete(video ? video[0] : mediaCandidates.keys().next().value);
+    }
+    const filename = safeValue(new URL(details.url).pathname.split("/").pop() || "", 511);
+    const totalBytes = CdmFilters.mediaSize(kind, details.statusCode, details.responseHeaders);
+    mediaCandidates.set(key, {id: crypto.randomUUID(), url: details.url, kind, mime, totalBytes,
+      filename, tabId: details.tabId, frameId, context, at: Date.now()});
+  } catch (_) {
+    // Unavailable storage/permissions fail closed; no native offer was sent.
+  }
+}
+
+// webRequest is optional; without consent the namespace may not exist at all.
+// Keep ordinary downloads registered even when header/media observation cannot.
+let headerObserverRegistered = false;
+let mediaObserverRegistered = false;
+let youtubeObserverRegistered = false;
+const MEDIA_SCRIPT_ID = "cdm-media-overlay";
+// The service worker serializes registration updates; browser scripting owns the registration.
+let mediaScriptSync = Promise.resolve();
+async function ensureMediaOverlay(tabId, tab) {
+  if (!mediaCaptureEnabled || !Number.isInteger(tabId) || tab?.incognito ||
+      !originFor(tab?.url || "")) return;
+  try {
+    const allowed = await chrome.permissions.contains({permissions: ["webRequest"],
+      origins: ["http://*/*", "https://*/*"]});
+    if (!allowed || !mediaCaptureEnabled) return;
+    await chrome.scripting.executeScript({target: {tabId, allFrames: true},
+      files: ["media_overlay.js"]});
+  } catch (_) {
+    // Restricted browser pages, closed tabs and revoked grants cannot be injected.
+  }
+}
+function queueMediaScriptSync() {
+  mediaScriptSync = mediaScriptSync.then(async () => {
+    const stored = await chrome.storage.sync.get("mediaDetection");
+    const enabled = stored.mediaDetection === true &&
+      await chrome.permissions.contains({permissions: ["webRequest"],
+        origins: ["http://*/*", "https://*/*"]});
+    mediaCaptureEnabled = enabled;
+    if (!enabled) youtubeSessions.clear();
+    const registered = await chrome.scripting.getRegisteredContentScripts({ids: [MEDIA_SCRIPT_ID]});
+    if (enabled && registered[0]?.allFrames !== true) {
+      if (registered.length)
+        await chrome.scripting.unregisterContentScripts({ids: [MEDIA_SCRIPT_ID]});
+      await chrome.scripting.registerContentScripts([{id: MEDIA_SCRIPT_ID,
+        js: ["media_overlay.js"], matches: ["http://*/*", "https://*/*"],
+        allFrames: true, runAt: "document_idle"}]);
+    } else if (!enabled && registered.length !== 0) {
+      await chrome.scripting.unregisterContentScripts({ids: [MEDIA_SCRIPT_ID]});
+    }
+    if (enabled && chrome.tabs?.query) {
+      const tabs = await chrome.tabs.query({url: ["http://*/*", "https://*/*"]});
+      await Promise.allSettled(tabs.map(tab => ensureMediaOverlay(tab.id, tab)));
+    }
+  }).catch(() => {
+    console.error("cdm: could not register the media button; check Media detection and site permissions in extension Options");
+  });
+}
+function registerOptionalObservers() {
+  const webRequest = chrome.webRequest;
+  if (!webRequest) return;
+  if (!headerObserverRegistered && webRequest.onSendHeaders) {
+    try {
+      webRequest.onSendHeaders.addListener(observeSendHeaders,
+        {urls: ["http://*/*", "https://*/*"]}, ["requestHeaders", "extraHeaders"]);
+      headerObserverRegistered = true;
+    } catch (_) { /* Retry if the optional permission is granted later. */ }
+  }
+  if (!mediaObserverRegistered && webRequest.onHeadersReceived) {
+    try {
+      webRequest.onHeadersReceived.addListener(observeMediaHeaders,
+        {urls: ["http://*/*", "https://*/*"]}, ["responseHeaders"]);
+      mediaObserverRegistered = true;
+    } catch (_) { /* Retry if the optional permission is granted later. */ }
+  }
+  if (!youtubeObserverRegistered && webRequest.onBeforeRequest) {
+    try {
+      webRequest.onBeforeRequest.addListener(observeYouTubePlayback,
+        {urls: ["https://*.googlevideo.com/videoplayback*"]},
+        ["requestBody"]);
+      youtubeObserverRegistered = true;
+    } catch (_) { /* Retry after the optional permission is granted. */ }
+  }
+}
+registerOptionalObservers();
+queueMediaScriptSync();
+chrome.permissions?.onAdded?.addListener(() => {
+  registerOptionalObservers();
+  queueMediaScriptSync();
+});
+chrome.permissions?.onRemoved?.addListener(() => {
+  mediaCandidates.clear();
+  youtubeSessions.clear();
+  mediaCaptureEnabled = false;
+  queueMediaScriptSync();
+});
+
+chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  const fromOptions = sender.url === chrome.runtime.getURL("options.html") &&
+    ["cdm_media_list", "cdm_media_offer"].includes(message?.type);
+  const fromPage = Number.isInteger(sender.tab?.id) && !sender.tab.incognito &&
+    Number.isInteger(sender.frameId) && sender.frameId >= 0 &&
+    !!originFor(sender.url) &&
+    ["cdm_media_list_tab", "cdm_media_offer_tab",
+      "cdm_youtube_formats_tab"].includes(message?.type);
+  if (!fromOptions && !fromPage) return;
+  (async () => {
+    const stored = await chrome.storage.sync.get("mediaDetection");
+    if (stored.mediaDetection !== true) {
+      mediaCandidates.clear();
+    }
+    pruneMedia();
+    if (message.type === "cdm_youtube_formats_tab") {
+      const found = stored.mediaDetection === true ? await probeYouTube(sender) : null;
+      const current = await chrome.storage.sync.get("mediaDetection");
+      if (!found || current.mediaDetection !== true ||
+          !await chrome.permissions.contains({permissions: ["webRequest"],
+            origins: ["http://*/*", "https://*/*"]})) { reply([]); return; }
+      for (const [key, value] of mediaCandidates)
+        if (value.youtube && value.tabId === sender.tab.id &&
+            value.frameId === sender.frameId &&
+            value.youtube.videoId !== found.videoId) mediaCandidates.delete(key);
+      const rows = [];
+      for (const format of found.formats) {
+        if (format.adaptive === true && !CdmYouTubeSabrCapture.select(
+              youtubeSession(sender.tab.id), format.itag, format)) continue;
+        const filename = youtubeFilename(found.title, format.quality);
+        const key = `youtube\n${sender.tab.id}\n${sender.frameId}\n${found.videoId}\n${format.itag}`;
+        if (!mediaCandidates.has(key) && mediaCandidates.size >= 64)
+          mediaCandidates.delete(mediaCandidates.keys().next().value);
+        const id = mediaCandidates.get(key)?.id || crypto.randomUUID();
+        mediaCandidates.set(key, {id, url: format.url, kind: "video",
+          mime: format.mime, filename, totalBytes: format.totalBytes,
+          quality: format.quality, tabId: sender.tab.id, frameId: sender.frameId,
+          context: {}, pageReferrer: sender.url,
+          youtube: {videoId: found.videoId, itag: format.itag,
+            adaptive: format.adaptive === true},
+          youtubeItag: format.adaptive === true ? format.itag : 0,
+          at: Date.now()});
+        rows.push({id, kind: "video", filename, quality: format.quality,
+          totalBytes: format.totalBytes});
+      }
+      reply(rows);
+      return;
+    }
+    if (message.type === "cdm_media_list" || message.type === "cdm_media_list_tab") {
+      reply([...mediaCandidates.values()].filter(value =>
+        !value.youtube && (fromOptions || (value.tabId === sender.tab.id &&
+          value.frameId === sender.frameId))).map(({id, url, kind, mime, filename, tabId, totalBytes}) =>
+        fromOptions ? {id, url, kind, mime, filename, tabId} : {id, kind, mime, filename, totalBytes}));
+      return;
+    }
+    const selected = [...mediaCandidates].find(([, value]) => value.id === message.id &&
+      (!value.youtube || !fromOptions) &&
+      (fromOptions || (value.tabId === sender.tab.id &&
+        value.frameId === sender.frameId)));
+    if (!selected) { reply({ok: false}); return; }
+    const [key, candidate] = selected;
+    if (!await chrome.permissions.contains({permissions: ["webRequest"],
+        origins: ["http://*/*", "https://*/*"]})) { reply({ok: false}); return; }
+    if (candidate.youtube) {
+      const fresh = await probeYouTube(sender);
+      const format = fresh?.videoId === candidate.youtube.videoId &&
+        fresh.formats.find(item => item.itag === candidate.youtube.itag &&
+          (item.adaptive === true) === candidate.youtube.adaptive);
+      const current = await chrome.storage.sync.get("mediaDetection");
+      if (!format || current.mediaDetection !== true ||
+          !await chrome.permissions.contains({permissions: ["webRequest"],
+            origins: ["http://*/*", "https://*/*"]})) {
+        reply({ok: false}); return;
+      }
+      candidate.url = format.url;
+      candidate.totalBytes = format.totalBytes;
+      candidate.youtubeItag = format.adaptive === true ? format.itag : 0;
+      if (format.adaptive === true) {
+        candidate.youtubeSession = CdmYouTubeSabrCapture.select(
+          youtubeSession(sender.tab.id), format.itag, format);
+        candidate.youtubeHeight = parseInt(format.quality, 10);
+        if (!candidate.youtubeSession ||
+            !Number.isInteger(candidate.youtubeHeight) ||
+            candidate.youtubeHeight < 1 || candidate.youtubeHeight > 4320) {
+          reply({ok: false}); return;
+        }
+      }
+    }
+    const ok = await offerDownload(candidate, candidate.url, false, candidate);
+    if (ok) mediaCandidates.delete(key);
+    reply({ok});
+  })().catch(() => reply(message.type === "cdm_media_list" ||
+    message.type === "cdm_media_list_tab" ||
+    message.type === "cdm_youtube_formats_tab" ? [] : {ok: false}));
+  return true; // Callback reply works in Firefox and older Chrome releases.
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "sync" && changes.mediaDetection && changes.mediaDetection.newValue !== true) {
+    mediaCandidates.clear();
+    youtubeSessions.clear();
+    mediaCaptureEnabled = false;
+  }
+  if (area === "sync" && changes.mediaDetection) queueMediaScriptSync();
+});
+chrome.tabs?.onRemoved?.addListener(tabId => youtubeSessions.delete(tabId));
+
+chrome.tabs?.onUpdated?.addListener((tabId, change, tab) => {
+  if (change.url) youtubeSessions.delete(tabId);
+  if (change.status === "complete") ensureMediaOverlay(tabId, tab);
 });

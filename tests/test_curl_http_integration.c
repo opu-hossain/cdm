@@ -1,5 +1,7 @@
 #include "../src/platform/curl_client.h"
+#include "../src/persistence/db.h"
 #include "../src/platform/thread.h"
+#include "../src/utils/config.h"
 #include <criterion/criterion.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
@@ -57,9 +59,40 @@ static void setup_server(void) {
       dup2(null_fd, STDERR_FILENO);
       close(null_fd);
     }
-    execlp("python3", "python3", "-m", "http.server", "--bind",
-           "127.0.0.1", "--directory", server_root,
-          port_text, (char *)NULL);
+    static const char script[] =
+        "import http.server,sys\n"
+        "class H(http.server.BaseHTTPRequestHandler):\n"
+        " def log_message(self,*args): pass\n"
+        " def do_HEAD(self):\n"
+        "  if self.path=='/redirect':\n"
+        "   if self.headers.get('X-CDM-Refresh')!='fixture': self.send_error(403); return\n"
+        "   self.send_response(302); self.send_header('Location','/file.bin'); self.end_headers(); return\n"
+        "  if self.path in ('/head-405','/range-ignored'):\n"
+        "   self.send_error(405); return\n"
+        "  if self.path!='/file.bin': self.send_error(404); return\n"
+        "  self.send_response(200)\n"
+        "  self.send_header('Content-Length','12')\n"
+        "  self.send_header('Content-Disposition','attachment; filename=server.txt')\n"
+        "  self.send_header('ETag','\"version-1\"')\n"
+        "  self.send_header('Last-Modified','Wed, 21 Oct 2015 07:28:00 GMT')\n"
+        "  self.end_headers()\n"
+        " def do_GET(self):\n"
+        "  if self.path not in ('/head-405','/range-ignored'):\n"
+        "   self.send_error(404); return\n"
+        "  if self.path=='/head-405' and self.headers.get('Range')=='bytes=0-0':\n"
+        "   self.send_response(206)\n"
+        "   self.send_header('Content-Range','bytes 0-0/12')\n"
+        "   self.send_header('Accept-Ranges','bytes')\n"
+        "   body=b't'\n"
+        "  else:\n"
+        "   self.send_response(200)\n"
+        "   body=b'test payload'\n"
+        "  self.send_header('Content-Length',str(len(body)))\n"
+        "  self.send_header('Content-Disposition','attachment; filename=range.txt')\n"
+        "  self.end_headers()\n"
+        "  self.wfile.write(body)\n"
+        "http.server.ThreadingHTTPServer(('127.0.0.1',int(sys.argv[1])),H).serve_forever()\n";
+    execlp("python3", "python3", "-c", script, port_text, (char *)NULL);
     _exit(127);
   }
 
@@ -97,6 +130,10 @@ Test(curl_http, head_reads_local_file) {
 
   cr_assert_eq(curl_client_head(url, &context, &info), 0);
   cr_assert_eq(info.total_size, 12);
+  cr_assert_str_eq(info.content_disposition,
+                   "attachment; filename=server.txt");
+  cr_assert_str_eq(info.etag, "\"version-1\"");
+  cr_assert_str_eq(info.last_modified, "Wed, 21 Oct 2015 07:28:00 GMT");
 }
 
 Test(curl_http, head_rejects_http_errors) {
@@ -106,4 +143,145 @@ Test(curl_http, head_rejects_http_errors) {
   RequestContext context = {0};
 
   cr_assert_eq(curl_client_head(url, &context, &info), -1);
+}
+
+Test(curl_http, head_405_falls_back_to_get_range) {
+  char url[128];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/head-405", server_port);
+  FileInfo info = {0};
+
+  cr_assert_eq(curl_client_head(url, NULL, &info), 0);
+  cr_assert_eq(info.total_size, 12);
+  cr_assert(info.supports_ranges);
+  cr_assert_str_eq(info.content_disposition,
+                   "attachment; filename=range.txt");
+}
+
+Test(curl_http, ignored_range_uses_full_get_length) {
+  char url[128];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/range-ignored", server_port);
+  FileInfo info = {0};
+
+  cr_assert_eq(curl_client_head(url, NULL, &info), 0);
+  cr_assert_eq(info.total_size, 12);
+  cr_assert(!info.supports_ranges);
+}
+
+Test(curl_http, socks5_proxy_resolves_target_hostname) {
+  int port = reserve_port();
+  pid_t proxy_pid = fork();
+  cr_assert_neq(proxy_pid, -1);
+  if (proxy_pid == 0) {
+    static const char script[] =
+        "import socket,sys\n"
+        "def take(c,n):\n"
+        " b=b''\n"
+        " while len(b)<n:\n"
+        "  p=c.recv(n-len(b))\n"
+        "  if not p: raise RuntimeError('closed')\n"
+        "  b+=p\n"
+        " return b\n"
+        "s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)\n"
+        "s.bind(('127.0.0.1',int(sys.argv[1]))); s.listen(4)\n"
+        "while True:\n"
+        " c,_=s.accept()\n"
+        " try:\n"
+        "  version,count=take(c,2)\n"
+        "  methods=take(c,count)\n"
+        "  if version!=5 or 0 not in methods: raise RuntimeError('greeting')\n"
+        "  c.sendall(b'\\x05\\x00')\n"
+        "  head=take(c,4)\n"
+        "  if head!=b'\\x05\\x01\\x00\\x03': raise RuntimeError('not remote DNS')\n"
+        "  length=take(c,1)[0]; host=take(c,length); take(c,2)\n"
+        "  if host!=b'proxy-target.invalid': raise RuntimeError('wrong host')\n"
+        "  c.sendall(b'\\x05\\x00\\x00\\x01\\x7f\\x00\\x00\\x01\\x00\\x00')\n"
+        "  request=c.recv(4096)\n"
+        "  if not request.startswith(b'HEAD /file HTTP/1.1'):\n"
+        "   raise RuntimeError('wrong request')\n"
+        "  c.sendall(b'HTTP/1.1 200 OK\\r\\nContent-Length: 7\\r\\nConnection: close\\r\\n\\r\\n')\n"
+        " except Exception: pass\n"
+        " finally: c.close()\n";
+    char port_text[16];
+    snprintf(port_text, sizeof(port_text), "%d", port);
+    execlp("python3", "python3", "-c", script, port_text, (char *)NULL);
+    _exit(127);
+  }
+
+  char config_path[160];
+  snprintf(config_path, sizeof(config_path), "/tmp/cdm-socks-%ld.toml",
+           (long)getpid());
+  FILE *config = fopen(config_path, "w");
+  cr_assert_not_null(config);
+  cr_assert(fprintf(config,
+                    "[proxy]\nmode = 2\nurl = \"socks5h://127.0.0.1:%d\"\n",
+                    port) > 0);
+  cr_assert_eq(fclose(config), 0);
+  config_init(config_path);
+  unlink(config_path);
+  FileInfo info = {0};
+  int result = -1;
+  for (int i = 0; i < 50; i++) {
+    result = curl_client_head("http://proxy-target.invalid/file", NULL,
+                              &info);
+    if (result == 0)
+      break;
+    dm_thread_sleep_ms(20);
+  }
+  cr_assert_eq(result, 0);
+  cr_assert_eq(info.total_size, 7);
+  config_init("/tmp/cdm-socks-no-config.toml");
+  kill(proxy_pid, SIGTERM);
+  waitpid(proxy_pid, NULL, 0);
+}
+
+Test(curl_http, refresh_resolves_redirect_atomically) {
+  cr_assert_eq(setenv("DOWNLOADMGR_ROOT", "/tmp", 1), 0);
+  cr_assert_eq(db_init(":memory:"), 0);
+  char url[128], expected[128];
+  int n = snprintf(url, sizeof(url), "http://127.0.0.1:%d/redirect", server_port);
+  cr_assert(n > 0 && (size_t)n < sizeof(url));
+  n = snprintf(expected, sizeof(expected), "http://127.0.0.1:%d/file.bin", server_port);
+  cr_assert(n > 0 && (size_t)n < sizeof(expected));
+  RequestOptions options = {0};
+  strcpy(options.extra_headers, "X-CDM-Refresh: fixture");
+  uint32_t id = queue_manager_add(url, "/tmp/cdm-refresh-fixture", &options);
+  cr_assert_neq(id, 0);
+  cr_assert_eq(db_insert_download(id, url, "/tmp/cdm-refresh-fixture", &options), 0);
+  queue_manager_update_status(id, DOWNLOAD_PAUSED);
+  cr_assert_eq(queue_manager_refresh_url(id), IPC_RESULT_OK);
+  Download *d = queue_manager_find_by_id(id);
+  cr_assert_str_eq(d->url, expected);
+  cr_assert_eq(d->total_size, 12);
+  cr_assert_str_eq(d->etag, "\"version-1\"");
+  cr_assert_str_eq(d->last_modified, "Wed, 21 Oct 2015 07:28:00 GMT");
+  DbDownloadRow details = {0};
+  cr_assert_eq(db_list_all_downloads(&details, 1), 1);
+  cr_assert_str_eq(details.url, expected);
+  cr_assert_eq(details.total_size, 12);
+  strcpy(d->etag, "\"old-content\"");
+  d->chunk_count = 1;
+  cr_assert_eq(queue_manager_refresh_url(id), IPC_RESULT_REJECTED);
+  cr_assert_str_eq(d->etag, "\"old-content\"");
+  d->chunk_count = 0;
+  strcpy(d->etag, "\"version-1\"");
+  queue_manager_update_status(id, DOWNLOAD_ACTIVE);
+  cr_assert_eq(queue_manager_refresh_url(id), IPC_RESULT_REJECTED);
+  queue_manager_update_status(id, DOWNLOAD_PAUSED);
+  char missing[128];
+  n = snprintf(missing, sizeof(missing), "http://127.0.0.1:%d/missing", server_port);
+  cr_assert(n > 0 && (size_t)n < sizeof(missing));
+  strcpy(d->url, missing);
+  cr_assert_eq(queue_manager_refresh_url(id), IPC_RESULT_ERROR);
+  cr_assert_str_eq(d->url, missing);
+  cr_assert_eq(d->total_size, 12);
+  cr_assert_eq(db_list_all_downloads(&details, 1), 1);
+  cr_assert_str_eq(details.url, expected);
+  cr_assert_eq(queue_manager_refresh_url(UINT32_MAX), IPC_RESULT_NOT_FOUND);
+  strcpy(d->url, url);
+  db_close();
+  cr_assert_eq(queue_manager_refresh_url(id), IPC_RESULT_ERROR);
+  cr_assert_str_eq(d->url, url);
+  cr_assert_eq(d->total_size, 12);
+  queue_manager_remove(id);
+  unsetenv("DOWNLOADMGR_ROOT");
 }

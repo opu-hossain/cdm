@@ -9,6 +9,7 @@
 #include "../platform/ipc_socket.h" // for IpcDownloadDetails
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -26,6 +27,35 @@ typedef struct {
 /* Lightweight list row; request details are fetched on demand. */
 typedef DownloadListRecord DbDownloadRow;
 
+/* Validated JSON import fields; strings are borrowed until the call returns. */
+typedef struct {
+  uint32_t id;
+  const char *url, *dest_path, *status;
+  const char *cookie, *referrer, *extra_headers, *auth_user;
+  uint64_t total_size;
+  uint32_t media_kind; // 0 ordinary, 1 HLS, 2 DASH, 3 video
+  bool site_grab;
+  bool requires_browser_context;
+} DbImportRow;
+
+/* The daemon owns this operation. 0 success, -2 active jobs, -1 DB/backup
+ * failure. Merge keeps existing IDs; replace creates a SQLite backup first. */
+int db_import_history(const DbImportRow *rows, size_t count, bool replace);
+
+typedef struct Category {
+  uint32_t id;
+  char name[128];
+  char extensions[512]; // comma-separated lowercase tokens without dots
+  char default_dir[1024]; // empty = use configured download directory
+  int64_t created_at; // Unix seconds
+} Category;
+
+/* Category storage. Caller frees *out from db_category_list. */
+int db_category_list(Category **out, size_t *count);
+int db_category_create(const Category *category, uint32_t *out_id);
+int db_category_update(const Category *category);
+int db_category_delete(uint32_t id); // Default (id 1) cannot be deleted
+
 typedef int (*DbDownloadVisitor)(const DbDownloadRow *row, void *ctx);
 
 /* Database lifecycle. */
@@ -40,9 +70,26 @@ int db_insert_download(uint32_t id, const char *url, const char *dest_path,
 int db_insert_reserved_download(uint32_t id, const char *url,
                                 const char *dest_path,
                                 const RequestOptions *opts);
+int db_insert_reserved_download_auto(uint32_t id, const char *url,
+                                     const char *dest_path,
+                                     const RequestOptions *opts);
+/* 0 = deleted, 1 = ACTIVE (refused), 2 = not found, -1 = database error.
+ * File deletion happens after the database transaction commits. */
+int db_delete_download(uint32_t id, int delete_file);
+int db_complete_media_outputs(uint32_t id, const char *path, const char *companion, uint64_t size);
+int db_get_companion_path(uint32_t id, char *out, size_t out_size);
+int db_update_output_paths(uint32_t id, const char *path, const char *companion);
+int db_update_site_error(uint32_t id, const char *redacted_error);
+int db_update_media_output(uint32_t id, const char *path, uint64_t size);
+int db_update_resolved_destination(uint32_t id, const char *dest_path);
 bool db_destination_exists(const char *dest_path);
 int db_update_status(uint32_t id, const char *status);
 int db_update_total_size(uint32_t id, uint64_t total_size);
+/* One SQL statement; failure leaves all metadata unchanged. */
+int db_refresh_download(uint32_t id, const char *url, uint64_t total_size,
+                         const char *etag, const char *last_modified);
+int db_update_validators(uint32_t id, const char *etag,
+                         const char *last_modified);
 
 /* Chunk persistence for resume support. */
 
@@ -59,8 +106,15 @@ int db_delete_chunks(uint32_t download_id);
 int db_load_chunks(uint32_t download_id, DbChunkRow *out, int max);
 int db_list_all_downloads(DbDownloadRow *out, int max);
 int db_count_downloads(int max);
+int64_t db_count_downloads_total(void);
 int db_visit_downloads(DbDownloadVisitor visitor, void *ctx, int max);
+int db_visit_downloads_page(DbDownloadVisitor visitor, void *ctx,
+                            uint32_t offset, uint32_t limit);
 uint32_t db_get_max_id(void);
+
+/* normalized is a url_normalize() result. Returns 1 if a queued, active or
+ * paused row matches, 0 if absent, -1 on query error. */
+int db_find_active_by_url(const char *normalized, uint32_t *out_id);
 
 /** Single-row fetch of the heavy request-options fields for one download.
     Returns 0 on success (found), -1 if not found or on error. */
@@ -68,6 +122,10 @@ int db_get_download_details(uint32_t id, IpcDownloadDetails *out);
 
 /** Restore interrupted downloads from the database into memory. */
 int db_restore_queue(void);
+int db_set_schedule_paused(uint32_t id, bool paused);
+int db_resume_scheduled_download(uint32_t id);
+/* 1 once after a five-second all-DONE interval, 0 otherwise, -1 on error. */
+int db_queue_post_action_due(uint32_t queue_id, int64_t now_seconds);
 
 #ifdef __cplusplus
 }

@@ -4,7 +4,10 @@
 #ifndef CORE_QUEUE_MANAGER_H
 #define CORE_QUEUE_MANAGER_H
 
+#include "download_record.h"
+
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
@@ -13,15 +16,38 @@
 extern "C" {
 #endif
 
-#define QM_MAX_CHUNKS 8 // keep in sync with segmenter.h's MAX_WORKERS
+#define QM_MAX_CHUNKS 16 // keep in sync with segmenter.h's MAX_WORKERS
+
+typedef struct Category Category;
+/* Chooses a stored category by extension; unknown names use Default. */
+bool category_for_filename(const char *name, Category *out);
+
+/* Internal engine selector; persisted independently of request credentials. */
+typedef enum {
+  DOWNLOAD_MEDIA_NONE = 0, DOWNLOAD_MEDIA_HLS = 1,
+  DOWNLOAD_MEDIA_DASH = 2, DOWNLOAD_MEDIA_VIDEO = 3
+} DownloadMediaKind;
 
 /* Request options (supplied by the user) */
 typedef struct {
-  char cookie[1024];
-  char referrer[2048];
+  DownloadMediaKind media_kind;
+  bool site_grab; // legacy persisted external-site flag; execution is disabled
+  bool site_grab_public; // legacy persisted consent flag
+  char site_format_id[64]; // legacy persisted format ID
+  bool site_format_has_audio;
+  char youtube_sabr_url[2048]; // ephemeral, signed browser stream URL
+  char youtube_request_b64[22000]; // ephemeral, includes playback token
+  uint32_t youtube_height; // selected adaptive track height in pixels
+  char cookie[4097];
+  char referrer[2049];
+  char user_agent[257]; // ephemeral browser override only
+  bool browser_context; // never serialize captured fields to SQLite
   char extra_headers[4096]; // raw "Key: Value" lines separated by '\n'
   char expected_sha256[65]; // 64 hex chars + NUL, empty = no check
   uint64_t speed_limit_bps; // 0 = use daemon default
+  char auth_user[128];
+  char auth_password[256];
+  uint32_t queue_id; // 0 = default queue
 } RequestOptions;
 
 /* Chunk descriptor (one segment of a download) */
@@ -44,26 +70,44 @@ typedef enum {
 /* Full download entry */
 typedef struct Download {
   uint32_t id;
+  DownloadMediaKind media_kind; // immutable after queue publication
+  bool site_grab; // immutable after queue publication; persisted
+  bool site_grab_public; // immutable after queue publication; persisted
+  char site_format_id[64]; // immutable after queue publication; persisted
+  bool site_format_has_audio;
+  char last_error[256]; // queue mutex; redacted diagnostic
+  uint32_t queue_id; // 1 = default queue; 0 maps to default for old rows
+  time_t created_at;
   char url[2048];
   char dest_path[1024];
+  char etag[256];
+  char last_modified[128];
   uint64_t total_size;
   DownloadStatus status;
+  bool worker_owned; // queue mutex; held until scheduler joins the worker
   int priority;
   float progress;
   struct Download *next;
 
+  _Atomic bool finishing; // local processing after transfer; never persisted
   _Atomic bool cancel_requested;
   _Atomic bool pause_requested;
   _Atomic uint64_t bytes_downloaded;
   _Atomic uint64_t chunk_live_bytes[QM_MAX_CHUNKS];
+  DownloadTransferMetrics transfer_metrics; // guarded by queue mutex
 
   DownloadChunk chunks[QM_MAX_CHUNKS];
   int chunk_count;
   bool reserved_file;
+  bool schedule_paused; // queue mutex; persisted so only scheduled pauses resume
+  _Atomic bool auto_filename; // daemon may replace URL-derived name after probe
   int retry_count;
   time_t next_retry_at;
 
   RequestOptions *request;
+  bool requires_browser_context; // immutable except on restore; persisted marker
+  /* request is installed before publication or under the queue mutex. The engine
+   * owns its reads until all curl workers join; terminal status then clears it. */
 } Download;
 
 /* Progress snapshots (for external reporting) */
@@ -71,6 +115,7 @@ typedef struct {
   uint32_t id;
   uint64_t bytes_downloaded;
   uint64_t total_size;
+  DownloadTransferMetrics transfer_metrics;
 } DownloadProgressSnapshot;
 
 typedef struct {
@@ -80,12 +125,15 @@ typedef struct {
 } ChunkProgressSnapshot;
 
 typedef struct {
+  DownloadMediaKind media_kind;
+  bool finishing;
   DownloadStatus status;
   uint64_t total_size;
   uint64_t bytes_downloaded;
   char dest_path[1024];
   int chunk_count;
   DownloadChunk chunks[QM_MAX_CHUNKS];
+  DownloadTransferMetrics transfer_metrics;
 } DownloadRuntimeSnapshot;
 
 /* Queue lifecycle. */
@@ -93,6 +141,8 @@ typedef struct {
 /** Add a new download to the queue. Returns its ID (0 on failure). */
 uint32_t queue_manager_add(const char *url, const char *dest_path,
                            const RequestOptions *opts);
+uint32_t queue_manager_add_auto(const char *url, const char *dest_path,
+                                const RequestOptions *opts);
 
 /** Insert an already-constructed Download (used on daemon restore). */
 void queue_manager_add_existing(Download *d);
@@ -102,6 +152,26 @@ void queue_manager_seed_next_id(uint32_t min_next_id);
 
 /** Remove a download from the queue (thread‑safe). */
 void queue_manager_remove(uint32_t id);
+/* Caller holds queue_manager_get_mutex(). Removes only a non-ACTIVE entry and
+ * leaves its destination file untouched. Returns true if an entry was freed. */
+bool queue_manager_forget_locked(uint32_t id);
+/* Caller holds queue_manager_get_mutex(); missing entries are safe to delete
+ * from persistent history. */
+bool queue_manager_can_forget_locked(uint32_t id);
+
+/* Named queues persist in SQLite. queue_list allocates *out; caller frees it. */
+int queue_list(Queue **out, size_t *count);
+int queue_get(uint32_t id, Queue *out);
+int queue_create(const Queue *q, uint32_t *out_id);
+int queue_update(const Queue *q);
+int queue_delete(uint32_t id); // default queue (id 1) cannot be deleted
+int queue_reorder(uint32_t id, int new_priority);
+/* Apply one queue's schedule under the queue mutex; resume IDs are returned
+ * for broadcasts after unlocking. */
+int queue_manager_apply_schedule(uint32_t queue_id, bool active,
+                                 uint32_t *resumed_ids, int capacity);
+/* Caller holds queue mutex after deleting a named queue. */
+void queue_manager_reassign_queue_locked(uint32_t old_id);
 
 /* Queue queries. */
 
@@ -119,12 +189,22 @@ int queue_manager_count_by_status_locked(DownloadStatus s);
 
 /** Read a download status without exposing the queue entry pointer. */
 bool queue_manager_get_status(uint32_t id, DownloadStatus *out_status);
+bool queue_manager_get_media_kind(uint32_t id, DownloadMediaKind *out);
+bool queue_manager_get_site_grab(uint32_t id, bool *out);
+bool queue_manager_get_site_public(uint32_t id, bool *out);
+bool queue_manager_get_site_format(uint32_t id, char out[64], bool *has_audio);
+bool queue_manager_get_error(uint32_t id, char *out, size_t capacity);
+void queue_manager_set_site_error(uint32_t id, const char *error);
 bool queue_manager_get_runtime_snapshot(uint32_t id,
                                         DownloadRuntimeSnapshot *out);
 
 /** Fill `out` with up to `max` active download progress snapshots. */
 int queue_manager_snapshot_active_progress(DownloadProgressSnapshot *out,
                                            int max);
+
+/* Persist a daemon progress sample under the queue mutex. */
+void queue_manager_set_transfer_metrics(uint32_t id,
+                                        DownloadTransferMetrics metrics);
 
 /** Fill `out` with up to `max` chunk progress snapshots. */
 int queue_manager_snapshot_chunk_progress(ChunkProgressSnapshot *out, int max);
@@ -145,6 +225,13 @@ bool queue_manager_pause(uint32_t id);
 
 /** Request resume. Returns true if found. */
 bool queue_manager_resume(uint32_t id);
+/* Returns IpcResult. Probe without queue lock; commit only an unchanged snapshot. */
+int queue_manager_refresh_url(uint32_t id);
+/* 1 = installed and resumed; 0 = not eligible; -1 = allocation/persistence error. */
+int queue_manager_refresh_browser_context(uint32_t id,
+                                           const RequestOptions *options);
+/* Shutdown only, after scheduler workers have joined. */
+void queue_manager_clear_browser_contexts(void);
 
 /* Internal access. */
 

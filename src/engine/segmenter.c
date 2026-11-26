@@ -10,6 +10,9 @@ int segmenter_plan(uint64_t total_size, int n_workers, Range *out) {
   if (total_size == 0 || n_workers <= 0)
     return 0;
 
+  if (n_workers > MAX_WORKERS)
+    n_workers = MAX_WORKERS;
+
   /* Don't create more workers than bytes (avoids empty ranges). */
   if ((uint64_t)n_workers > total_size)
     n_workers = (int)total_size;
@@ -20,6 +23,7 @@ int segmenter_plan(uint64_t total_size, int n_workers, Range *out) {
     out[i].start = (uint64_t)i * chunk;
     out[i].resume_offset = 0;
     out[i].whole_file = false;
+    out[i].unknown_size = false;
 
     if (i == n_workers - 1) {
       /* Last worker picks up the remainder. */
@@ -31,14 +35,19 @@ int segmenter_plan(uint64_t total_size, int n_workers, Range *out) {
   return n_workers;
 }
 
-int choose_worker_count(uint64_t total_size) {
+int choose_worker_count(uint64_t total_size, int max_connections) {
   const uint64_t ONE_MB = 1024ULL * 1024ULL;
+
+  if (max_connections < 1)
+    max_connections = 1;
+  if (max_connections > MAX_WORKERS)
+    max_connections = MAX_WORKERS;
 
   if (total_size == 0)
     return 1;
   if (total_size < ONE_MB)
     return 1;
   if (total_size < 20 * ONE_MB)
-    return 4;
-  return 8;
+    return max_connections < 4 ? max_connections : 4;
+  return max_connections;
 }

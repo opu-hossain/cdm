@@ -14,7 +14,33 @@
 static _Atomic int active_workers;
 static _Atomic bool hold_workers;
 static _Atomic bool fail_workers;
+static _Atomic bool block_by_scanner;
+static _Atomic bool unsupported_manifest;
+static _Atomic bool denied_manifest;
 static _Atomic int engine_runs;
+static _Atomic int post_action_runs;
+static _Atomic uint64_t tray_received;
+static _Atomic uint64_t tray_total;
+
+void tray_set_progress(uint64_t received, uint64_t total) {
+  atomic_store(&tray_received, received);
+  atomic_store(&tray_total, total);
+}
+
+#ifdef __linux__
+int __wrap_spawn_post_action(const char *action, const char *argument) {
+#else
+int spawn_post_action(const char *action, const char *argument) {
+#endif
+  cr_assert_str_eq(action, "command");
+  cr_assert_str_eq(argument, "/bin/true");
+  atomic_fetch_add(&post_action_runs, 1);
+  return 0;
+}
+
+/* Scheduler tests replace the engine and never create HLS staging files. */
+void hls_discard_state(const char *destination) { (void)destination; }
+void dash_discard_state(const char *destination) { (void)destination; }
 
 int engine_run_download(struct Download *d) {
   atomic_fetch_add(&engine_runs, 1);
@@ -27,6 +53,16 @@ int engine_run_download(struct Download *d) {
   if (atomic_load(&d->pause_requested) ||
       atomic_load(&d->cancel_requested) || atomic_load(&fail_workers))
     return -1;
+  if (atomic_load(&block_by_scanner))
+    return -6;
+  if (atomic_load(&unsupported_manifest)) {
+    queue_manager_set_site_error(d->id, "Live HLS playlist is unsupported");
+    return -9;
+  }
+  if (atomic_load(&denied_manifest)) {
+    queue_manager_set_site_error(d->id, "Manifest request failed: HTTP 403");
+    return -10;
+  }
   return 0;
 }
 
@@ -35,13 +71,254 @@ static void setup_scheduler(void) {
   atomic_store(&active_workers, 0);
   atomic_store(&hold_workers, false);
   atomic_store(&fail_workers, false);
+  atomic_store(&block_by_scanner, false);
+  atomic_store(&unsupported_manifest, false);
+  atomic_store(&denied_manifest, false);
   atomic_store(&engine_runs, 0);
+  atomic_store(&post_action_runs, 0);
+  atomic_store(&tray_received, UINT64_MAX);
+  atomic_store(&tray_total, UINT64_MAX);
   db_init(":memory:");
 }
 
-static void teardown_scheduler(void) { db_close(); }
+static void teardown_scheduler(void) {
+  scheduler_shutdown();
+  db_close();
+}
 
 TestSuite(scheduler, .init = setup_scheduler, .fini = teardown_scheduler);
+
+Test(scheduler, progress_flush_updates_tray_with_active_totals) {
+  uint32_t first = queue_manager_add("http://127.0.0.1/tray-one",
+                                      "/tmp/tray-one", NULL);
+  uint32_t second = queue_manager_add("http://127.0.0.1/tray-two",
+                                       "/tmp/tray-two", NULL);
+  cr_assert_neq(first, 0);
+  cr_assert_neq(second, 0);
+  Download *one = queue_manager_find_by_id(first);
+  Download *two = queue_manager_find_by_id(second);
+  dm_mutex_t *mutex = queue_manager_get_mutex();
+  dm_mutex_lock(mutex);
+  one->status = two->status = DOWNLOAD_ACTIVE;
+  one->total_size = 100;
+  two->total_size = 200;
+  atomic_store(&one->bytes_downloaded, 25);
+  atomic_store(&two->bytes_downloaded, 50);
+  dm_mutex_unlock(mutex);
+  scheduler_report_progress();
+  cr_assert_eq(atomic_load(&tray_received), 75);
+  cr_assert_eq(atomic_load(&tray_total), 300);
+  queue_manager_update_status(first, DOWNLOAD_PAUSED);
+  queue_manager_update_status(second, DOWNLOAD_PAUSED);
+  queue_manager_remove(first);
+  queue_manager_remove(second);
+}
+
+Test(scheduler, command_post_action_requires_all_done_and_five_seconds) {
+  char config_path[] = "/tmp/cdm-actions-XXXXXX";
+  int fd = mkstemp(config_path);
+  cr_assert_geq(fd, 0);
+  FILE *config_file = fdopen(fd, "w");
+  cr_assert_not_null(config_file);
+  cr_assert_gt(fputs("[post_actions]\nallow_command = true\n", config_file),
+               0);
+  cr_assert_eq(fclose(config_file), 0);
+  config_init(config_path);
+  unlink(config_path);
+
+  Queue queue = {0};
+  strcpy(queue.name, "Actions");
+  strcpy(queue.post_action, "command");
+  strcpy(queue.post_action_arg, "/bin/true");
+  uint32_t queue_id = 0;
+  cr_assert_eq(queue_create(&queue, &queue_id), 0);
+  RequestOptions options = {.queue_id = queue_id};
+  uint32_t id = queue_manager_add("http://127.0.0.1/action",
+                                  "/tmp/action-item", &options);
+  cr_assert_neq(id, 0);
+  cr_assert_eq(db_insert_download(id, "http://127.0.0.1/action",
+                                  "/tmp/action-item", &options), 0);
+  scheduler_post_actions_tick_at(100);
+  cr_assert_eq(atomic_load(&post_action_runs), 0);
+  cr_assert_eq(db_update_status(id, "DONE"), 0);
+  scheduler_post_actions_tick_at(101);
+  scheduler_post_actions_tick_at(105);
+  cr_assert_eq(atomic_load(&post_action_runs), 0);
+  scheduler_post_actions_tick_at(106);
+  scheduler_post_actions_tick_at(200);
+  cr_assert_eq(atomic_load(&post_action_runs), 1);
+  queue_manager_remove(id);
+}
+
+static time_t fixed_utc(int day, int hour, int minute) {
+  setenv("TZ", "UTC", 1);
+  tzset();
+  struct tm value = {.tm_year = 126, .tm_mon = 0, .tm_mday = day,
+                     .tm_hour = hour, .tm_min = minute};
+  return mktime(&value);
+}
+
+Test(scheduler, schedule_states_include_boundaries_and_overnight) {
+  Queue queue = {0};
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(1, 12, 0)),
+               SCHEDULE_ALWAYS);
+  strcpy(queue.schedule_start, "09:00");
+  strcpy(queue.schedule_stop, "17:00");
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(1, 8, 59)),
+               SCHEDULED_IDLE);
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(1, 9, 0)),
+               SCHEDULED_ACTIVE);
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(1, 16, 59)),
+               SCHEDULED_ACTIVE);
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(1, 17, 0)),
+               SCHEDULED_IDLE);
+  strcpy(queue.schedule_start, "22:00");
+  strcpy(queue.schedule_stop, "06:00");
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(1, 23, 0)),
+               SCHEDULED_ACTIVE);
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(2, 5, 59)),
+               SCHEDULED_ACTIVE);
+  cr_assert_eq(scheduler_queue_state(&queue, fixed_utc(2, 6, 0)),
+               SCHEDULED_IDLE);
+}
+
+Test(scheduler, schedule_pauses_active_and_resumes_only_its_own_download) {
+  Queue queue = {.max_concurrent = 2};
+  strcpy(queue.name, "Workday");
+  strcpy(queue.schedule_start, "09:00");
+  strcpy(queue.schedule_stop, "17:00");
+  uint32_t queue_id = 0;
+  cr_assert_eq(queue_create(&queue, &queue_id), 0);
+  RequestOptions options = {.queue_id = queue_id};
+  uint32_t active_id = queue_manager_add("http://127.0.0.1/scheduled",
+                                         "/tmp/scheduled-item", &options);
+  uint32_t manual_id = queue_manager_add("http://127.0.0.1/manual",
+                                         "/tmp/manual-item", &options);
+  cr_assert_neq(active_id, 0);
+  cr_assert_neq(manual_id, 0);
+  cr_assert_eq(db_insert_download(active_id, "http://127.0.0.1/scheduled",
+                                  "/tmp/scheduled-item", &options), 0);
+  cr_assert_eq(db_insert_download(manual_id, "http://127.0.0.1/manual",
+                                  "/tmp/manual-item", &options), 0);
+  queue_manager_update_status(active_id, DOWNLOAD_ACTIVE);
+  cr_assert_eq(db_update_status(active_id, "ACTIVE"), 0);
+  queue_manager_pause(manual_id);
+  scheduler_schedule_tick_at(fixed_utc(1, 17, 0));
+  Download *active = queue_manager_find_by_id(active_id);
+  cr_assert_not_null(active);
+  cr_assert(atomic_load(&active->pause_requested));
+  cr_assert(active->schedule_paused);
+  queue_manager_update_status(active_id, DOWNLOAD_PAUSED);
+  cr_assert_eq(db_update_status(active_id, "PAUSED"), 0);
+  scheduler_schedule_tick_at(fixed_utc(2, 9, 0));
+  DownloadStatus status = DOWNLOAD_ERROR;
+  cr_assert(queue_manager_get_status(active_id, &status));
+  cr_assert_eq(status, DOWNLOAD_QUEUED);
+  cr_assert(queue_manager_get_status(manual_id, &status));
+  cr_assert_eq(status, DOWNLOAD_PAUSED);
+  cr_assert_not(active->schedule_paused);
+  queue_manager_remove(active_id);
+  queue_manager_remove(manual_id);
+}
+
+Test(scheduler, scheduled_pause_survives_restart_and_resumes_at_start) {
+  char path[] = "/tmp/cdm-schedule-XXXXXX";
+  int fd = mkstemp(path);
+  cr_assert_geq(fd, 0);
+  close(fd);
+  db_close();
+  cr_assert_eq(db_init(path), 0);
+  Queue queue = {0};
+  strcpy(queue.name, "Restart schedule");
+  strcpy(queue.schedule_start, "09:00");
+  strcpy(queue.schedule_stop, "17:00");
+  uint32_t queue_id = 0;
+  cr_assert_eq(queue_create(&queue, &queue_id), 0);
+  RequestOptions options = {.queue_id = queue_id};
+  uint32_t id = queue_manager_add("http://127.0.0.1/restart",
+                                   "/tmp/schedule-restart", &options);
+  cr_assert_neq(id, 0);
+  cr_assert_eq(db_insert_download(id, "http://127.0.0.1/restart",
+                                  "/tmp/schedule-restart", &options), 0);
+  queue_manager_update_status(id, DOWNLOAD_ACTIVE);
+  cr_assert_eq(db_update_status(id, "ACTIVE"), 0);
+  scheduler_schedule_tick_at(fixed_utc(1, 17, 0));
+  queue_manager_update_status(id, DOWNLOAD_PAUSED);
+  cr_assert_eq(db_update_status(id, "PAUSED"), 0);
+  queue_manager_remove(id);
+  db_close();
+  cr_assert_eq(db_init(path), 0);
+  cr_assert_eq(db_restore_queue(), 0);
+  Download *restored = queue_manager_find_by_id(id);
+  cr_assert_not_null(restored);
+  cr_assert(restored->schedule_paused);
+  cr_assert_eq(restored->status, DOWNLOAD_PAUSED);
+  scheduler_schedule_tick_at(fixed_utc(2, 9, 0));
+  cr_assert_eq(restored->status, DOWNLOAD_QUEUED);
+  cr_assert_not(restored->schedule_paused);
+  queue_manager_remove(id);
+  db_close();
+  unlink(path);
+}
+
+Test(scheduler, schedule_boundary_pauses_running_worker) {
+  Queue queue = {0};
+  strcpy(queue.name, "Worker schedule");
+  uint32_t queue_id = 0;
+  cr_assert_eq(queue_create(&queue, &queue_id), 0);
+  RequestOptions options = {.queue_id = queue_id};
+  uint32_t id = queue_manager_add("http://127.0.0.1/worker",
+                                   "/tmp/schedule-worker", &options);
+  cr_assert_neq(id, 0);
+  cr_assert_eq(db_insert_download(id, "http://127.0.0.1/worker",
+                                  "/tmp/schedule-worker", &options), 0);
+  atomic_store(&hold_workers, true);
+  scheduler_tick();
+  for (int i = 0; i < 1000 && atomic_load(&active_workers) == 0; ++i)
+    dm_thread_sleep_ms(1);
+  cr_assert_eq(atomic_load(&active_workers), 1);
+  queue.id = queue_id;
+  strcpy(queue.schedule_start, "09:00");
+  strcpy(queue.schedule_stop, "17:00");
+  cr_assert_eq(queue_update(&queue), 0);
+  scheduler_schedule_tick_at(fixed_utc(1, 17, 0));
+  DownloadStatus status = DOWNLOAD_ACTIVE;
+  for (int i = 0; i < 1000; ++i) {
+    if (queue_manager_get_status(id, &status) && status == DOWNLOAD_PAUSED)
+      break;
+    dm_thread_sleep_ms(1);
+  }
+  cr_assert_eq(status, DOWNLOAD_PAUSED);
+  scheduler_schedule_tick_at(fixed_utc(2, 9, 0));
+  cr_assert(queue_manager_get_status(id, &status));
+  cr_assert_eq(status, DOWNLOAD_QUEUED);
+  scheduler_shutdown();
+  queue_manager_remove(id);
+  atomic_store(&hold_workers, false);
+}
+
+Test(scheduler, smooths_transfer_speed_and_estimates_eta) {
+  DownloadTransferMetrics sample = {.eta_seconds = UINT64_MAX};
+  sample = scheduler_advance_transfer_metrics(sample, 0, 10000, 1000);
+  cr_assert_eq(sample.speed_bps, 0);
+  cr_assert_eq(sample.eta_seconds, UINT64_MAX);
+
+  sample = scheduler_advance_transfer_metrics(sample, 1000, 10000, 2000);
+  cr_assert_eq(sample.speed_bps, 1000);
+  cr_assert_eq(sample.eta_seconds, 9);
+
+  sample = scheduler_advance_transfer_metrics(sample, 3000, 10000, 3000);
+  cr_assert_eq(sample.speed_bps, 1300); // 0.3 * 2000 + 0.7 * 1000
+  cr_assert_eq(sample.eta_seconds, 6);
+
+  sample = scheduler_advance_transfer_metrics(sample, 3000, 0, 4000);
+  cr_assert_eq(sample.speed_bps, 910);
+  cr_assert_eq(sample.eta_seconds, UINT64_MAX);
+
+  sample = scheduler_advance_transfer_metrics(sample, 100, 10000, 5000);
+  cr_assert_eq(sample.speed_bps, 0); // a restarted transfer resets samples
+  cr_assert_eq(sample.eta_seconds, UINT64_MAX);
+}
 
 Test(scheduler, automatic_retries_stop_at_terminal_error) {
   uint32_t id = queue_manager_add("http://example.com/fails",
@@ -79,6 +356,92 @@ Test(scheduler, automatic_retries_stop_at_terminal_error) {
   DownloadStatus final_status = DOWNLOAD_QUEUED;
   cr_assert(queue_manager_get_status(id, &final_status));
   cr_assert_eq(final_status, DOWNLOAD_ERROR);
+  queue_manager_remove(id);
+}
+
+Test(scheduler, scanner_block_is_nonretryable_and_persisted) {
+  const char *url = "http://127.0.0.1/scanner-block";
+  const char *path = "/tmp/cdm-scanner-block-fixture";
+  uint32_t id = queue_manager_add(url, path, NULL);
+  cr_assert_neq(id, 0);
+  cr_assert_eq(db_insert_download(id, url, path, NULL), 0);
+  atomic_store(&block_by_scanner, true);
+  scheduler_tick();
+  DownloadStatus status = DOWNLOAD_ACTIVE;
+  for (int i = 0; i < 1000; i++) {
+    if (queue_manager_get_status(id, &status) && status == DOWNLOAD_ERROR)
+      break;
+    dm_thread_sleep_ms(1);
+  }
+  cr_assert_eq(status, DOWNLOAD_ERROR);
+  Download *d = queue_manager_find_by_id(id);
+  cr_assert_not_null(d);
+  cr_assert_eq(d->retry_count, 0);
+  char error[256];
+  cr_assert(queue_manager_get_error(id, error, sizeof(error)));
+  cr_assert_str_eq(error, "Blocked by scanner");
+  queue_manager_remove(id);
+  cr_assert_not_null(queue_manager_find_by_id(id),
+                     "worker still owns the download until it is joined");
+  scheduler_tick();
+  cr_assert_eq(atomic_load(&engine_runs), 1);
+  for (int i = 0; i < 1000 && queue_manager_find_by_id(id); i++) {
+    scheduler_tick();
+    queue_manager_remove(id);
+    dm_thread_sleep_ms(1);
+  }
+  cr_assert_null(queue_manager_find_by_id(id));
+}
+
+Test(scheduler, unsupported_manifest_is_not_retried) {
+  const char *url = "http://127.0.0.1/live.m3u8";
+  const char *path = "/tmp/cdm-live-manifest-fixture";
+  uint32_t id = queue_manager_add(url, path, NULL);
+  cr_assert_neq(id, 0);
+  cr_assert_eq(db_insert_download(id, url, path, NULL), 0);
+  atomic_store(&unsupported_manifest, true);
+  for (int i = 0; i < 1000; i++) {
+    scheduler_tick();
+    DownloadStatus status;
+    if (queue_manager_get_status(id, &status) && status == DOWNLOAD_ERROR)
+      break;
+    dm_thread_sleep_ms(1);
+  }
+  DownloadStatus status;
+  cr_assert(queue_manager_get_status(id, &status));
+  cr_assert_eq(status, DOWNLOAD_ERROR);
+  for (int i = 0; i < 10; i++) scheduler_tick();
+  cr_assert_eq(atomic_load(&engine_runs), 1);
+  char error[256];
+  cr_assert(queue_manager_get_error(id, error, sizeof(error)));
+  cr_assert_str_eq(error, "Live HLS playlist is unsupported");
+  scheduler_shutdown();
+  queue_manager_remove(id);
+}
+
+Test(scheduler, denied_manifest_is_not_retried) {
+  const char *url = "http://127.0.0.1/denied.m3u8";
+  const char *path = "/tmp/cdm-denied-manifest-fixture";
+  uint32_t id = queue_manager_add(url, path, NULL);
+  cr_assert_neq(id, 0);
+  cr_assert_eq(db_insert_download(id, url, path, NULL), 0);
+  atomic_store(&denied_manifest, true);
+  for (int i = 0; i < 1000; i++) {
+    scheduler_tick();
+    DownloadStatus status;
+    if (queue_manager_get_status(id, &status) && status == DOWNLOAD_ERROR)
+      break;
+    dm_thread_sleep_ms(1);
+  }
+  DownloadStatus status;
+  cr_assert(queue_manager_get_status(id, &status));
+  cr_assert_eq(status, DOWNLOAD_ERROR);
+  for (int i = 0; i < 10; i++) scheduler_tick();
+  cr_assert_eq(atomic_load(&engine_runs), 1);
+  char error[256];
+  cr_assert(queue_manager_get_error(id, error, sizeof(error)));
+  cr_assert_str_eq(error, "Manifest request failed: HTTP 403");
+  scheduler_shutdown();
   queue_manager_remove(id);
 }
 

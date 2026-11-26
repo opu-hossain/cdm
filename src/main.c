@@ -8,6 +8,7 @@
 #include "gui/browser_popup.h"
 #include "native_host/browser_install.h"
 #include "utils/config.h"
+#include "utils/i18n.h"
 #include "utils/log.h"
 
 #include <stdio.h>
@@ -74,6 +75,9 @@ int main(int argc, char **argv) {
   }
 
   config_init(NULL);
+  DownloadManagerConfig locale_config;
+  config_get(&locale_config);
+  tr_load_locale(locale_config.ui_locale);
 
   /* No arguments → ensure daemon is running, then launch GUI. */
   if (argc < 2) {

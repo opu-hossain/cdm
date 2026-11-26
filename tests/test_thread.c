@@ -31,6 +31,19 @@ Test(thread, mutex) {
   dm_mutex_destroy(&m);
 }
 
+Test(thread, mutex_reinitialize_after_destroy) {
+  dm_mutex_t m;
+  cr_assert_eq(dm_mutex_init(&m), 0);
+  cr_assert_eq(dm_mutex_lock(&m), 0);
+  cr_assert_eq(dm_mutex_unlock(&m), 0);
+  dm_mutex_destroy(&m);
+
+  cr_assert_eq(dm_mutex_init(&m), 0);
+  cr_assert_eq(dm_mutex_lock(&m), 0);
+  cr_assert_eq(dm_mutex_unlock(&m), 0);
+  dm_mutex_destroy(&m);
+}
+
 Test(thread, sleep) {
   // Just ensure it doesn't crash
   dm_thread_sleep_ms(10);

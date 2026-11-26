@@ -29,6 +29,8 @@ int config_get_retry_base_delay_sec(void);         // default 2
 int config_get_retry_max_delay_sec(void);          // default 60
 uint64_t config_get_max_speed_bytes_per_sec(void); // default 0 (unlimited)
 
+typedef enum { PROXY_NONE = 0, PROXY_HTTP = 1, PROXY_SOCKS5 = 2 } ProxyMode;
+
 typedef struct {
   int max_concurrent_downloads;
   const char *default_download_dir;
@@ -36,9 +38,28 @@ typedef struct {
   int retry_base_delay_sec;
   int retry_max_delay_sec;
   uint64_t max_speed_bytes_per_sec;
+  ProxyMode proxy_mode;
+  char proxy_url[512];
+  char proxy_username[128];
+  char proxy_password[256];
+  int max_connections_per_download; // 1..16, default 8
+  char user_agent[256]; // default cdm/0.1
+  int connect_timeout_sec; // 1..600, default 10
+  int transfer_timeout_sec; // 1..3600, default 30
+  bool allow_shutdown;
+  bool allow_sleep;
+  bool allow_command;
+  bool clipboard_monitor; // [ui], default false; GUI main thread owns it
+  char ui_theme[8]; // [ui] system|light|dark; default system
+  char ui_locale[8]; // [ui] en|es; default en; takes effect after restart
+  char scanner_command[1024]; // [security], empty disables scanning
+  char scanner_args[2048]; // [security], optional arguments; may be sensitive
 } DownloadManagerConfig;
 
+bool config_post_action_enabled(const char *action);
+
 void config_get(DownloadManagerConfig *out);
+bool config_validate(const DownloadManagerConfig *config);
 bool config_save(const DownloadManagerConfig *config);
 
 #ifdef __cplusplus

@@ -7,15 +7,22 @@
 #include "../persistence/db.h"
 #include "../platform/curl_client.h"
 #include "../platform/file_io.h"
+#include "../platform/thread.h"
+#include "../platform/spawn.h"
 #include "../utils/config.h"
 #include "../utils/log.h"
+#include "../utils/path.h"
 #include "finalize.h"
+#include "hls.h"
+#include "dash.h"
+#include "youtube_download.h"
 #include "segmenter.h"
 #include "worker_pool.h"
 
 #include <errno.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -25,6 +32,16 @@ typedef struct {
   struct Download *d;
   _Atomic uint64_t **progress_slots;
 } SplitCallbackCtx;
+
+static void lock_rebalance_mutation(void *userdata) {
+  (void)userdata;
+  dm_mutex_lock((dm_mutex_t *)queue_manager_get_mutex());
+}
+
+static void unlock_rebalance_mutation(void *userdata) {
+  (void)userdata;
+  dm_mutex_unlock((dm_mutex_t *)queue_manager_get_mutex());
+}
 
 /**
  * Called by the rebalance pool when it decides to split a chunk.
@@ -72,6 +89,68 @@ static bool chunk_is_complete(const DownloadChunk *c) {
   return c->bytes_done >= (c->range_end - c->range_start + 1);
 }
 
+static int resolve_auto_filename(struct Download *d, const FileInfo *info) {
+  if (!atomic_load(&d->auto_filename) || d->chunk_count > 0)
+    return 0;
+
+  char old_path[sizeof(d->dest_path)];
+  memcpy(old_path, d->dest_path, sizeof(old_path));
+  char resolved[sizeof(d->dest_path)];
+  memcpy(resolved, old_path, sizeof(resolved));
+  char from_header[512];
+  char from_url[512];
+  path_filename_from_url(d->url, from_url, sizeof(from_url));
+  bool header_name = path_filename_from_disposition(
+      info->content_disposition, from_header, sizeof(from_header));
+
+  if (header_name && strcmp(from_header, from_url) != 0) {
+    const char *slash = strrchr(old_path, '/');
+    if (slash) {
+      char directory[sizeof(old_path)];
+      size_t length = slash == old_path ? 1 : (size_t)(slash - old_path);
+      memcpy(directory, old_path, length);
+      directory[length] = '\0';
+      char requested[sizeof(old_path)];
+      if (path_join(directory, from_header, requested, sizeof(requested)) &&
+          strcmp(requested, old_path) != 0) {
+        bool linked = !d->reserved_file;
+        for (int attempt = 0; attempt < 1000000; attempt++) {
+          if (!path_make_unique(requested, resolved, sizeof(resolved)))
+            return -1;
+          if (!d->reserved_file)
+            break;
+          if (link(old_path, resolved) == 0) {
+            linked = true;
+            break;
+          }
+          if (errno != EEXIST)
+            return -1;
+        }
+        if (!linked)
+          return -1;
+      }
+    }
+  }
+
+  bool moved = strcmp(old_path, resolved) != 0;
+  dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
+  dm_mutex_lock(mutex);
+  int persisted = db_update_resolved_destination(d->id, resolved);
+  if (persisted == 0) {
+    snprintf(d->dest_path, sizeof(d->dest_path), "%s", resolved);
+    atomic_store(&d->auto_filename, false);
+  }
+  dm_mutex_unlock(mutex);
+  if (persisted != 0) {
+    if (moved && d->reserved_file)
+      unlink(resolved);
+    return -1;
+  }
+  if (moved && d->reserved_file && unlink(old_path) != 0)
+    LOG_WARN("Could not remove old reserved destination: %s", old_path);
+  return 0;
+}
+
 /**
  * Discard all chunk state for a download.  If `also_delete_file` is true
  * the destination file is removed from disk.
@@ -92,8 +171,78 @@ static void clear_resume_state(struct Download *d, bool also_delete_file) {
 
 /* Public API */
 
+static int scan_published_outputs(struct Download *d) {
+  atomic_store(&d->finishing, true);
+  DownloadManagerConfig config;
+  config_get(&config);
+  if (!config.scanner_command[0])
+    return 0;
+  char primary[sizeof(d->dest_path)];
+  char companion[sizeof(d->dest_path)] = {0};
+  dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
+  dm_mutex_lock(mutex);
+  memcpy(primary, d->dest_path, sizeof(primary));
+  dm_mutex_unlock(mutex);
+  bool metadata_failed = db_get_companion_path(d->id, companion,
+                                                sizeof(companion)) != 0;
+  if (metadata_failed)
+    LOG_ERROR("Download %u: scanner could not load output metadata", d->id);
+  const char *outputs[] = {primary, companion};
+  for (size_t i = 0; i < 2; i++) {
+    if (!outputs[i][0] && !metadata_failed)
+      continue;
+    int result = metadata_failed ? -1 :
+                 spawn_scanner(config.scanner_command, config.scanner_args,
+                               outputs[i], &d->cancel_requested,
+                               &d->pause_requested, 120);
+    LOG_INFO("Download %u: scanner command %s exited %d", d->id,
+             config.scanner_command, result);
+    if (result == -2)
+      return -1;
+    if (result == 0)
+      continue;
+    char moved_primary[sizeof(primary)];
+    char moved_companion[sizeof(companion)] = {0};
+    memcpy(moved_primary, primary, sizeof(primary));
+    if (engine_quarantine_output(primary, moved_primary,
+                                 sizeof(moved_primary)) != 0) {
+      LOG_ERROR("Download %u: could not quarantine primary output", d->id);
+      memcpy(moved_primary, primary, sizeof(primary));
+    }
+    if (companion[0] && engine_quarantine_output(companion, moved_companion,
+                                                 sizeof(moved_companion)) != 0) {
+      LOG_ERROR("Download %u: could not quarantine companion output", d->id);
+      memcpy(moved_companion, companion, sizeof(companion));
+    }
+    dm_mutex_lock(mutex);
+    if (db_update_output_paths(d->id, moved_primary, moved_companion) != 0)
+      LOG_ERROR("Download %u: could not persist quarantine paths", d->id);
+    memcpy(d->dest_path, moved_primary, sizeof(d->dest_path));
+    dm_mutex_unlock(mutex);
+    return -6;
+  }
+  return 0;
+}
+
 int engine_run_download(struct Download *d) {
+  atomic_store(&d->finishing, false);
   const RequestOptions *request = d->request;
+  /* Existing databases may contain jobs from the retired external site tool. */
+  if (d->site_grab) return -8;
+  if (d->requires_browser_context && (!request || !request->browser_context))
+    return -5;
+  if (d->media_kind == DOWNLOAD_MEDIA_HLS) {
+    int rc = hls_run_download(d);
+    return rc == 0 ? scan_published_outputs(d) : rc;
+  }
+  if (d->media_kind == DOWNLOAD_MEDIA_DASH) {
+    int rc = dash_run_download(d);
+    return rc == 0 ? scan_published_outputs(d) : rc;
+  }
+  if (d->media_kind == DOWNLOAD_MEDIA_VIDEO && d->site_format_id[0]) {
+    int rc = youtube_run_download(d);
+    return rc == 0 ? scan_published_outputs(d) : rc;
+  }
 
   if (d->chunk_count > 0 && access(d->dest_path, F_OK) != 0 &&
       errno == ENOENT) {
@@ -103,14 +252,14 @@ int engine_run_download(struct Download *d) {
     return -4;
   }
 
-  LOG_INFO("Starting download: %s\n", d->url);
+  LOG_INFO("Starting download %u\n", d->id);
 
   if (request && request->expected_sha256[0])
     LOG_INFO("Download %u will verify SHA-256: %s\n", d->id,
              request->expected_sha256);
 
   if (!is_valid_url(d->url)) {
-    LOG_ERROR("Invalid URL scheme (only http/https allowed): %s\n", d->url);
+    LOG_ERROR("Invalid URL scheme for download %u (http/https required)", d->id);
     return -1;
   }
 
@@ -120,12 +269,60 @@ int engine_run_download(struct Download *d) {
       .extra_headers = request && request->extra_headers[0]
                  ? request->extra_headers
                  : NULL,
+      .auth_user = request && request->auth_user[0] ? request->auth_user : NULL,
+      .auth_password = request && request->auth_password[0]
+                           ? request->auth_password
+                           : NULL,
+      .user_agent = request && request->user_agent[0] ? request->user_agent : NULL,
+      .sensitive = request && request->browser_context,
   };
 
   FileInfo info;
   if (curl_client_head(d->url, &req_ctx, &info) != 0) {
-    LOG_ERROR("HEAD request failed for: %s\n", d->url);
+    LOG_ERROR("Metadata probe failed for download %u", d->id);
     return -1;
+  }
+
+  if (resolve_auto_filename(d, &info) != 0)
+    return -1;
+
+  /* Keep the validator that belongs to the bytes already on disk. The
+   * probe may discover newer metadata, which must not validate old chunks. */
+  char if_range[sizeof(d->etag)];
+  if_range[0] = '\0';
+  if (d->chunk_count > 0) {
+    const char *validator = d->etag[0] && strncmp(d->etag, "W/", 2) != 0
+                                ? d->etag
+                                : d->last_modified;
+    snprintf(if_range, sizeof(if_range), "%s", validator);
+  }
+
+  bool validator_changed =
+      d->chunk_count > 0 &&
+      ((d->etag[0] && strcmp(d->etag, info.etag) != 0) ||
+       (d->last_modified[0] &&
+        strcmp(d->last_modified, info.last_modified) != 0));
+  if (validator_changed) {
+    LOG_INFO("Download %u: validator changed; restarting from byte zero", d->id);
+    dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
+    dm_mutex_lock(mutex);
+    clear_resume_state(d, true);
+    dm_mutex_unlock(mutex);
+  }
+
+  if (strcmp(d->etag, info.etag) != 0 ||
+      strcmp(d->last_modified, info.last_modified) != 0) {
+    dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
+    dm_mutex_lock(mutex);
+    int saved = db_update_validators(d->id, info.etag, info.last_modified);
+    if (saved == 0) {
+      snprintf(d->etag, sizeof(d->etag), "%s", info.etag);
+      snprintf(d->last_modified, sizeof(d->last_modified), "%s",
+               info.last_modified);
+    }
+    dm_mutex_unlock(mutex);
+    if (saved != 0)
+      return -1;
   }
 
   LOG_INFO("Size: %llu bytes, Ranges: %s\n",
@@ -147,6 +344,9 @@ int engine_run_download(struct Download *d) {
       resuming = false;
     }
   }
+
+  if (resuming && if_range[0])
+    req_ctx.if_range = if_range;
 
   d->total_size = info.total_size;
   db_update_total_size(d->id, info.total_size);
@@ -172,6 +372,7 @@ int engine_run_download(struct Download *d) {
       ranges[n_ranges].start = c->range_start;
       ranges[n_ranges].end = c->range_end;
       ranges[n_ranges].whole_file = force_whole_file;
+      ranges[n_ranges].unknown_size = false;
       ranges[n_ranges].resume_offset = force_whole_file ? 0 : c->bytes_done;
 
       if (!force_whole_file)
@@ -184,16 +385,20 @@ int engine_run_download(struct Download *d) {
              n_ranges, d->chunk_count);
 
     if (n_ranges == 0) {
+      atomic_store(&d->finishing, true);
       if (engine_finalize(d->dest_path, info.total_size,
                           request ? request->expected_sha256 : NULL) != 0) {
         clear_resume_state(d, true);
         return -2;
       }
       LOG_INFO("Download complete: %s\n", d->dest_path);
-      return 0;
+      return scan_published_outputs(d);
     }
   } else {
-    int n_workers = choose_worker_count(info.total_size);
+    DownloadManagerConfig config;
+    config_get(&config);
+    int n_workers = choose_worker_count(info.total_size,
+                                        config.max_connections_per_download);
     if (!info.supports_ranges)
       n_workers = 1;
 
@@ -205,6 +410,7 @@ int engine_run_download(struct Download *d) {
       ranges[0].end = (info.total_size > 0) ? (info.total_size - 1) : 0;
       ranges[0].resume_offset = 0;
       ranges[0].whole_file = true;
+      ranges[0].unknown_size = info.total_size == 0;
     }
 
     LOG_INFO("Using %d worker(s)\n", n_ranges);
@@ -248,7 +454,8 @@ int engine_run_download(struct Download *d) {
   if (n_ranges > 1) {
     pool = rebalance_pool_create(ranges, n_ranges, chunk_progress_slots,
                                  1024ULL * 1024ULL, /* 1 MB steal threshold */
-                                 on_rebalance_split, &split_ctx);
+                                 on_rebalance_split, lock_rebalance_mutation,
+                                 unlock_rebalance_mutation, &split_ctx);
   }
 
   WorkerPoolResult result = worker_pool_run(
@@ -269,13 +476,34 @@ int engine_run_download(struct Download *d) {
   bool user_stopped =
       atomic_load(&d->cancel_requested) || atomic_load(&d->pause_requested);
 
+  if (result.range_invalidated && !user_stopped) {
+    LOG_INFO("Download %u: origin rejected resume validator; restarting", d->id);
+    dm_mutex_t *mutex = (dm_mutex_t *)queue_manager_get_mutex();
+    dm_mutex_lock(mutex);
+    clear_resume_state(d, true);
+    dm_mutex_unlock(mutex);
+    return engine_run_download(d);
+  }
+
   /* --- Fallback: single‑connection retry if parallel failed --- */
+  bool tried_single_fallback = false;
   if (!result.all_succeeded && n_ranges > 1 && !user_stopped) {
     LOG_ERROR(
         "Parallel download failed, retrying with a single connection...\n");
+    tried_single_fallback = true;
+    db_delete_chunks(d->id);
+    memset(d->chunks, 0, sizeof(d->chunks));
+    d->chunk_count = 0;
+    d->progress = 0.0f;
     atomic_store(&d->bytes_downloaded, 0);
+    for (int i = 0; i < QM_MAX_CHUNKS; i++)
+      atomic_store(&d->chunk_live_bytes[i], 0);
     Range single_range = {
-        .start = 0, .end = 0, .resume_offset = 0, .whole_file = true};
+        .start = 0,
+        .end = info.total_size ? info.total_size - 1 : 0,
+        .resume_offset = 0,
+        .whole_file = true,
+        .unknown_size = info.total_size == 0};
     result =
         worker_pool_run(d->url, &single_range, 1, d->dest_path,
                         &d->bytes_downloaded, &d->cancel_requested,
@@ -283,9 +511,14 @@ int engine_run_download(struct Download *d) {
   }
 
   if (!result.all_succeeded) {
+    if (tried_single_fallback && d->dest_path[0] != '\0')
+      unlink(d->dest_path);
     if (user_stopped) {
       LOG_WARN("Download %u %s by user\n", d->id,
                atomic_load(&d->cancel_requested) ? "canceled" : "paused");
+    } else if (tried_single_fallback) {
+      LOG_ERROR("Single-connection fallback failed; download %u will restart "
+                "from scratch\n", d->id);
     } else {
       LOG_ERROR("One or more workers failed — resume data retained "
                 "for download %u\n",
@@ -297,6 +530,7 @@ int engine_run_download(struct Download *d) {
   LOG_INFO("Downloaded %llu bytes\n",
            (unsigned long long)result.total_bytes_downloaded);
 
+  atomic_store(&d->finishing, true);
   if (engine_finalize(d->dest_path, info.total_size,
                       request ? request->expected_sha256 : NULL) != 0) {
     clear_resume_state(d, true);
@@ -304,5 +538,5 @@ int engine_run_download(struct Download *d) {
   }
 
   LOG_INFO("Download complete: %s\n", d->dest_path);
-  return 0;
+  return scan_published_outputs(d);
 }

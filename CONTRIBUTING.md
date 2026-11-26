@@ -5,7 +5,7 @@ cdm currently builds and packages for Linux. Windows and macOS are not yet suppo
 ## Development dependencies
 
 - A C11 compiler (GCC or Clang), CMake 3.20+, Python 3, and pkg-config.
-- Development files for libcurl 7.60+, SQLite 3.24+, libnotify, SDL2, libepoxy, and OpenGL.
+- Development files for libcurl 7.60+, SQLite 3.24+, libnotify, SDL2, libepoxy, OpenGL, GLib/GIO, OpenSSL Crypto, and libxml2 2.9+.
 - Criterion when configuring with `-DBUILD_TESTING=ON`.
 - Git to clone the repository.
 
@@ -33,7 +33,7 @@ The XDG autostart entry is installed under `/etc/xdg/autostart`, so a system-wid
 
 ## Build packages
 
-Configure with `-DCMAKE_INSTALL_PREFIX=/usr` before making distro packages. `CMakeLists.txt` defines the DEB and RPM generators; the Arch PKGBUILD uses `makepkg`. Package output names follow `.release.toml`, currently `0.2.0-rc1`.
+Configure with `-DCMAKE_INSTALL_PREFIX=/usr` before making distro packages. `CMakeLists.txt` defines the DEB and RPM generators; the Arch PKGBUILD uses `makepkg`. Package output names follow `.release.toml`, currently `0.3.1-rc1`. Build DEB/RPM packages on the target distro so their automatic library dependencies match that distro; see the [release checklist](docs/RELEASE_CHECKLIST.md).
 
 ```sh
 cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_TESTING=OFF
@@ -43,6 +43,15 @@ cpack --config build/CPackConfig.cmake -G RPM
 ```
 
 Build the Arch package from the local checkout with `./scripts/cdm-release arch` on an Arch system with the tools in `packaging/deps/arch.sh`. The public PKGBUILD fetches a tagged source archive and requires that tag to exist. Do not publish a PKGBUILD with `sha256sums=('SKIP')` without generating and reviewing a checksum.
+
+Use `./scripts/cdm-release bump rc [N]`, `bump rcreset`, `bump stable`, or
+`bump patch|minor|major` to change release versions. The command updates
+`.release.toml`, the Arch PKGBUILD, browser manifest base versions, and current
+version references in the README, contribution guide, release notes and
+checklist. Browser manifests use numeric `MAJOR.MINOR.PATCH`; the RC number is
+carried by package metadata and tags. A version change resets release checklist
+boxes so each candidate is verified separately. Review the resulting diff and
+commit it before tagging.
 
 ## Submit a change
 

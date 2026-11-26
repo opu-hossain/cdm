@@ -1,6 +1,6 @@
 # Maintainer: Opu Hossain <opuhossain@tutamail.com>
 pkgname=cdm
-pkgver=0.2.0rc1
+pkgver=0.3.1rc1
 pkgrel=1
 pkgdesc="Core Download Manager with optional browser integration"
 arch=('x86_64' 'aarch64')
@@ -13,6 +13,9 @@ depends=(
   'mesa'
   'curl'
   'sqlite'
+  'openssl'
+  'libxml2'
+  'glib2'
   'glibc'
   'gcc-libs'
 )
@@ -25,6 +28,7 @@ makedepends=(
   'sdl2'
   'libepoxy'
   'mesa'
+  'glib2'
 )
 backup=('etc/xdg/autostart/cdm-daemon.desktop')
 _upstream_version="${pkgver/rc/-rc}"

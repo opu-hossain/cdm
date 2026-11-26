@@ -11,13 +11,14 @@
 extern "C" {
 #endif
 
-#define MAX_WORKERS 8
+#define MAX_WORKERS 16
 
 typedef struct {
   uint64_t start;
   uint64_t end;           // inclusive
   uint64_t resume_offset; // for resuming a partially‑completed range
   bool whole_file;        // true if range covers the entire file
+  bool unknown_size;      // true when the whole-file response has no known size
 } Range;
 
 /**
@@ -39,13 +40,13 @@ int segmenter_plan(uint64_t total_size, int n_workers, Range *out);
  *
  * - Unknown size → 1 (cannot plan ranges).
  * - < 1 MB        → 1 (connection overhead dominates).
- * - 1 MB – 20 MB  → 4.
- * - ≥ 20 MB       → 8.
+ * - 1 MB – 20 MB  → up to 4.
+ * - ≥ 20 MB       → the configured cap.
  *
  * @param total_size  File size in bytes; 0 means unknown.
  * @return            Worker count (always ≥ 1).
  */
-int choose_worker_count(uint64_t total_size);
+int choose_worker_count(uint64_t total_size, int max_connections);
 
 #ifdef __cplusplus
 }

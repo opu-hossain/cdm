@@ -9,6 +9,7 @@ set(TEST_SOURCES
     test_curl_client.c
     test_log.c
     test_thread.c
+    test_tray.c
     test_spawn.c
     test_ipc_socket.c
     test_scheduler.c
@@ -16,6 +17,11 @@ set(TEST_SOURCES
     test_worker_pool.c
     test_path.c
     test_gui_controller.c
+    test_gui_popup.c
+    test_config.c
+    test_i18n.c
+    test_url.c
+    test_youtube_sabr.c
 )
 
 foreach(TEST_SOURCE ${TEST_SOURCES})
@@ -31,7 +37,20 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         target_sources(${TEST_NAME} PRIVATE
             ${CMAKE_SOURCE_DIR}/src/gui/gui_controller.c
             ${CMAKE_SOURCE_DIR}/src/gui/gui_client.c
+            ${CMAKE_SOURCE_DIR}/src/gui/gui_model.c
         )
+    elseif(TEST_NAME STREQUAL test_gui_popup)
+        target_sources(${TEST_NAME} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/gui/gui_popup.c
+        )
+    elseif(TEST_NAME STREQUAL test_tray AND DOWNLOADMGR_ENABLE_TRAY
+           AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+           AND TRAY_GIO_FOUND AND TRAY_MENU_FOUND)
+        target_compile_definitions(${TEST_NAME} PRIVATE CDM_HAVE_TRAY=1)
+    endif()
+    if(TEST_NAME STREQUAL test_db)
+        target_compile_definitions(${TEST_NAME} PRIVATE
+            CDM_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
     target_link_libraries(${TEST_NAME}
         PRIVATE
@@ -39,6 +58,9 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         PkgConfig::CRITERION
     )
     if(TEST_NAME STREQUAL test_scheduler)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_link_options(${TEST_NAME} PRIVATE -Wl,--wrap=spawn_post_action)
+        endif()
         # Expose Criterion case names in verbose CTest output.
         add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME} --verbose)
     else()
@@ -69,6 +91,37 @@ if(UNIX AND NOT WIN32)
                  COMMAND ${Python3_EXECUTABLE} -B
                          ${CMAKE_CURRENT_SOURCE_DIR}/test_daemon_lifecycle.py
                          $<TARGET_FILE:cdm>)
+        add_test(NAME test_cli_headers
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_headers.py
+                         $<TARGET_FILE:cdm>)
+        add_test(NAME test_cli_rejected_add
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_rejected_add.py
+                         $<TARGET_FILE:cdm>)
+        add_test(NAME test_cli_duplicates
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_duplicates.py
+                         $<TARGET_FILE:cdm>)
+        add_test(NAME test_cli_batch
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_batch.py
+                         $<TARGET_FILE:cdm>)
+        add_test(NAME test_cli_list
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_list.py
+                         $<TARGET_FILE:cdm>)
+        add_test(NAME test_cli_export
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_export.py
+                         $<TARGET_FILE:cdm>)
+        add_test(NAME test_release_bump
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_release_bump.py)
+        add_test(NAME test_ipc_fallback
+                 COMMAND ${Python3_EXECUTABLE} -B
+                         ${CMAKE_CURRENT_SOURCE_DIR}/test_ipc_fallback.py
+                         $<TARGET_FILE:cdm>)
         add_executable(test_curl_http_integration test_curl_http_integration.c)
         downloadmgr_enable_warnings(test_curl_http_integration)
         downloadmgr_enable_sanitizer(test_curl_http_integration)
@@ -81,6 +134,11 @@ endif()
 
 find_program(NODE_EXECUTABLE node)
 if(NODE_EXECUTABLE)
+    add_test(NAME test_youtube_sabr_capture
+             COMMAND ${NODE_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_youtube_sabr_capture.js
+                     ${CMAKE_SOURCE_DIR}/browser/chromium/youtube_sabr_capture.js
+                     ${CMAKE_SOURCE_DIR}/browser/firefox/youtube_sabr_capture.js)
     add_test(NAME test_browser_extensions
              COMMAND ${NODE_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/test_browser_extensions.js

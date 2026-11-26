@@ -10,11 +10,18 @@
 /** Derive a safe filename from the final URL path segment. */
 void path_filename_from_url(const char *url, char *out, size_t out_size);
 
+/** Extract a safe filename from a Content-Disposition header value. */
+bool path_filename_from_disposition(const char *header, char *out,
+                                    size_t out_size);
+
 /** Join a directory and filename, returning false if the result is too long. */
 bool path_join(const char *dir, const char *filename, char *out,
                size_t out_size);
 
 /** Choose an unused filesystem path, inserting "(n)" before the last extension. */
 bool path_make_unique(const char *path, char *out, size_t out_size);
+
+/* Exact case-insensitive match against comma-separated lowercase extensions. */
+bool path_extension_in_list(const char *filename, const char *extensions);
 
 #endif /* UTILS_PATH_H */
