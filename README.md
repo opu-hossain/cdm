@@ -1,10 +1,12 @@
 # Core Download Manager (cdm)
 
-cdm is a Linux download manager with a CLI, a background daemon, an SDL2/Nuklear GUI, and optional browser integration.
+cdm is a cross-platform download manager written in pure C11, with a CLI, a background daemon, an SDL2/Nuklear GUI, and optional browser integration. The architecture targets Linux, macOS, and Windows; the current `v0.3.1-rc1` release is Linux-only (DEB, RPM, and Arch PKGBUILD), with native macOS and Windows ports still planned (see [Roadmap](#roadmap)).
 
 ## Status
 
-The current source builds Linux DEB and RPM packages and includes an Arch PKGBUILD. The release metadata is `0.3.0-rc1`; package availability depends on a release being published. The browser extensions are installed manually as unpacked or temporary extensions.
+The current release is [`v0.3.1-rc1`](https://github.com/opu-hossain/cdm/releases/tag/v0.3.1-rc1) on GitHub Releases. It ships Linux packages only: DEB, RPM, and an Arch PKGBUILD. Linux is the supported runtime today; macOS and Windows are not yet supported and their native ports are planned but not implemented.
+
+The cross-platform goal is architectural rather than shipped: the download engine, SQLite persistence, and IPC contracts are platform-neutral, with OS-specific code isolated behind the `src/platform/*` interfaces. The ordered blocker map and acceptance gates for the remaining ports live in the [platform port plan](docs/platform-port.md). The browser extensions are installed manually as unpacked or temporary extensions.
 
 ## Features
 
@@ -18,14 +20,14 @@ The current source builds Linux DEB and RPM packages and includes an Arch PKGBUI
 
 ## Install a locally built package
 
-Run these commands from the repository root after installing the build dependencies in [CONTRIBUTING.md](CONTRIBUTING.md). The commands build from this checkout; they do not depend on a published release asset.
+Run these commands from the repository root after installing the build dependencies in [CONTRIBUTING.md](CONTRIBUTING.md). The commands build from this checkout; they do not depend on a published release asset. Package filenames embed the version from [`.release.toml`](.release.toml), shown below as `0.3.1-rc1`; adjust the version if your checkout pins a different one.
 
 ### Debian or Ubuntu
 
 ```sh
 cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_TESTING=OFF
 cmake --build build && cpack --config build/CPackConfig.cmake -G DEB
-sudo apt install ./cdm-0.3.0-rc1-Linux.deb
+sudo apt install ./cdm-0.3.1-rc1-Linux.deb
 ```
 
 ### Fedora or RHEL
@@ -33,7 +35,7 @@ sudo apt install ./cdm-0.3.0-rc1-Linux.deb
 ```sh
 cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_TESTING=OFF
 cmake --build build && cpack --config build/CPackConfig.cmake -G RPM
-sudo dnf install ./cdm-0.3.0-rc1-Linux.rpm
+sudo dnf install ./cdm-0.3.1-rc1-Linux.rpm
 ```
 
 ### Arch Linux
@@ -96,7 +98,12 @@ Graphical sessions with XDG autostart start the packaged daemon at login. `cdm d
 
 ## Roadmap
 
-Windows and macOS are not yet supported. No release date is set for either platform.
+- **macOS native port:** add adapters for IPC, daemon lifecycle, filesystem and process primitives, and desktop integration while keeping the download, database, and browser JSON contracts unchanged.
+- **Windows native port:** replace the Unix-domain IPC transport and POSIX daemon lifecycle with Windows equivalents behind the existing `src/platform/*` interfaces.
+- **Browser extension store packaging:** publish the Chrome/Chromium and Firefox extensions through their stores instead of manual unpacked or temporary installs.
+- **Multi-platform CI releases:** extend the current DEB/RPM release workflows to build, test, and publish macOS and Windows artifacts.
+
+Windows and macOS are not yet supported. No release date is set for either platform. The ordered port boundaries, blocker map, and native acceptance gates are in the [platform port plan](docs/platform-port.md).
 
 ## License
 
