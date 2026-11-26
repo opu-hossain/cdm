@@ -33,7 +33,7 @@ The XDG autostart entry is installed under `/etc/xdg/autostart`, so a system-wid
 
 ## Build packages
 
-Configure with `-DCMAKE_INSTALL_PREFIX=/usr` before making distro packages. `CMakeLists.txt` defines the DEB and RPM generators; the Arch PKGBUILD uses `makepkg`. Package output names follow `.release.toml`, currently `0.3.0-rc1`. Build DEB/RPM packages on the target distro so their automatic library dependencies match that distro; see the [release checklist](docs/RELEASE_CHECKLIST.md).
+Configure with `-DCMAKE_INSTALL_PREFIX=/usr` before making distro packages. `CMakeLists.txt` defines the DEB and RPM generators; the Arch PKGBUILD uses `makepkg`. Package output names follow `.release.toml`, currently `0.3.1-rc1`. Build DEB/RPM packages on the target distro so their automatic library dependencies match that distro; see the [release checklist](docs/RELEASE_CHECKLIST.md).
 
 ```sh
 cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_TESTING=OFF

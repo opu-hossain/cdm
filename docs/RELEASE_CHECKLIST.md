@@ -1,4 +1,4 @@
-# Release checklist: 0.3.0-rc1 draft
+# Release checklist: 0.3.1-rc1 draft
 
 This checklist is for the current Linux release candidate. A checked item must reflect a completed verification run; package configuration alone is not release validation.
 After `scripts/cdm-release bump` changes the version, all checkboxes reset. Dated observations then describe earlier candidates until the checks are repeated.
@@ -27,13 +27,13 @@ After `scripts/cdm-release bump` changes the version, all checkboxes reset. Date
 - [ ] Build a DEB and inspect/install it on Debian or Ubuntu. Arch-host CPack generation and file-list inspection passed, but its metadata omits curl/SQLite/OpenSSL/XML dependencies because `dpkg-shlibdeps` cannot resolve Arch libraries. Use the Ubuntu 24.04 release workflow or equivalent target-distro build before publication.
 - [ ] Build an RPM and inspect/install it on Fedora. Arch-host CPack generation and file-list inspection passed, but its auto-requires reference Arch libraries, including glibc 2.43. Use the Fedora container in the release workflow or equivalent target-distro build before publication.
 - [ ] Build the Arch package with `./scripts/cdm-release arch` on Arch and inspect/install it with `pacman -U`.
-- [x] Verify local CPack package names and versions against `.release.toml`: `cdm-0.3.0-rc1-Linux.deb` / `.rpm`, internal version `0.3.0~rc1` (2026-09-28). Release workflows copy them to architecture-specific names; those published artifacts remain unchecked.
+- [x] Verify local CPack package names and versions against `.release.toml`: `cdm-0.3.1-rc1-Linux.deb` / `.rpm`, internal version `0.3.1~rc1` (2026-09-28). Release workflows copy them to architecture-specific names; those published artifacts remain unchecked.
 - [ ] Verify the Arch PKGBUILD source checksum before publication; it currently uses `sha256sums=('SKIP')`.
 - [ ] Check each package's dependencies, file list, autostart entry, and remove/upgrade behavior.
 
 ## Publish only after acceptance
 
-- [ ] Create the matching `v0.3.0-rc1` tag from the intended commit.
+- [ ] Create the matching `v0.3.1-rc1` tag from the intended commit.
 - [ ] Generate `SHA256SUMS.txt` from the exact files to upload, then run `sha256sum -c SHA256SUMS.txt` in that directory.
 - [ ] Upload artifacts, checksums, and release notes to the matching release.
 - [ ] Check each public download URL and installation command on a clean target.

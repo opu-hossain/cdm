@@ -1,10 +1,10 @@
 # Core Download Manager (cdm)
 
-cdm is a cross-platform download manager written in pure C11, with a CLI, a background daemon, an SDL2/Nuklear GUI, and optional browser integration. The architecture targets Linux, macOS, and Windows; the current `v0.3.1-rc1` release is Linux-only (DEB, RPM, and Arch PKGBUILD), with native macOS and Windows ports still planned (see [Roadmap](#roadmap)).
+cdm is a cross-platform download manager written in pure C11, with a CLI, a background daemon, an SDL2/Nuklear GUI, and optional browser integration. The architecture targets Linux, macOS, and Windows; the current `v0.3.1-rc1` release is Linux-only (DEB and RPM assets plus an in-repo Arch PKGBUILD), with native macOS and Windows ports still planned (see [Roadmap](#roadmap)).
 
 ## Status
 
-The current release is [`v0.3.1-rc1`](https://github.com/opu-hossain/cdm/releases/tag/v0.3.1-rc1) on GitHub Releases. It ships Linux packages only: DEB, RPM, and an Arch PKGBUILD. Linux is the supported runtime today; macOS and Windows are not yet supported and their native ports are planned but not implemented.
+The current release is [`v0.3.1-rc1`](https://github.com/opu-hossain/cdm/releases/tag/v0.3.1-rc1) on GitHub Releases. The GitHub release provides Linux DEB and RPM assets, alongside an Arch PKGBUILD maintained in the repository. Linux is the supported runtime today; macOS and Windows are not yet supported and their native ports are planned but not implemented.
 
 The cross-platform goal is architectural rather than shipped: the download engine, SQLite persistence, and IPC contracts are platform-neutral, with OS-specific code isolated behind the `src/platform/*` interfaces. The ordered blocker map and acceptance gates for the remaining ports live in the [platform port plan](docs/platform-port.md). The browser extensions are installed manually as unpacked or temporary extensions.
 
@@ -20,7 +20,7 @@ The cross-platform goal is architectural rather than shipped: the download engin
 
 ## Install a locally built package
 
-Run these commands from the repository root after installing the build dependencies in [CONTRIBUTING.md](CONTRIBUTING.md). The commands build from this checkout; they do not depend on a published release asset. Package filenames embed the version from [`.release.toml`](.release.toml), shown below as `0.3.1-rc1`; adjust the version if your checkout pins a different one.
+Run these commands from the repository root after installing the build dependencies in [CONTRIBUTING.md](CONTRIBUTING.md). The commands build from this checkout; they do not depend on a published release asset. Local CPack artifacts take their version from [`.release.toml`](.release.toml) and are named `cdm-<version>-Linux.deb` and `cdm-<version>-Linux.rpm`; the examples below use `0.3.1-rc1`, so adjust them if your checkout pins a different version. Published release assets use architecture-suffixed names instead, such as `cdm-0.3.1-rc1-linux-amd64.deb` and `cdm-0.3.1-rc1-linux-x86_64.rpm`.
 
 ### Debian or Ubuntu
 

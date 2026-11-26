@@ -70,7 +70,7 @@ CMake can build DEB and RPM packages. The Arch PKGBUILD and local release helper
 
 Local Arch-host CPack generation produced DEB and RPM files with the expected installed file list. These are smoke artifacts, not target-distro release validation: the Arch-host DEB lacks automatically discovered non-GUI runtime dependencies, and the RPM auto-requires this host's glibc/libxml versions. The release workflows build on Ubuntu 24.04 and Fedora 41 respectively; inspect and install those outputs on their target systems before publishing.
 
-The configured version is `0.3.0-rc1` (CPack package version `0.3.0~rc1`). Local CPack artifacts use names such as `cdm-0.3.0-rc1-Linux.deb` and `cdm-0.3.0-rc1-Linux.rpm`. Release workflows copy them to architecture-specific names before upload. These names describe build output, not a published download URL.
+The configured version is `0.3.1-rc1` (CPack package version `0.3.1~rc1`). Local CPack artifacts use names such as `cdm-0.3.1-rc1-Linux.deb` and `cdm-0.3.1-rc1-Linux.rpm`. Release workflows copy them to architecture-specific names before upload. These names describe build output, not a published download URL.
 
 ## Verification before publication
 
