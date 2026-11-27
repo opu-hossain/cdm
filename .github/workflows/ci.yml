@@ -20,7 +20,7 @@ env:
 
 jobs:
   linux:
-    name: Linux (${{ matrix.build_type }})
+    name: Debian / Ubuntu (${{ matrix.build_type }})
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
@@ -122,6 +122,82 @@ jobs:
           fi
           rpm -qpi "$rpm_path" >/dev/null
           echo "RPM dry run succeeded: $rpm_path"
+
+  arch-pkgbuild:
+    name: Arch Linux (PKGBUILD)
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    timeout-minutes: 60
+    steps:
+      - name: Bootstrap container tools
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm git tar gzip ca-certificates \
+            which findutils sudo shadow
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Create non-root builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          useradd -m -G wheel -s /bin/bash builder
+          printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+          visudo -cf /etc/sudoers.d/builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Install build dependencies
+        run: sudo -u builder -H env PACMAN_NOCONFIRM=1 bash ./packaging/deps/arch.sh
+
+      - name: Build Arch package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/build-arch.sh <<'SCRIPT'
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          tarball="$(./scripts/cdm-release tarball)"
+          version="$(./scripts/cdm-release version | sed -n 's/^tag version:[[:space:]]*//p')"
+          if [[ -z "$version" ]]; then
+            echo "::error::could not resolve release version"
+            exit 1
+          fi
+
+          pkgdir="packaging/arch"
+          tarball_name="cdm-${version}.tar.gz"
+          cp "$tarball" "$pkgdir/$tarball_name"
+
+          cp "$pkgdir/PKGBUILD" "$pkgdir/PKGBUILD.bak"
+          restore_pkgbuild() {
+            mv -f "$pkgdir/PKGBUILD.bak" "$pkgdir/PKGBUILD"
+          }
+          trap restore_pkgbuild EXIT
+
+          sed -i "s|^source=.*|source=(\"${tarball_name}::file://${PWD}/${pkgdir}/${tarball_name}\")|" "$pkgdir/PKGBUILD"
+          sed -i "s|^pkgver=.*|pkgver=${version/-rc/rc}|" "$pkgdir/PKGBUILD"
+          sed -i "s|^pkgrel=.*|pkgrel=1|" "$pkgdir/PKGBUILD"
+
+          (
+            cd "$pkgdir"
+            rm -rf src pkg
+            rm -f ./*.pkg.tar.zst
+            updpkgsums
+            makepkg -f --noconfirm
+          )
+
+          package="$(find "$pkgdir" -maxdepth 1 -name '*.pkg.tar.zst' ! -name '*-debug-*' -print -quit)"
+          if [[ -z "$package" ]]; then
+            echo "::error::makepkg did not produce an Arch package"
+            exit 1
+          fi
+          pacman -Qpi "$package" >/dev/null
+          echo "Arch package built: $package"
+          SCRIPT
+          chmod +x /tmp/build-arch.sh
+          sudo -u builder -H env GITHUB_WORKSPACE="$GITHUB_WORKSPACE" bash /tmp/build-arch.sh
 
   metadata:
     name: Release metadata

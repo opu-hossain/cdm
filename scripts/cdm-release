@@ -62,7 +62,8 @@ show_version() {
 
 # Source tarball.
 make_source_tarball() {
-    local version="$1" out="${2:-/tmp/cdm-${version}.tar.gz}"
+    local version="$1"
+    local out="${2:-/tmp/cdm-${version}.tar.gz}"
     local stage; stage="$(mktemp -d)"
     mkdir -p "$stage/cdm-${version}"
     rsync -a \

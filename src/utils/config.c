@@ -60,6 +60,13 @@ static void ensure_network_mutex(void) {
   call_once(&g_network_once, init_network_mutex);
 }
 
+/* Bounded string copy: always NUL-terminates and never writes past dst_size. */
+static void copy_string(char *dst, size_t dst_size, const char *src) {
+  if (dst == NULL || dst_size == 0)
+    return;
+  snprintf(dst, dst_size, "%s", src != NULL ? src : "");
+}
+
 static void reset_defaults(void) {
   g_max_concurrent = DEFAULT_MAX_CONCURRENT;
   g_retry_max_attempts = DEFAULT_RETRY_MAX_ATTEMPTS;
@@ -70,15 +77,14 @@ static void reset_defaults(void) {
   g_clipboard_monitor = false;
   ensure_network_mutex();
   dm_mutex_lock(&g_network_mutex);
-  memcpy(g_ui_theme, "system", sizeof("system"));
-  memcpy(g_ui_locale, "en", sizeof("en"));
+  copy_string(g_ui_theme, sizeof(g_ui_theme), "system");
+  copy_string(g_ui_locale, sizeof(g_ui_locale), "en");
   g_scanner_command[0] = '\0';
   g_scanner_args[0] = '\0';
   g_proxy_mode = PROXY_NONE;
   g_proxy_url[0] = g_proxy_username[0] = g_proxy_password[0] = '\0';
   g_max_connections = DEFAULT_MAX_CONNECTIONS;
-  memset(g_user_agent, 0, sizeof(g_user_agent));
-  memcpy(g_user_agent, DEFAULT_USER_AGENT, sizeof(DEFAULT_USER_AGENT));
+  copy_string(g_user_agent, sizeof(g_user_agent), DEFAULT_USER_AGENT);
   g_connect_timeout_sec = DEFAULT_CONNECT_TIMEOUT_SEC;
   g_transfer_timeout_sec = DEFAULT_TRANSFER_TIMEOUT_SEC;
   dm_mutex_unlock(&g_network_mutex);
@@ -153,8 +159,7 @@ static void read_string(toml_datum_t tab, const char *key, char *out,
     return;
   toml_datum_t d = toml_get(tab, key);
   if (d.type == TOML_STRING) {
-    strncpy(out, d.u.str.ptr, out_size - 1);
-    out[out_size - 1] = '\0';
+    copy_string(out, out_size, d.u.str.ptr);
     /* tomlc17 owns the string memory; freed via toml_free() */
   }
 }
@@ -222,8 +227,11 @@ static bool default_dir_is_usable(const char *path) {
   if (file_ensure_directory(path) != 0)
     return false;
 
-  char resolved[1024];
-  return realpath(path, resolved) != NULL;
+  char *resolved = realpath(path, NULL);
+  if (!resolved)
+    return false;
+  free(resolved);
+  return true;
 }
 
 /* Public API */
@@ -263,14 +271,13 @@ void config_init(const char *path) {
   char user_agent[sizeof(g_user_agent)] = DEFAULT_USER_AGENT;
   read_string(downloads, "user_agent", user_agent, sizeof(user_agent));
   if (!user_agent[0])
-    memcpy(user_agent, DEFAULT_USER_AGENT, sizeof(DEFAULT_USER_AGENT));
+    copy_string(user_agent, sizeof(user_agent), DEFAULT_USER_AGENT);
   char configured_default_dir[sizeof(g_default_dir)] = {0};
   read_string(downloads, "default_directory", configured_default_dir,
               sizeof(configured_default_dir));
   if (configured_default_dir[0] != '\0' &&
       default_dir_is_usable(configured_default_dir)) {
-    strncpy(g_default_dir, configured_default_dir, sizeof(g_default_dir) - 1);
-    g_default_dir[sizeof(g_default_dir) - 1] = '\0';
+    copy_string(g_default_dir, sizeof(g_default_dir), configured_default_dir);
   } else if (configured_default_dir[0] != '\0') {
     LOG_WARN("Ignoring invalid default_directory '%s'; using '%s'",
              configured_default_dir, g_default_dir);
@@ -296,14 +303,14 @@ void config_init(const char *path) {
   if (strcmp(ui_theme, "system") == 0 || strcmp(ui_theme, "light") == 0 ||
       strcmp(ui_theme, "dark") == 0) {
     dm_mutex_lock(&g_network_mutex);
-    memcpy(g_ui_theme, ui_theme, strlen(ui_theme) + 1);
+    copy_string(g_ui_theme, sizeof(g_ui_theme), ui_theme);
     dm_mutex_unlock(&g_network_mutex);
   }
   char ui_locale[sizeof(g_ui_locale)] = {0};
   read_string(ui, "locale", ui_locale, sizeof(ui_locale));
   if (strcmp(ui_locale, "en") == 0 || strcmp(ui_locale, "es") == 0) {
     dm_mutex_lock(&g_network_mutex);
-    memcpy(g_ui_locale, ui_locale, strlen(ui_locale) + 1);
+    copy_string(g_ui_locale, sizeof(g_ui_locale), ui_locale);
     dm_mutex_unlock(&g_network_mutex);
   }
 
@@ -314,8 +321,8 @@ void config_init(const char *path) {
               sizeof(scanner_command));
   read_string(security, "scanner_args", scanner_args, sizeof(scanner_args));
   dm_mutex_lock(&g_network_mutex);
-  memcpy(g_scanner_command, scanner_command, sizeof(scanner_command));
-  memcpy(g_scanner_args, scanner_args, sizeof(scanner_args));
+  copy_string(g_scanner_command, sizeof(g_scanner_command), scanner_command);
+  copy_string(g_scanner_args, sizeof(g_scanner_args), scanner_args);
   dm_mutex_unlock(&g_network_mutex);
 
   toml_datum_t timeouts = toml_get(root, "timeouts");
@@ -348,11 +355,11 @@ void config_init(const char *path) {
   ensure_network_mutex();
   dm_mutex_lock(&g_network_mutex);
   g_proxy_mode = proxy_mode;
-  memcpy(g_proxy_url, proxy_url, sizeof(g_proxy_url));
-  memcpy(g_proxy_username, proxy_username, sizeof(g_proxy_username));
-  memcpy(g_proxy_password, proxy_password, sizeof(g_proxy_password));
+  copy_string(g_proxy_url, sizeof(g_proxy_url), proxy_url);
+  copy_string(g_proxy_username, sizeof(g_proxy_username), proxy_username);
+  copy_string(g_proxy_password, sizeof(g_proxy_password), proxy_password);
   g_max_connections = max_connections;
-  memcpy(g_user_agent, user_agent, sizeof(g_user_agent));
+  copy_string(g_user_agent, sizeof(g_user_agent), user_agent);
   g_connect_timeout_sec = connect_timeout;
   g_transfer_timeout_sec = transfer_timeout;
   dm_mutex_unlock(&g_network_mutex);
@@ -406,17 +413,19 @@ void config_get(DownloadManagerConfig *out) {
   out->clipboard_monitor = g_clipboard_monitor;
   ensure_network_mutex();
   dm_mutex_lock(&g_network_mutex);
-  memcpy(out->ui_theme, g_ui_theme, sizeof(out->ui_theme));
-  memcpy(out->ui_locale, g_ui_locale, sizeof(out->ui_locale));
-  memcpy(out->scanner_command, g_scanner_command,
-         sizeof(out->scanner_command));
-  memcpy(out->scanner_args, g_scanner_args, sizeof(out->scanner_args));
+  copy_string(out->ui_theme, sizeof(out->ui_theme), g_ui_theme);
+  copy_string(out->ui_locale, sizeof(out->ui_locale), g_ui_locale);
+  copy_string(out->scanner_command, sizeof(out->scanner_command),
+              g_scanner_command);
+  copy_string(out->scanner_args, sizeof(out->scanner_args), g_scanner_args);
   out->proxy_mode = g_proxy_mode;
-  memcpy(out->proxy_url, g_proxy_url, sizeof(out->proxy_url));
-  memcpy(out->proxy_username, g_proxy_username, sizeof(out->proxy_username));
-  memcpy(out->proxy_password, g_proxy_password, sizeof(out->proxy_password));
+  copy_string(out->proxy_url, sizeof(out->proxy_url), g_proxy_url);
+  copy_string(out->proxy_username, sizeof(out->proxy_username),
+              g_proxy_username);
+  copy_string(out->proxy_password, sizeof(out->proxy_password),
+              g_proxy_password);
   out->max_connections_per_download = g_max_connections;
-  memcpy(out->user_agent, g_user_agent, sizeof(out->user_agent));
+  copy_string(out->user_agent, sizeof(out->user_agent), g_user_agent);
   out->connect_timeout_sec = g_connect_timeout_sec;
   out->transfer_timeout_sec = g_transfer_timeout_sec;
   dm_mutex_unlock(&g_network_mutex);
