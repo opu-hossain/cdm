@@ -216,7 +216,7 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
     if (!filename_valid(state->filename) || !state->folder[0] ||
         !path_join(state->folder, state->filename, state->full_path,
                    sizeof(state->full_path))) {
-      snprintf(state->error, sizeof(state->error),
+      snprintf(state->error, sizeof(state->error), "%s",
                tr("gui.choose_a_valid_folder_and_filename"));
     } else {
       IpcAddResponse response = {0};
@@ -228,7 +228,7 @@ static void draw_confirmation(struct nk_context *ctx, PopupState *state,
       state->download_id = response.id;
       state->duplicate = response.result == IPC_RESULT_REJECTED;
       if (result != 0)
-      snprintf(state->error, sizeof(state->error),
+      snprintf(state->error, sizeof(state->error), "%s",
                tr("gui.could_not_start_download_check_the_destination"));
       else
         state->error[0] = '\0';
@@ -287,7 +287,7 @@ static void connect_progress(PopupState *state) {
 retry:
   state->progress_sock = -1;
   state->next_retry_tick = SDL_GetTicks() + 1000;
-  snprintf(state->error, sizeof(state->error),
+  snprintf(state->error, sizeof(state->error), "%s",
            tr("gui.progress_connection_lost_retrying"));
 }
 
@@ -348,7 +348,7 @@ static void poll_progress(PopupState *state) {
   ipc_client_disconnect(state->progress_sock);
   state->progress_sock = -1;
   state->next_retry_tick = SDL_GetTicks() + 1000;
-  snprintf(state->error, sizeof(state->error),
+  snprintf(state->error, sizeof(state->error), "%s",
            tr("gui.progress_connection_lost_retrying"));
 }
 

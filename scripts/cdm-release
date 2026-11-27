@@ -62,7 +62,8 @@ show_version() {
 
 # Source tarball.
 make_source_tarball() {
-    local version="$1" out="${2:-/tmp/cdm-${version}.tar.gz}"
+    local version="$1"
+    local out="${2:-/tmp/cdm-${version}.tar.gz}"
     local stage; stage="$(mktemp -d)"
     mkdir -p "$stage/cdm-${version}"
     rsync -a \
@@ -262,10 +263,17 @@ open_release() {
 
 make_tag() {
     compute_versions
+    info "Fetching origin main and tags"
+    git fetch origin main --tags
     git rev-parse --abbrev-ref HEAD | grep -qx main \
         || die "must be on main to tag"
     git diff --quiet && git diff --cached --quiet \
         || die "working tree is dirty; commit first"
+    local local_head remote_head
+    local_head="$(git rev-parse HEAD)"
+    remote_head="$(git rev-parse origin/main)"
+    [[ "$local_head" == "$remote_head" ]] \
+        || die "local main (${local_head:0:12}) is out of date with origin/main (${remote_head:0:12}); pull or rebase before tagging"
     [[ -z "$(git tag -l "$RELEASE_TAG")" ]] \
         || die "tag $RELEASE_TAG already exists"
     info "Creating tag $RELEASE_TAG"
@@ -332,7 +340,7 @@ doctor() {
 
     info "Workflows"
     local wf
-    for wf in release-deb release-rpm; do
+    for wf in ci release; do
         f="$ROOT/.github/workflows/${wf}.yml"
         if [[ ! -f "$f" ]]; then
             warn "  missing: .github/workflows/${wf}.yml"

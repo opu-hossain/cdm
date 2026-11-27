@@ -1,0 +1,340 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Release channel override'
+        required: false
+        default: rc
+        type: choice
+        options:
+          - rc
+          - stable
+      version:
+        description: 'Resolved version override (without leading v); defaults to .release.toml'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      publish: ${{ steps.meta.outputs.publish }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure release commit is on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Commit $GITHUB_SHA (ref $GITHUB_REF) is not on main. Refusing to publish a release from a non-main branch/commit."
+            exit 1
+          fi
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          INPUT_CHANNEL: ${{ inputs.channel || '' }}
+          INPUT_VERSION: ${{ inputs.version || '' }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          release_file = Path('.release.toml')
+          if not release_file.exists():
+              raise SystemExit('Missing .release.toml; release metadata is required.')
+          text = release_file.read_text(encoding='utf-8')
+
+          def field(pattern, default):
+              match = re.search(pattern, text, re.M)
+              return match.group(1).strip() if match else default
+
+          channel = field(r'^channel\s*=\s*["\']?([A-Za-z0-9_-]+)', 'rc')
+          base = field(r'^version\s*=\s*["\']?([0-9]+\.[0-9]+\.[0-9]+)', '0.1.0')
+          rc = int(field(r'^rc\s*=\s*([0-9]+)', '1'))
+          publish = field(r'^publish\s*=\s*(true|false)', 'true').lower() == 'true'
+
+          manual_channel = os.environ.get('INPUT_CHANNEL', '').strip()
+          if manual_channel in {'rc', 'stable'}:
+              channel = manual_channel
+
+          manual_version = os.environ.get('INPUT_VERSION', '').strip()
+          if manual_version:
+              version = manual_version.lstrip('v')
+          else:
+              version = f'{base}-rc{rc}' if channel == 'rc' else base
+          release_tag = f'v{version}'
+
+          event = os.environ.get('EVENT_NAME', '')
+          ref_type = os.environ.get('REF_TYPE', '')
+          ref_name = os.environ.get('REF_NAME', '')
+          if event == 'push':
+              if ref_type != 'tag' or ref_name != release_tag:
+                  raise SystemExit(
+                      f'tag mismatch: pushed {ref_type} {ref_name!r}, '
+                      f'expected tag {release_tag!r}')
+          elif ref_type == 'tag' and not manual_version and ref_name != release_tag:
+              raise SystemExit(
+                  f'tag mismatch: dispatched on {ref_name!r}, '
+                  f'expected tag {release_tag!r}')
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
+              out.write(f'channel={channel}\n')
+              out.write(f'version={version}\n')
+              out.write(f'release_tag={release_tag}\n')
+              out.write(f'publish={str(publish).lower()}\n')
+          print(f'Resolved {channel} release {version} '
+                f'(tag {release_tag}, publish={publish})')
+          PY
+
+      - name: Announce skip if publishing is disabled
+        if: steps.meta.outputs.publish != 'true'
+        run: echo "Release publishing is disabled. Skipping package and publish jobs."
+
+  build-deb:
+    name: Build DEB
+    needs: validate
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Disable broken Microsoft APT repository
+        run: sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
+
+      - name: Install build dependencies
+        run: ./packaging/deps/deb.sh
+
+      - name: Configure build
+        run: >
+          cmake -S . -B build
+          -DBUILD_TESTING=ON
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_INSTALL_PREFIX=/usr
+
+      - name: Build and test
+        run: |
+          cmake --build build --parallel "$(nproc)"
+          ctest --test-dir build --output-on-failure
+
+      - name: Build Debian package
+        run: cpack --config build/CPackConfig.cmake -G DEB
+
+      - name: Rename package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.validate.outputs.version }}"
+          arch="$(dpkg --print-architecture)"
+          package_path="$(find . -maxdepth 1 -name '*.deb' -print -quit)"
+          if [[ -z "$package_path" ]]; then
+            echo "::error::CPack did not produce a DEB."
+            exit 1
+          fi
+          new_path="cdm-${version}-linux-${arch}.deb"
+          mv "$package_path" "$new_path"
+          echo "path=$new_path" >> "$GITHUB_OUTPUT"
+
+      - name: Verify DEB package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_path="${{ steps.package.outputs.path }}"
+          dpkg-deb --info "$package_path" >/dev/null
+          dpkg-deb --contents "$package_path" | grep -q './usr/bin/cdm$'
+          dpkg-deb --contents "$package_path" | grep -q './usr/bin/cdm_native_host$'
+
+      - name: Upload DEB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-package
+          path: ${{ steps.package.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
+  build-rpm:
+    name: Build RPM
+    needs: validate
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    container: fedora:41
+    timeout-minutes: 45
+    steps:
+      - name: Bootstrap container tools
+        run: dnf install -y git tar curl which findutils
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install build dependencies
+        run: bash ./packaging/deps/rpm.sh
+
+      - name: Configure build
+        run: >
+          cmake -S . -B build-rpm
+          -DBUILD_TESTING=OFF
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_INSTALL_PREFIX=/usr
+
+      - name: Build
+        run: cmake --build build-rpm --parallel "$(nproc)"
+
+      - name: Build RPM package
+        run: cpack --config build-rpm/CPackConfig.cmake -G RPM
+
+      - name: Rename package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.validate.outputs.version }}"
+          arch="$(rpm --eval '%{_arch}')"
+          package_path="$(find . -maxdepth 1 -name '*.rpm' -print -quit)"
+          if [[ -z "$package_path" ]]; then
+            echo "::error::CPack did not produce an RPM."
+            exit 1
+          fi
+          new_path="cdm-${version}-linux-${arch}.rpm"
+          mv "$package_path" "$new_path"
+          echo "path=$new_path" >> "$GITHUB_OUTPUT"
+
+      - name: Verify RPM package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_path="${{ steps.package.outputs.path }}"
+          rpm -qpi "$package_path" >/dev/null
+          rpm -qpl "$package_path" | grep -qx '/usr/bin/cdm'
+          rpm -qpl "$package_path" | grep -qx '/usr/bin/cdm_native_host'
+          rpm -qpR "$package_path" >/dev/null
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-package
+          path: ${{ steps.package.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs:
+      - validate
+      - build-deb
+      - build-rpm
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+      COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-package'
+          path: dist
+          merge-multiple: true
+
+      - name: Generate combined checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          mapfile -t packages < <(
+            find . -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' \) \
+              -printf '%f\n' | sort
+          )
+          if [[ "${#packages[@]}" -ne 2 ]]; then
+            echo "::error::Expected exactly one DEB and one RPM, found ${#packages[@]}."
+            printf '  %s\n' "${packages[@]}"
+            exit 1
+          fi
+          sha256sum "${packages[@]}" > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Install cosign
+        if: env.COSIGN_PRIVATE_KEY != '' && env.COSIGN_PASSWORD != ''
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign checksums
+        if: env.COSIGN_PRIVATE_KEY != '' && env.COSIGN_PASSWORD != ''
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          printf '%s' "$COSIGN_PRIVATE_KEY" > cosign.key
+          chmod 600 cosign.key
+          cosign sign-blob --yes --key cosign.key \
+            --output-signature SHA256SUMS.txt.sig SHA256SUMS.txt
+          rm -f cosign.key
+
+      - name: Publish release assets
+        shell: bash
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(cdm-*.deb cdm-*.rpm SHA256SUMS.txt)
+          if [[ -f SHA256SUMS.txt.sig ]]; then
+            assets+=(SHA256SUMS.txt.sig)
+          fi
+          printf 'Release tag: %s\n' "$RELEASE_TAG"
+          printf 'Assets:\n'
+          printf '  %s\n' "${assets[@]}"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --title "$RELEASE_TAG" --generate-notes
+          fi
